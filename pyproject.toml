@@ -1,0 +1,19 @@
+[project]
+name = "jarvis-project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "elevenlabs>=2.44.0",
+    "numpy>=2.4.4",
+    "psutil>=7.2.2",
+    "PyQt5>=5.15.11",
+    "pyqt5-qt5==5.15.2",
+    "python-dotenv>=1.2.2",
+    "qtawesome>=1.4.2",
+    "sounddevice>=0.5.5",
+    "speechrecognition>=3.16.0",
+    "vapi-server-sdk>=1.11.0",
+]

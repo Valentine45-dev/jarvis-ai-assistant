@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>J.A.R.V.I.S. OS - Diagnostics</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&amp;family=Space+Grotesk:wght@600;700&amp;family=Inter:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-variant": "#2e3638",
+                        "on-background": "#dce4e5",
+                        "on-secondary-container": "#725f00",
+                        "primary-container": "#00e5ff",
+                        "secondary-container": "#ffdb3c",
+                        "surface-dim": "#0d1516",
+                        "surface-tint": "#00daf3",
+                        "primary-fixed-dim": "#00daf3",
+                        "on-tertiary": "#003919",
+                        "inverse-surface": "#dce4e5",
+                        "on-tertiary-fixed": "#00210c",
+                        "on-secondary": "#3a3000",
+                        "surface-container-lowest": "#080f11",
+                        "on-secondary-fixed-variant": "#544600",
+                        "on-primary-fixed": "#001f24",
+                        "secondary-fixed-dim": "#e9c400",
+                        "on-error": "#690005",
+                        "inverse-on-surface": "#2a3233",
+                        "tertiary-fixed-dim": "#66dd8b",
+                        "on-tertiary-fixed-variant": "#005227",
+                        "surface": "#0d1516",
+                        "secondary": "#fff9ef",
+                        "tertiary-container": "#71e894",
+                        "on-primary-container": "#00626e",
+                        "inverse-primary": "#006875",
+                        "tertiary-fixed": "#83fba5",
+                        "surface-bright": "#333a3c",
+                        "surface-container-low": "#151d1e",
+                        "on-surface-variant": "#bac9cc",
+                        "on-error-container": "#ffdad6",
+                        "tertiary": "#afffbf",
+                        "on-primary-fixed-variant": "#004f58",
+                        "on-surface": "#dce4e5",
+                        "surface-container-highest": "#2e3638",
+                        "secondary-fixed": "#ffe16d",
+                        "error-container": "#93000a",
+                        "outline-variant": "#3b494c",
+                        "on-primary": "#00363d",
+                        "primary": "#c3f5ff",
+                        "background": "#0d1516",
+                        "surface-container-high": "#242b2d",
+                        "primary-fixed": "#9cf0ff",
+                        "surface-container": "#192122",
+                        "on-tertiary-container": "#006732",
+                        "error": "#ffb4ab",
+                        "outline": "#849396",
+                        "on-secondary-fixed": "#221b00"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "sm": "16px",
+                        "lg": "40px",
+                        "gutter": "20px",
+                        "base": "4px",
+                        "xs": "8px",
+                        "md": "24px",
+                        "xl": "64px",
+                        "margin": "32px"
+                    },
+                    "fontFamily": {
+                        "data-display": ["Roboto Mono"],
+                        "label-sm": ["Roboto Mono"],
+                        "headline-md": ["Space Grotesk"],
+                        "headline-lg": ["Space Grotesk"],
+                        "label-caps": ["Roboto Mono"],
+                        "body-md": ["Inter"],
+                        "body-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "data-display": ["24px", { "lineHeight": "1.0", "letterSpacing": "0.1em", "fontWeight": "500" }],
+                        "label-sm": ["10px", { "lineHeight": "1.0", "letterSpacing": "0.05em", "fontWeight": "400" }],
+                        "headline-md": ["32px", { "lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-lg": ["48px", { "lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "label-caps": ["12px", { "lineHeight": "1.2", "letterSpacing": "0.15em", "fontWeight": "700" }],
+                        "body-md": ["16px", { "lineHeight": "1.5", "letterSpacing": "0em", "fontWeight": "400" }],
+                        "body-lg": ["18px", { "lineHeight": "1.6", "letterSpacing": "0em", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: #0d1516; /* surface-dim */
+            color: #dce4e5; /* on-background */
+        }
+        .glass-panel {
+            background: rgba(25, 33, 34, 0.4); /* surface-container */
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(0, 229, 255, 0.1);
+            box-shadow: inset 0 0 20px rgba(0, 229, 255, 0.05);
+        }
+        .bracket-corners {
+            position: relative;
+        }
+        .bracket-corners::before, .bracket-corners::after {
+            content: '';
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-color: #00e5ff;
+            border-style: solid;
+        }
+        .bracket-corners::before {
+            top: -1px;
+            left: -1px;
+            border-width: 1px 0 0 1px;
+        }
+        .bracket-corners::after {
+            bottom: -1px;
+            right: -1px;
+            border-width: 0 1px 1px 0;
+        }
+        .data-line {
+            height: 1px;
+            background: linear-gradient(90deg, rgba(0,229,255,0.8) 0%, rgba(0,229,255,0) 100%);
+        }
+        .progress-block {
+            width: 4px;
+            height: 100%;
+            background-color: #00e5ff;
+            margin-right: 2px;
+            opacity: 0.8;
+        }
+        .progress-block.empty {
+            background-color: rgba(0, 229, 255, 0.2);
+        }
+        .text-glow {
+            text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+        }
+        .error-glow {
+            text-shadow: 0 0 8px rgba(255, 180, 171, 0.6);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col font-body-md overflow-hidden antialiased">
+<!-- TopAppBar -->
+<header class="bg-black/80 backdrop-blur-xl docked full-width top-0 border-b border-cyan-500/30 border-b border-cyan-500/20 shadow-[0_1px_15px_rgba(0,229,255,0.1)] flex justify-between items-center w-full px-6 py-3 z-50">
+<div class="flex items-center gap-4">
+<span class="text-xl font-black tracking-tighter text-cyan-400 drop-shadow-[0_0_8px_rgba(0,229,255,0.8)]">J.A.R.V.I.S. OS</span>
+</div>
+<div class="flex-1 flex justify-end">
+<!-- Search bar mapped to right, but design system implies HUD minimalist, using an icon for now or omitting complex search input -->
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-cyan-400 cursor-pointer active:scale-95 animate-pulse-slow hover:bg-cyan-400/10 hover:text-cyan-300 transition-all duration-100 p-2 rounded">settings_input_component</span>
+<span class="material-symbols-outlined text-cyan-400 cursor-pointer active:scale-95 animate-pulse-slow hover:bg-cyan-400/10 hover:text-cyan-300 transition-all duration-100 p-2 rounded">terminal</span>
+<span class="material-symbols-outlined text-cyan-400 cursor-pointer active:scale-95 animate-pulse-slow hover:bg-cyan-400/10 hover:text-cyan-300 transition-all duration-100 p-2 rounded">sensors</span>
+<img alt="AI Core Neural Link Status" class="w-8 h-8 rounded-full border border-cyan-500/50 object-cover ml-4" data-alt="AI Core Neural Link Status abstract glowing cyan orb" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA961QAuOLBmupTq1nGkn--TxRwp8R8cVqW3nXao_xoQ4COiTLVQ7p2W502uxN_CDntlbiUmUE0_9D3WczJg9PkoLUkBF7geFM34TOUcT7LinVY9YKjNpq9Fi-4GP2kj2D_Q5S888UWkP4JEJFHo8a_HvJ4Qd7eOaZ1VU226_7asp0GuyjJiZO0MG_SAtMtob-QTFbMN_THUsDxa5IVdrP0kCwHkx85leRSP2K5j5fG4DQJ8HlB8qNQVjBzzTd0us062ku28W7Mz3ng"/>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden relative">
+<!-- SideNavBar -->
+<nav class="hidden md:flex flex-col bg-black/90 backdrop-blur-2xl docked left-0 h-full w-64 border-r border-cyan-500/30 border-r border-cyan-500/20 shadow-[inset_-10px_0_20px_rgba(0,229,255,0.05)] fixed left-0 top-0 h-full z-40 pt-20">
+<div class="px-6 pb-8 border-b border-cyan-500/20 mb-4 mt-6">
+<div class="flex items-center gap-3">
+<img alt="System Administrator Avatar" class="w-10 h-10 rounded border border-cyan-500/30" data-alt="System Administrator Avatar tech stylized profile" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB18PF2PwLN7gNjHj8RbY4fuCVrG5KZWCI2pMhMczp8BltctRw4cPz_eo_I1qhAWe9fVI5FDNEPuK3rV_pcKilLzGer-wrtMg3Qv89jQyx5SFfd7WTqAdRJE95mIGLOZGwX_SmDVxfwiTvfmyP9l5RRB3-kGWIXQGySRVu3wVrG_rsh5FKXkEBx3Y0aLxVTTPm5KIbe8uyxnvFRnLN13MQ_YykljIqsFrTHVtHCBFAmMzb6B7CGhfsdE8QJlRY3TtM3V8sp3WEmVMgV"/>
+<div>
+<div class="text-cyan-400 font-bold uppercase font-label-caps text-label-caps tracking-widest text-glow">STRK-CTR-01</div>
+<div class="text-tertiary-fixed-dim font-label-sm text-label-sm mt-1">STATUS: OPTIMAL</div>
+</div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto">
+<a class="text-cyan-900/40 py-4 px-6 flex items-center gap-3 transition-opacity hover:bg-cyan-950/40 hover:text-cyan-200 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]">settings_power</span>
+                    System
+                </a>
+<a class="text-cyan-900/40 py-4 px-6 flex items-center gap-3 transition-opacity hover:bg-cyan-950/40 hover:text-cyan-200 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]">folder_open</span>
+                    Files
+                </a>
+<a class="text-cyan-900/40 py-4 px-6 flex items-center gap-3 transition-opacity hover:bg-cyan-950/40 hover:text-cyan-200 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]">terminal</span>
+                    Execute
+                </a>
+<a class="text-cyan-900/40 py-4 px-6 flex items-center gap-3 transition-opacity hover:bg-cyan-950/40 hover:text-cyan-200 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]">query_stats</span>
+                    Telemetry
+                </a>
+<a class="text-cyan-900/40 py-4 px-6 flex items-center gap-3 transition-opacity hover:bg-cyan-950/40 hover:text-cyan-200 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]">hub</span>
+                    Network
+                </a>
+<a class="bg-cyan-400/20 text-cyan-400 border-l-4 border-cyan-400 py-4 px-6 flex items-center gap-3 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">biotech</span>
+                    Diagnostics
+                </a>
+</div>
+<div class="mt-auto border-t border-cyan-500/20">
+<a class="text-cyan-900/40 py-4 px-6 flex items-center gap-3 transition-opacity hover:bg-cyan-950/40 hover:text-cyan-200 hover:translate-x-1 transition-transform duration-150 font-mono text-[10px] tracking-tight uppercase" href="#">
+<span class="material-symbols-outlined text-[18px]">logout</span>
+                    Log Out
+                </a>
+</div>
+</nav>
+<!-- Main Canvas -->
+<main class="flex-1 md:ml-64 p-margin overflow-y-auto relative z-10">
+<!-- decorative background elements -->
+<div class="absolute inset-0 pointer-events-none opacity-20" style="background-image: radial-gradient(circle at 50% 50%, rgba(0, 229, 255, 0.1) 0%, transparent 70%);"></div>
+<div class="absolute top-1/4 right-1/4 w-96 h-96 bg-primary-container rounded-full blur-[120px] opacity-5 pointer-events-none"></div>
+<div class="max-w-7xl mx-auto space-y-md">
+<!-- Header -->
+<div class="flex justify-between items-end border-b border-outline-variant pb-xs">
+<div>
+<h1 class="font-headline-lg text-headline-lg text-on-background uppercase tracking-tight">System Diagnostics</h1>
+<p class="font-label-caps text-label-caps text-primary-fixed uppercase mt-2 opacity-80">Full Spectrum Analysis // Sector 7G</p>
+</div>
+<div class="flex gap-4">
+<button class="px-6 py-2 border border-primary-container text-primary-container font-label-caps text-label-caps uppercase hover:bg-primary-container/20 transition-colors flex items-center gap-2 bracket-corners">
+<span class="material-symbols-outlined text-[16px]">delete_sweep</span>
+                            Purge Temp Files
+                        </button>
+<button class="px-6 py-2 border border-primary-container bg-primary-container/10 text-primary-container font-label-caps text-label-caps uppercase hover:bg-primary-container/30 transition-colors flex items-center gap-2 bracket-corners">
+<span class="material-symbols-outlined text-[16px]">radar</span>
+                            Initiate Deep Scan
+                        </button>
+</div>
+</div>
+<!-- Bento Grid Layout -->
+<div class="grid grid-cols-12 gap-gutter">
+<!-- Hardware Integrity Matrix -->
+<div class="col-span-12 lg:col-span-8 glass-panel bracket-corners p-md flex flex-col">
+<div class="flex justify-between items-center mb-6">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">MOD-ID: HW-INT-001</span>
+<span class="font-label-sm text-label-sm text-tertiary-fixed flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-tertiary-fixed animate-pulse"></span> ONLINE</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-on-background mb-6 uppercase">Hardware Integrity Matrix</h2>
+<div class="grid grid-cols-3 gap-6 flex-1">
+<!-- CPU -->
+<div class="border border-outline-variant/50 p-4 flex flex-col relative overflow-hidden group hover:border-primary-container/50 transition-colors">
+<div class="absolute top-0 right-0 p-2 opacity-20 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-4xl text-primary-container">memory</span>
+</div>
+<div class="font-label-caps text-label-caps text-outline uppercase mb-1">Central Processing</div>
+<div class="font-data-display text-data-display text-primary-fixed mb-4">4.8 GHz</div>
+<div class="mt-auto space-y-2">
+<div class="flex justify-between font-label-sm text-label-sm">
+<span class="text-on-surface-variant">Core Temp</span>
+<span class="text-tertiary-fixed">42°C</span>
+</div>
+<div class="h-2 flex">
+<div class="progress-block"></div><div class="progress-block"></div><div class="progress-block"></div><div class="progress-block"></div><div class="progress-block"></div><div class="progress-block empty"></div><div class="progress-block empty"></div>
+</div>
+<div class="flex justify-between font-label-sm text-label-sm">
+<span class="text-on-surface-variant">Load</span>
+<span class="text-on-background">68%</span>
+</div>
+</div>
+</div>
+<!-- GPU -->
+<div class="border border-outline-variant/50 p-4 flex flex-col relative overflow-hidden group hover:border-primary-container/50 transition-colors">
+<div class="absolute top-0 right-0 p-2 opacity-20 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-4xl text-primary-container">developer_board</span>
+</div>
+<div class="font-label-caps text-label-caps text-outline uppercase mb-1">Graphics Rendering</div>
+<div class="font-data-display text-data-display text-primary-fixed mb-4">98% VRAM</div>
+<div class="mt-auto space-y-2">
+<div class="flex justify-between font-label-sm text-label-sm">
+<span class="text-on-surface-variant">Core Temp</span>
+<span class="text-secondary-fixed-dim">71°C</span>
+</div>
+<div class="h-2 flex">
+<div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block" style="background-color: #e9c400;"></div><div class="progress-block empty"></div>
+</div>
+<div class="flex justify-between font-label-sm text-label-sm">
+<span class="text-on-surface-variant">Load</span>
+<span class="text-on-background">85%</span>
+</div>
+</div>
+</div>
+<!-- Neural Core -->
+<div class="border border-outline-variant/50 p-4 flex flex-col relative overflow-hidden group hover:border-primary-container/50 transition-colors bg-primary-container/5">
+<div class="absolute top-0 right-0 p-2 opacity-20 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-4xl text-primary-container">psychiatry</span>
+</div>
+<div class="font-label-caps text-label-caps text-outline uppercase mb-1">Neural Processor</div>
+<div class="font-data-display text-data-display text-primary-fixed mb-4">120 TFLOPS</div>
+<div class="mt-auto space-y-2">
+<div class="flex justify-between font-label-sm text-label-sm">
+<span class="text-on-surface-variant">Synaptic Latency</span>
+<span class="text-tertiary-fixed">0.02ms</span>
+</div>
+<div class="h-2 flex">
+<div class="progress-block"></div><div class="progress-block"></div><div class="progress-block empty"></div><div class="progress-block empty"></div><div class="progress-block empty"></div><div class="progress-block empty"></div><div class="progress-block empty"></div>
+</div>
+<div class="flex justify-between font-label-sm text-label-sm">
+<span class="text-on-surface-variant">Capacity</span>
+<span class="text-on-background">22%</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Bio-Link Status -->
+<div class="col-span-12 lg:col-span-4 glass-panel bracket-corners p-md flex flex-col">
+<div class="flex justify-between items-center mb-6">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">MOD-ID: BIO-LNK-88</span>
+<span class="material-symbols-outlined text-tertiary-fixed text-[18px]">vital_signs</span>
+</div>
+<h2 class="font-label-caps text-label-caps text-primary-fixed mb-4 uppercase">Bio-Link Status</h2>
+<div class="flex-1 flex flex-col justify-center items-center relative">
+<!-- Abstract bio visualization placeholder -->
+<div class="w-32 h-32 rounded-full border border-primary-container/30 flex items-center justify-center relative">
+<div class="absolute inset-0 rounded-full border border-primary-container/60 animate-ping opacity-20" style="animation-duration: 3s;"></div>
+<span class="font-data-display text-data-display text-on-background text-glow">99.8%</span>
+</div>
+<div class="font-label-sm text-label-sm text-outline mt-4 uppercase tracking-widest">Synchronization</div>
+</div>
+<div class="mt-6 space-y-3">
+<div class="flex justify-between items-center border-b border-outline-variant/30 pb-2">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase">Heart Rate</span>
+<span class="font-label-caps text-label-caps text-tertiary-fixed">72 BPM</span>
+</div>
+<div class="flex justify-between items-center border-b border-outline-variant/30 pb-2">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase">Cortisol Levels</span>
+<span class="font-label-caps text-label-caps text-secondary-fixed-dim">NOMINAL</span>
+</div>
+<div class="flex justify-between items-center">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase">Neural Interface</span>
+<span class="font-label-caps text-label-caps text-tertiary-fixed">STABLE</span>
+</div>
+</div>
+</div>
+<!-- System Error Log -->
+<div class="col-span-12 glass-panel bracket-corners p-md">
+<div class="flex justify-between items-center mb-6">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">MOD-ID: ERR-LOG-X9</span>
+<div class="flex gap-2">
+<span class="font-label-sm text-label-sm text-error flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-error"></span> 2 CRITICAL</span>
+<span class="font-label-sm text-label-sm text-secondary-fixed-dim flex items-center gap-1 ml-4"><span class="w-2 h-2 rounded-full bg-secondary-fixed-dim"></span> 4 WARNINGS</span>
+</div>
+</div>
+<h2 class="font-label-caps text-label-caps text-primary-fixed mb-4 uppercase">System Error Log</h2>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="border-b border-outline-variant font-label-sm text-label-sm text-on-surface-variant uppercase tracking-widest">
+<th class="py-3 px-4 font-normal">Timestamp</th>
+<th class="py-3 px-4 font-normal">Severity</th>
+<th class="py-3 px-4 font-normal">Module</th>
+<th class="py-3 px-4 font-normal">Description</th>
+</tr>
+</thead>
+<tbody class="font-mono text-[12px]">
+<tr class="border-b border-outline-variant/30 hover:bg-surface-container-high/50 transition-colors">
+<td class="py-3 px-4 text-outline">T-04:22:11</td>
+<td class="py-3 px-4 text-error font-bold error-glow">CRITICAL</td>
+<td class="py-3 px-4 text-on-background">Coolant Sys</td>
+<td class="py-3 px-4 text-on-surface-variant">Pump 3 pressure drop detected. Rerouting flow.</td>
+</tr>
+<tr class="border-b border-outline-variant/30 hover:bg-surface-container-high/50 transition-colors">
+<td class="py-3 px-4 text-outline">T-04:18:55</td>
+<td class="py-3 px-4 text-error font-bold error-glow">CRITICAL</td>
+<td class="py-3 px-4 text-on-background">Security Grid</td>
+<td class="py-3 px-4 text-on-surface-variant">Unauthorized ping from external sector 9. Blocked.</td>
+</tr>
+<tr class="border-b border-outline-variant/30 hover:bg-surface-container-high/50 transition-colors">
+<td class="py-3 px-4 text-outline">T-03:45:02</td>
+<td class="py-3 px-4 text-secondary-fixed-dim">WARNING</td>
+<td class="py-3 px-4 text-on-background">Mem Cache</td>
+<td class="py-3 px-4 text-on-surface-variant">Fragmentation approaching 80%. Purge recommended.</td>
+</tr>
+<tr class="border-b border-outline-variant/30 hover:bg-surface-container-high/50 transition-colors opacity-60">
+<td class="py-3 px-4 text-outline">T-01:12:44</td>
+<td class="py-3 px-4 text-tertiary-fixed">INFO</td>
+<td class="py-3 px-4 text-on-background">Update Daem</td>
+<td class="py-3 px-4 text-on-surface-variant">Background definitions updated successfully.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

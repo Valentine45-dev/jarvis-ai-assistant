@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JARVIS  Mark LXXXV brand mark.
+  Hexagonal frame around a glowing arc-reactor core.
+  Mirrors the in-app sidebar avatar (`ph.hexagon-fill`) and the
+  ArcReactorWidget so the brand reads consistently end-to-end.
+  Pure cyan stroke art  scales cleanly from 16x16 favicons up to large displays.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+  <defs>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="55%"  stop-color="#C3F5FF" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#00E5FF" stop-opacity="0.85"/>
+    </radialGradient>
+    <radialGradient id="ambient" cx="50%" cy="50%" r="58%">
+      <stop offset="0%"   stop-color="#00E5FF" stop-opacity="0.35"/>
+      <stop offset="55%"  stop-color="#00E5FF" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#00E5FF" stop-opacity="0.00"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Soft cyan halo behind everything -->
+  <circle cx="128" cy="128" r="120" fill="url(#ambient)"/>
+
+  <!-- Outer hexagon -->
+  <polygon
+    points="128,18 226,75 226,181 128,238 30,181 30,75"
+    stroke="#00E5FF" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- Inner hexagon -->
+  <polygon
+    points="128,62 188,97 188,159 128,194 68,159 68,97"
+    stroke="#00E5FF" stroke-width="2.5" stroke-linejoin="round" opacity="0.55"/>
+
+  <!-- Concentric reactor rings -->
+  <circle cx="128" cy="128" r="46" stroke="#00E5FF" stroke-width="2.5" opacity="0.95"/>
+  <circle cx="128" cy="128" r="30" stroke="#00E5FF" stroke-width="2"   opacity="0.70"/>
+
+  <!-- 8 radial spokes between inner ring and outer ring (matches ArcReactorWidget) -->
+  <g stroke="#00E5FF" stroke-width="1.2" opacity="0.7">
+    <line x1="128" y1="98"  x2="128" y2="82"/>
+    <line x1="128" y1="158" x2="128" y2="174"/>
+    <line x1="98"  y1="128" x2="82"  y2="128"/>
+    <line x1="158" y1="128" x2="174" y2="128"/>
+    <line x1="106.8" y1="106.8" x2="95.5" y2="95.5"/>
+    <line x1="149.2" y1="149.2" x2="160.5" y2="160.5"/>
+    <line x1="106.8" y1="149.2" x2="95.5" y2="160.5"/>
+    <line x1="149.2" y1="106.8" x2="160.5" y2="95.5"/>
+  </g>
+
+  <!-- Glowing core -->
+  <circle cx="128" cy="128" r="18" fill="url(#coreGlow)"/>
+</svg>
