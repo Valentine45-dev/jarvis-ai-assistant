@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from config.settings import config
+from core import computer_control as cc
 
 _OS = platform.system().lower()   # "windows" | "darwin" | "linux"
 
@@ -36,25 +37,6 @@ def _ok(output: str = "") -> dict:
 
 def _err(msg: str) -> dict:
     return {"success": False, "output": "", "error": msg}
-
-
-# ── Optional dep guard ────────────────────────────────────────────────────────
-
-def _pyautogui():
-    try:
-        import pyautogui
-        pyautogui.FAILSAFE = True
-        return pyautogui
-    except ImportError:
-        return None
-
-
-def _pytesseract():
-    try:
-        import pytesseract
-        return pytesseract
-    except ImportError:
-        return None
 
 
 # ── Intent handlers ───────────────────────────────────────────────────────────
@@ -134,82 +116,41 @@ def _handle_search_web(action: str, params: dict) -> dict:
 
 
 def _handle_type_text(action: str, params: dict) -> dict:
-    pag = _pyautogui()
-    if pag is None:
-        return _err("pyautogui not installed — run: uv add pyautogui")
-
     if action == "press_key":
-        key = params.get("key", "")
-        pag.hotkey(*key.split("+")) if "+" in key else pag.press(key)
-        return _ok(f"Pressed: {key}")
-
+        return cc.press_key(params.get("key", ""))
     text = params.get("text", "")
-    delay = float(params.get("delay", 0.02))
     if action == "type_paste":
-        import pyperclip
-        pyperclip.copy(text)
-        pag.hotkey("ctrl", "v")
-    else:
-        pag.typewrite(text, interval=delay)
-    return _ok(f"Typed: {text[:40]}")
+        r = cc.set_clipboard(text)
+        return r if not r["success"] else cc.press_key("ctrl+v")
+    return cc.type_text(text, float(params.get("delay", 0.02)))
 
 
 def _handle_control_mouse(action: str, params: dict) -> dict:
-    pag = _pyautogui()
-    if pag is None:
-        return _err("pyautogui not installed — run: uv add pyautogui")
-
     x, y = params.get("x"), params.get("y")
     if action == "move_mouse":
-        pag.moveTo(x, y, duration=0.3)
-    elif action == "click":
-        btn = params.get("button", "left")
-        pag.click(x, y, button=btn) if x and y else pag.click(button=btn)
-    elif action == "double_click":
-        pag.doubleClick(x, y) if x and y else pag.doubleClick()
-    elif action == "right_click":
-        pag.rightClick(x, y) if x and y else pag.rightClick()
-    elif action == "scroll":
-        amount = int(params.get("amount", 3))
-        clicks = amount if params.get("direction", "up") == "up" else -amount
-        pag.scroll(clicks)
-    elif action == "drag":
-        pag.dragTo(params["to_x"], params["to_y"],
-                   duration=0.4, button="left")
-    return _ok(f"Mouse: {action}")
+        return cc.move(x, y)
+    if action == "click":
+        return cc.click(x, y, params.get("button", "left"))
+    if action == "double_click":
+        return cc.double_click(x, y)
+    if action == "right_click":
+        return cc.right_click(x, y)
+    if action == "scroll":
+        return cc.scroll(params.get("direction", "up"), int(params.get("amount", 3)))
+    if action == "drag":
+        return cc.drag(params["from_x"], params["from_y"], params["to_x"], params["to_y"])
+    return _err(f"Unknown mouse action: {action}")
 
 
 def _handle_system_control(action: str, params: dict) -> dict:
     if action in ("volume_up", "volume_down", "volume_mute"):
-        pag = _pyautogui()
-        if pag:
-            key_map = {
-                "volume_up":   "volumeup",
-                "volume_down": "volumedown",
-                "volume_mute": "volumemute",
-            }
-            pag.press(key_map[action])
-            return _ok(f"Volume: {action}")
-        return _err("pyautogui not installed for volume control")
+        return cc.set_volume(action)
 
     if action == "screenshot":
-        save_path = params.get("save_path", "")
-        pag = _pyautogui()
-        if pag:
-            path = save_path or str(Path.home() / "Desktop" / "screenshot.png")
-            pag.screenshot(path)
-            return _ok(f"Screenshot saved: {path}")
-        return _err("pyautogui not installed for screenshots")
+        return cc.screenshot(path=params.get("save_path") or None)
 
     if action == "lock_screen":
-        if _OS == "windows":
-            import ctypes
-            ctypes.windll.user32.LockWorkStation()
-        elif _OS == "darwin":
-            subprocess.Popen(["/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend"])
-        else:
-            subprocess.Popen(["loginctl", "lock-session"])
-        return _ok("Screen locked")
+        return cc.lock_screen()
 
     if action in ("shutdown", "restart", "sleep"):
         cmds = {
@@ -332,23 +273,8 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
 
 
 def _handle_read_screen(action: str, params: dict) -> dict:
-    pyt = _pytesseract()
-    pag = _pyautogui()
-    if pyt is None or pag is None:
-        return _err(
-            "pytesseract / pyautogui not installed — "
-            "run: uv add pyautogui pytesseract"
-        )
-
-    import PIL.Image
-    if action == "ocr_region":
-        r = params.get("region", {})
-        img = pag.screenshot(region=(r["x"], r["y"], r["width"], r["height"]))
-    else:
-        img = pag.screenshot()
-
-    text = pyt.image_to_string(img)
-    return _ok(text[:2000])
+    region = params.get("region") if action == "ocr_region" else None
+    return cc.ocr_screen(region=region)
 
 
 def _handle_automation_task(action: str, params: dict) -> dict:
