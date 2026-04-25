@@ -22,6 +22,7 @@ from typing import Any
 import anthropic
 
 from config.settings import config
+from core.memory import memory
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -94,15 +95,12 @@ def extract_tag(text: str) -> tuple[str | None, str]:
 
 def build_context(
     tag_override: str | None = None,
-    previous_command: str | None = None,
     active_window: str | None = None,
     clipboard: str | None = None,
 ) -> dict[str, Any]:
     ctx: dict[str, Any] = {"os": platform.system().lower()}
     if tag_override:
         ctx["tag_override"] = tag_override
-    if previous_command:
-        ctx["previous_command"] = previous_command
     if active_window:
         ctx["active_window"] = active_window
     if clipboard:
@@ -131,7 +129,6 @@ def ask_claude(
     raw_input: str,
     context: dict[str, Any] | None = None,
     *,
-    previous_command: str | None = None,
     active_window: str | None = None,
     clipboard: str | None = None,
 ) -> dict[str, Any]:
@@ -156,29 +153,29 @@ def ask_claude(
 
     tag_override: str | None = tag_result
 
-    # 3. Context assembly
+    # 3. Context assembly (per-call metadata — not stored in history)
     ctx = build_context(
         tag_override=tag_override,
-        previous_command=previous_command,
         active_window=active_window,
         clipboard=clipboard,
     )
     if context:
         ctx.update(context)
 
-    # 4. Compose user message — clean text + serialised context
-    user_msg = cleaned if cleaned else text
+    # 4. Compose user message — cmd_text stored in history; full user_msg sent to Claude
+    cmd_text = cleaned if cleaned else text
+    user_msg = cmd_text
     if ctx:
         user_msg += f"\n\ncontext: {json.dumps(ctx)}"
 
-    # 5. Call Claude
+    # 5. Call Claude — prepend conversation history for multi-turn context
     raw = ""
     try:
         msg = _get_client().messages.create(
             model=config.claude_model,
             max_tokens=512,
             system=_load_system_prompt(),
-            messages=[{"role": "user", "content": user_msg}],
+            messages=memory.get_messages() + [{"role": "user", "content": user_msg}],
         )
         raw = msg.content[0].text.strip()
 
@@ -188,6 +185,7 @@ def ask_claude(
             raw = re.sub(r"\n?```$", "", raw)
 
         result: dict[str, Any] = json.loads(raw)
+        memory.add_exchange(cmd_text, raw)
 
     except json.JSONDecodeError as exc:
         if config.debug_mode:
