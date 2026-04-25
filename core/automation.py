@@ -102,6 +102,22 @@ class WorkflowLibrary:
         _emit_changed()
         return True
 
+    def rename(self, workflow_id: str, new_name: str) -> bool:
+        """Rename a workflow by id. Returns False if not found or new name taken."""
+        new_slug = new_name.lower().replace(" ", "_")
+        with self._lock:
+            if workflow_id not in self._workflows:
+                return False
+            if new_slug in self._workflows and new_slug != workflow_id:
+                return False
+            wf = self._workflows.pop(workflow_id)
+            wf["id"] = new_slug
+            wf["name"] = new_name
+            self._workflows[new_slug] = wf
+            self._save()
+        _emit_changed()
+        return True
+
     def set_enabled(self, workflow_id: str, enabled: bool) -> bool:
         """Toggle a workflow's enabled flag. Returns False if not found."""
         with self._lock:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from core.automation import workflow_library
@@ -54,6 +54,7 @@ class _WorkflowRow(QWidget):
     selected = pyqtSignal(int)
     run_requested = pyqtSignal(str)
     toggle_requested = pyqtSignal(str, bool)   # (workflow_id, new_enabled_state)
+    delete_requested = pyqtSignal(str, str)    # (workflow_id, display_name)
 
     def __init__(self, idx: int, wf: dict, parent=None):
         super().__init__(parent)
@@ -127,6 +128,24 @@ class _WorkflowRow(QWidget):
                 "}"
             )
         lay.addWidget(play)
+
+        # Delete button
+        delete = QPushButton("✕")
+        delete.setFixedSize(22, 22)
+        delete.setCursor(Qt.PointingHandCursor)
+        delete.setToolTip(f"Delete {wf['name']}")
+        delete.setStyleSheet(
+            "QPushButton{"
+            "color:rgba(255,80,80,0.55);background:transparent;"
+            "border:1px solid rgba(255,80,80,0.20);font-size:10px;"
+            "}"
+            "QPushButton:hover{"
+            "color:rgba(255,80,80,0.9);background:rgba(255,80,80,0.10);"
+            "border:1px solid rgba(255,80,80,0.45);"
+            "}"
+        )
+        delete.clicked.connect(lambda: self.delete_requested.emit(self._wf_id, wf["name"]))
+        lay.addWidget(delete)
 
         self._set_style(False)
 
@@ -416,6 +435,7 @@ class AutomationView(QWidget):
             row.selected.connect(self._select)
             row.run_requested.connect(self.run_command.emit)
             row.toggle_requested.connect(self._toggle_workflow)
+            row.delete_requested.connect(self._delete_workflow)
             self._row_container_lay.addWidget(row)
             self._rows.append(row)
         self._row_container_lay.addStretch(1)
@@ -430,6 +450,23 @@ class AutomationView(QWidget):
                 item.widget().deleteLater()
         self._rows.clear()
         self._build_rows(log_init=False)
+
+    def _delete_workflow(self, wf_id: str, display_name: str):
+        reply = QMessageBox.question(
+            self,
+            "Delete Workflow",
+            f"Delete '{display_name}'? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        ok = workflow_library.remove(wf_id)
+        if ok:
+            self._exec_log.append_line(f"[SYSTEM] Workflow '{display_name}' deleted.")
+        else:
+            self._exec_log.append_line(f"[WARN] Delete failed — workflow '{wf_id}' not found.")
+        # workflow_library_changed signal triggers refresh() automatically
 
     def _toggle_workflow(self, wf_id: str, enabled: bool):
         ok = workflow_library.set_enabled(wf_id, enabled)

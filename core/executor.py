@@ -325,6 +325,17 @@ _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
 # Entire intents blocked in workflows until a real confirmation flow exists.
 _BLOCKED_INTENTS: frozenset[str] = frozenset({"code_execution"})
 
+# Actions that always require confirmed=True regardless of the payload flag.
+# The executor decides this — the caller cannot override it.
+_CONFIRMATION_REQUIRED_ACTIONS: frozenset[tuple[str, str]] = frozenset({
+    ("automation_task", "remove_workflow"),
+    ("file_operation",  "delete_file"),
+    ("system_control",  "shutdown"),
+    ("system_control",  "restart"),
+    ("system_control",  "sleep"),
+    ("close_app",       "force_quit"),
+})
+
 # Intents that are valid step targets when saving a workflow.
 # Excludes: code_execution (blocked), automation_task (no nesting), unknown (invalid).
 _KNOWN_STEP_INTENTS: frozenset[str] = frozenset({
@@ -383,6 +394,30 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         }
         workflow_library.add(wf)
         return _ok(f"Workflow '{task_name}' created with {len(steps)} step(s).")
+
+    if action == "remove_workflow":
+        task_name = params.get("task_name", "")
+        if not task_name:
+            return _err("No task_name provided for removal.")
+        wf = workflow_library.get(task_name)
+        if wf is None:
+            return _err(f"Workflow '{task_name}' not found — nothing to remove.")
+        workflow_library.remove(wf["id"])
+        return _ok(f"Workflow '{wf['name']}' deleted.")
+
+    if action == "rename_workflow":
+        task_name = params.get("task_name", "")
+        new_name  = params.get("new_name", "")
+        if not task_name or not new_name:
+            return _err("Both task_name and new_name are required.")
+        wf = workflow_library.get(task_name)
+        if wf is None:
+            return _err(f"Workflow '{task_name}' not found.")
+        new_slug = new_name.lower().replace(" ", "_")
+        if new_slug != wf["id"] and workflow_library.get(new_slug) is not None:
+            return _err(f"A workflow named '{new_name}' already exists.")
+        workflow_library.rename(wf["id"], new_name)
+        return _ok(f"Workflow renamed to '{new_name}'.")
 
     steps = params.get("steps", [])
     task_name = params.get("task_name", "")
@@ -532,8 +567,12 @@ _HANDLERS = {
 }
 
 
-def dispatch(result: dict[str, Any]) -> dict[str, Any]:
+def dispatch(result: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
     """Route a parsed intent dict to its OS handler.
+
+    confirmed=True must be passed explicitly for destructive actions.
+    The gate checks _CONFIRMATION_REQUIRED_ACTIONS by (intent, action) identity —
+    the payload flag is supplementary, not the authority.
 
     Never raises — wraps every handler in a try/except so the UI always
     receives a valid result dict.
@@ -541,6 +580,15 @@ def dispatch(result: dict[str, Any]) -> dict[str, Any]:
     intent = result.get("intent", "unknown")
     action = result.get("action", "")
     params = result.get("parameters", {})
+
+    needs_confirmation = (
+        result.get("requires_confirmation")
+        or (intent, action) in _CONFIRMATION_REQUIRED_ACTIONS
+    )
+    if needs_confirmation and not confirmed:
+        return _err(
+            f"Action '{action}' requires confirmation before it can be executed."
+        )
 
     handler = _HANDLERS.get(intent, _handle_unknown)
     try:

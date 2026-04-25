@@ -259,9 +259,10 @@ class JarvisWindow(QMainWindow):
 
         self._execute_result(result, intent, conf, resp, hud)
 
-    def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str):
+    def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
+                        confirmed: bool = False):
         """Dispatch to OS + update all HUD surfaces."""
-        exec_out = dispatch(result)
+        exec_out = dispatch(result, confirmed=confirmed)
 
         j_time = datetime.now().strftime("%H:%M")
         self._dashboard.left.typing.hide_typing()
@@ -351,6 +352,7 @@ class JarvisWindow(QMainWindow):
                 float(r.get("confidence", 0.85)),
                 r.get("response", ""),
                 r.get("hud_status", "STANDBY"),
+                confirmed=True,
             )
 
     def _on_cancelled(self):
