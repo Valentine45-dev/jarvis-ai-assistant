@@ -26,6 +26,7 @@ from typing import Any
 
 from config.settings import config
 from core import computer_control as cc
+from core.browser import browser
 
 _OS = platform.system().lower()   # "windows" | "darwin" | "linux"
 
@@ -46,18 +47,23 @@ def _handle_open_app(action: str, params: dict) -> dict:
     url = params.get("url", "")
 
     if action == "open_url" or url:
-        webbrowser.open(url or app)
-        return _ok(f"Opened URL: {url or app}")
+        target = url or app
+        # Route through Playwright so JARVIS controls the tab
+        if browser._ready:
+            return browser.navigate(target)
+        # Browser not started yet — fall back to OS open
+        webbrowser.open(target)
+        return _ok(f"Opened URL: {target}")
 
     if action == "open_browser":
-        browser = params.get("browser", "").lower()
+        browser_name = params.get("browser", "").lower()
         browsers = {"chrome": "chrome", "firefox": "firefox", "edge": "msedge"}
-        exe = browsers.get(browser, "")
+        exe = browsers.get(browser_name, "")
         if exe and shutil.which(exe):
             subprocess.Popen([exe])
         else:
             webbrowser.open("about:blank")
-        return _ok(f"Opened {browser or 'default browser'}")
+        return _ok(f"Opened {browser_name or 'default browser'}")
 
     # Generic app open
     name = app or action.replace("open_", "")
@@ -265,11 +271,37 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
 def _handle_browser_automation(action: str, params: dict) -> dict:
     url = params.get("url", "")
-    if action in ("navigate", "new_tab") and url:
-        webbrowser.open(url)
-        return _ok(f"Navigated to {url}")
-    # Full browser automation (click_element, fill_form) needs playwright/selenium
-    return _ok(f"Browser: {action} (basic navigation only in this build)")
+
+    if action in ("navigate", "new_tab"):
+        if not url:
+            return _err("No URL provided")
+        return browser.navigate(url)
+
+    if action == "click_element":
+        return browser.click_element(
+            selector=params.get("selector", ""),
+            text=params.get("text", ""),
+            x=params.get("x"),
+            y=params.get("y"),
+        )
+
+    if action == "fill_form":
+        return browser.fill_form(params.get("fields", {}))
+
+    if action in ("extract_text", "read_page"):
+        selector = params.get("selector", "")
+        return browser.extract_content(selector) if selector else browser.read_page()
+
+    if action == "screenshot":
+        selector = params.get("selector", "")
+        path = params.get("save_path") or None
+        return (browser.screenshot_element(selector, path) if selector
+                else browser.screenshot_page(path))
+
+    if action == "close_tab":
+        return browser.close_tab()
+
+    return _ok(f"Browser: {action} — not yet implemented")
 
 
 def _handle_read_screen(action: str, params: dict) -> dict:

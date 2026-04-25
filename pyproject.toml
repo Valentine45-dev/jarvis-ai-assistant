@@ -8,6 +8,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "elevenlabs>=2.44.0",
     "numpy>=2.4.4",
+    "playwright>=1.58.0",
     "psutil>=7.2.2",
     "pyautogui>=0.9.54",
     "pyperclip>=1.11.0",

@@ -29,6 +29,7 @@ from core.brain import ask_claude_async
 from core.executor import dispatch
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
+from core.browser import browser
 
 
 class JarvisWindow(QMainWindow):
@@ -134,6 +135,10 @@ class JarvisWindow(QMainWindow):
 
         # Sync JARVIS assistant config to Vapi platform (background, non-blocking)
         QTimer.singleShot(2000, sync_assistant_async)
+
+        # Start persistent Chrome session in background — doesn't block the UI
+        import threading
+        threading.Thread(target=browser.start, daemon=True, name="browser-init").start()
 
     def _nav(self, idx):
         self._stack.setCurrentIndex(idx)
@@ -442,6 +447,11 @@ class JarvisWindow(QMainWindow):
         except Exception:
             pass
 
+    def closeEvent(self, event):
+        """Shut down the browser session cleanly before the window closes."""
+        browser.stop()
+        super().closeEvent(event)
+
     def paintEvent(self, _):
         p = QPainter(self)
         w, h = self.width(), self.height()
@@ -461,6 +471,10 @@ class JarvisWindow(QMainWindow):
 
 
 def main():
+    import signal
+    signal.signal(signal.SIGINT,  lambda *_: (browser.stop(), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda *_: (browser.stop(), sys.exit(0)))
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
