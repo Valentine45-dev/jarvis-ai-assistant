@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-from data.mock import MOCK_AUTOMATIONS
+from core.automation import workflow_library
 from ui.theme import BG, CYAN, FM, PRIMARY
 from ui.widgets import GlassPanel, StatusPip, TerminalLog
 
@@ -53,18 +53,21 @@ def _panel_header(title: str, right: str = "") -> tuple[QWidget, QFrame]:
 class _WorkflowRow(QWidget):
     selected = pyqtSignal(int)
     run_requested = pyqtSignal(str)
+    toggle_requested = pyqtSignal(str, bool)   # (workflow_id, new_enabled_state)
 
     def __init__(self, idx: int, wf: dict, parent=None):
         super().__init__(parent)
         self._idx = idx
+        self._wf_id = wf["id"]
+        self._enabled = bool(wf.get("enabled", True))
         self.setFixedHeight(52)
         self.setCursor(Qt.PointingHandCursor)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 6, 12, 6)
-        lay.setSpacing(10)
+        lay.setSpacing(8)
 
-        pip = StatusPip("active" if wf["enabled"] else "standby")
+        pip = StatusPip("active" if self._enabled else "standby")
         pip.setFixedSize(10, 10)
         lay.addWidget(pip, 0, Qt.AlignVCenter)
 
@@ -91,21 +94,68 @@ class _WorkflowRow(QWidget):
         )
         lay.addWidget(steps_lbl)
 
+        # Toggle button — ON/OFF
+        toggle = QPushButton("ON" if self._enabled else "OFF")
+        toggle.setFixedSize(36, 22)
+        toggle.setCursor(Qt.PointingHandCursor)
+        toggle.setToolTip("Disable workflow" if self._enabled else "Enable workflow")
+        toggle.setStyleSheet(self._toggle_style(self._enabled))
+        toggle.clicked.connect(self._on_toggle)
+        lay.addWidget(toggle)
+        self._toggle_btn = toggle
+
+        # Play button
         play = QPushButton("▶")
         play.setFixedSize(26, 26)
-        play.setCursor(Qt.PointingHandCursor)
-        play.setToolTip(f"Run {wf['name']}")
-        play.setStyleSheet(
-            "QPushButton{"
-            f"color:{CYAN};background:rgba(0,229,255,0.08);"
-            "border:1px solid rgba(0,229,255,0.30);font-size:10px;"
-            "}"
-            "QPushButton:hover{background:rgba(0,229,255,0.20);}"
-        )
-        play.clicked.connect(lambda: self.run_requested.emit(f"Run {wf['name']}"))
+        play.setEnabled(self._enabled)
+        play.setCursor(Qt.PointingHandCursor if self._enabled else Qt.ForbiddenCursor)
+        play.setToolTip(f"Run {wf['name']}" if self._enabled else f"{wf['name']} is disabled")
+        if self._enabled:
+            play.setStyleSheet(
+                "QPushButton{"
+                f"color:{CYAN};background:rgba(0,229,255,0.08);"
+                "border:1px solid rgba(0,229,255,0.30);font-size:10px;"
+                "}"
+                "QPushButton:hover{background:rgba(0,229,255,0.20);}"
+            )
+            play.clicked.connect(lambda: self.run_requested.emit(f"Run {wf['name']}"))
+        else:
+            play.setStyleSheet(
+                "QPushButton{"
+                "color:rgba(132,147,150,0.35);background:transparent;"
+                "border:1px solid rgba(132,147,150,0.15);font-size:10px;"
+                "}"
+            )
         lay.addWidget(play)
 
         self._set_style(False)
+
+    # ── Toggle ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _toggle_style(enabled: bool) -> str:
+        if enabled:
+            return (
+                "QPushButton{"
+                "color:#00c853;background:rgba(0,200,83,0.10);"
+                "border:1px solid rgba(0,200,83,0.35);"
+                "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
+                "}"
+                "QPushButton:hover{background:rgba(0,200,83,0.22);}"
+            )
+        return (
+            "QPushButton{"
+            "color:rgba(132,147,150,0.55);background:transparent;"
+            "border:1px solid rgba(132,147,150,0.20);"
+            "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
+            "}"
+            "QPushButton:hover{background:rgba(132,147,150,0.10);}"
+        )
+
+    def _on_toggle(self):
+        self.toggle_requested.emit(self._wf_id, not self._enabled)
+
+    # ── Row highlight ─────────────────────────────────────────────────────────
 
     def set_active(self, v: bool):
         self._set_style(v)
@@ -168,15 +218,14 @@ class _StepBreakdown(GlassPanel):
     def show_workflow(self, wf: dict):
         self._header_lbl.setText(wf["name"].upper())
 
-        # Clear existing step widgets
         for i in reversed(range(self._body_lay.count())):
             item = self._body_lay.takeAt(i)
             if item.widget():
                 item.widget().deleteLater()
 
-        # Last-run metadata row
         meta_row = QHBoxLayout()
-        last = QLabel(f"LAST RUN: {wf['lastRun']}")
+        last_run = wf.get("last_run") or wf.get("lastRun") or "Never"
+        last = QLabel(f"LAST RUN: {last_run}")
         last.setStyleSheet(
             "color:rgba(132,147,150,0.65);font-family:'Roboto Mono';"
             "font-size:10px;background:transparent;border:none;"
@@ -193,15 +242,13 @@ class _StepBreakdown(GlassPanel):
         meta_w.setLayout(meta_row)
         self._body_lay.addWidget(meta_w)
 
-        # Divider
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("color:rgba(0,229,255,0.10);background:rgba(0,229,255,0.10);")
         sep.setFixedHeight(1)
         self._body_lay.addWidget(sep)
 
-        # Step rows
-        for i, step in enumerate(wf["steps"]):
+        for i, step in enumerate(wf.get("steps", [])):
             row_lay = QHBoxLayout()
             row_lay.setContentsMargins(0, 0, 0, 0)
             row_lay.setSpacing(8)
@@ -218,7 +265,7 @@ class _StepBreakdown(GlassPanel):
                 "color:rgba(0,229,255,0.30);font-family:'Roboto Mono';"
                 "font-size:11px;background:transparent;border:none;"
             )
-            lbl = QLabel(step)
+            lbl = QLabel(_step_label(step))
             lbl.setStyleSheet(
                 "color:rgba(195,245,255,0.85);font-family:'Roboto Mono';"
                 "font-size:11px;background:transparent;border:none;"
@@ -239,12 +286,19 @@ class _StepBreakdown(GlassPanel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _step_label(step) -> str:
+    """Convert a step dict or plain string to a human-readable label."""
+    if isinstance(step, str):
+        return step
+    action = step.get("action", step.get("intent", "unknown"))
+    return action.replace("_", " ").title()
+
+
 class AutomationView(QWidget):
     run_command = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._workflows = MOCK_AUTOMATIONS
         self._rows: list[_WorkflowRow] = []
 
         root = QVBoxLayout(self)
@@ -273,25 +327,48 @@ class AutomationView(QWidget):
         body.setSpacing(12)
 
         # Left: workflow library
-        lib = GlassPanel()
-        lib.set_fill_color(QColor(10, 17, 19, 220))
-        lib_lay = QVBoxLayout(lib)
+        self._lib = GlassPanel()
+        self._lib.set_fill_color(QColor(10, 17, 19, 220))
+        lib_lay = QVBoxLayout(self._lib)
         lib_lay.setContentsMargins(0, 0, 0, 0)
         lib_lay.setSpacing(0)
 
-        hdr, sep = _panel_header("WORKFLOW LIBRARY", f"{len(self._workflows)} ROUTINES")
-        lib_lay.addWidget(hdr)
-        lib_lay.addWidget(sep)
+        # Header with mutable count label
+        lib_hdr = QWidget()
+        lib_hdr.setFixedHeight(36)
+        lib_hdr.setStyleSheet("background:transparent;")
+        lib_hdr_lay = QHBoxLayout(lib_hdr)
+        lib_hdr_lay.setContentsMargins(14, 0, 14, 0)
+        lib_title = QLabel("WORKFLOW LIBRARY")
+        lib_title.setStyleSheet(
+            f"color:{CYAN};font-family:'{FM}';font-size:10px;"
+            "font-weight:700;letter-spacing:2px;background:transparent;border:none;"
+        )
+        self._wf_count_lbl = QLabel("")
+        self._wf_count_lbl.setStyleSheet(
+            "color:rgba(132,147,150,0.7);font-family:'Roboto Mono';"
+            "font-size:10px;background:transparent;border:none;"
+        )
+        lib_hdr_lay.addWidget(lib_title, 1)
+        lib_hdr_lay.addWidget(self._wf_count_lbl)
 
-        for i, wf in enumerate(self._workflows):
-            row = _WorkflowRow(i, wf)
-            row.selected.connect(self._select)
-            row.run_requested.connect(self.run_command.emit)
-            lib_lay.addWidget(row)
-            self._rows.append(row)
+        lib_sep = QFrame()
+        lib_sep.setFrameShape(QFrame.HLine)
+        lib_sep.setStyleSheet("color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);")
+        lib_sep.setFixedHeight(1)
 
-        lib_lay.addStretch(1)
-        body.addWidget(lib, 1)
+        lib_lay.addWidget(lib_hdr)
+        lib_lay.addWidget(lib_sep)
+
+        # Row container — clear-and-rebuild target for refresh()
+        self._row_container = QWidget()
+        self._row_container.setStyleSheet("background:transparent;")
+        self._row_container_lay = QVBoxLayout(self._row_container)
+        self._row_container_lay.setContentsMargins(0, 0, 0, 0)
+        self._row_container_lay.setSpacing(0)
+        lib_lay.addWidget(self._row_container, 1)
+
+        body.addWidget(self._lib, 1)
 
         # Right: step breakdown
         self._breakdown = _StepBreakdown()
@@ -312,20 +389,65 @@ class AutomationView(QWidget):
         log_lay.addWidget(log_sep)
 
         self._exec_log = TerminalLog()
-        self._exec_log.append_line("[SYSTEM] Automation core initialized.")
-        self._exec_log.append_line("[SYSTEM] 4 workflows loaded. Awaiting directive.")
         log_lay.addWidget(self._exec_log, 1)
 
         root.addWidget(log_panel)
 
-        # Select first workflow by default
-        self._select(0)
+        # ── Populate rows and connect live-update signal ───────────────────────
+        self._build_rows(log_init=True)
+
+        from core.signals import signals
+        signals.workflow_library_changed.connect(self.refresh)
+
+    # ── Row management ────────────────────────────────────────────────────────
+
+    def _build_rows(self, log_init: bool = False):
+        workflows = workflow_library.list_all()
+        n = len(workflows)
+        self._wf_count_lbl.setText(f"{n} ROUTINE{'S' if n != 1 else ''}")
+        if log_init:
+            self._exec_log.append_line("[SYSTEM] Automation core initialized.")
+            self._exec_log.append_line(
+                f"[SYSTEM] {n} workflow{'s' if n != 1 else ''} loaded. Awaiting directive."
+            )
+        self._rows = []
+        for i, wf in enumerate(workflows):
+            row = _WorkflowRow(i, wf)
+            row.selected.connect(self._select)
+            row.run_requested.connect(self.run_command.emit)
+            row.toggle_requested.connect(self._toggle_workflow)
+            self._row_container_lay.addWidget(row)
+            self._rows.append(row)
+        self._row_container_lay.addStretch(1)
+        if self._rows:
+            self._select(0)
+
+    def refresh(self):
+        """Rebuild the workflow list — called when workflow_library_changed fires."""
+        while self._row_container_lay.count():
+            item = self._row_container_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._rows.clear()
+        self._build_rows(log_init=False)
+
+    def _toggle_workflow(self, wf_id: str, enabled: bool):
+        ok = workflow_library.set_enabled(wf_id, enabled)
+        if ok:
+            state = "enabled" if enabled else "disabled"
+            self._exec_log.append_line(f"[SYSTEM] Workflow '{wf_id}' {state}.")
+        else:
+            self._exec_log.append_line(f"[WARN] Toggle ignored — workflow '{wf_id}' not found.")
+        # workflow_library_changed signal triggers refresh() automatically
+
+    # ── Selection ─────────────────────────────────────────────────────────────
 
     def _select(self, idx: int):
         for i, row in enumerate(self._rows):
             row.set_active(i == idx)
-        if 0 <= idx < len(self._workflows):
-            self._breakdown.show_workflow(self._workflows[idx])
+        workflows = workflow_library.list_all()
+        if 0 <= idx < len(workflows):
+            self._breakdown.show_workflow(workflows[idx])
 
     def paintEvent(self, _):
         p = QPainter(self)

@@ -16,6 +16,7 @@ class JarvisSignals(QObject):
     theme_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
     confirmation_required = pyqtSignal(dict)
+    workflow_library_changed = pyqtSignal()
 
 
 signals = JarvisSignals()

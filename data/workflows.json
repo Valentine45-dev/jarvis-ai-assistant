@@ -1,0 +1,112 @@
+{
+  "workflows": [
+    {
+      "id": "morning_routine",
+      "name": "Morning Routine",
+      "trigger": "Manual",
+      "enabled": true,
+      "last_run": "2026-04-25T19:13:35Z",
+      "steps": [
+        {
+          "intent": "open_app",
+          "action": "open_browser",
+          "parameters": {
+            "browser": "chrome"
+          }
+        },
+        {
+          "intent": "search_web",
+          "action": "google_search",
+          "parameters": {
+            "query": "today's news"
+          }
+        },
+        {
+          "intent": "system_control",
+          "action": "volume_up",
+          "parameters": {}
+        }
+      ]
+    },
+    {
+      "id": "dev_setup",
+      "name": "Dev Setup",
+      "trigger": "Manual",
+      "enabled": true,
+      "last_run": "",
+      "steps": [
+        {
+          "intent": "open_app",
+          "action": "open_vscode",
+          "parameters": {}
+        },
+        {
+          "intent": "open_app",
+          "action": "open_terminal",
+          "parameters": {}
+        },
+        {
+          "intent": "browser_automation",
+          "action": "navigate",
+          "parameters": {
+            "url": "http://localhost:3000"
+          }
+        }
+      ]
+    },
+    {
+      "id": "night_mode",
+      "name": "Night Mode",
+      "trigger": "Manual",
+      "enabled": false,
+      "last_run": "2026-04-25T19:12:58Z",
+      "steps": [
+        {
+          "intent": "system_control",
+          "action": "brightness_down",
+          "parameters": {}
+        },
+        {
+          "intent": "system_control",
+          "action": "volume_mute",
+          "parameters": {}
+        }
+      ]
+    },
+    {
+      "id": "meeting_prep",
+      "name": "Meeting Prep",
+      "trigger": "Manual",
+      "enabled": true,
+      "last_run": "",
+      "steps": [
+        {
+          "intent": "open_app",
+          "action": "open_browser",
+          "parameters": {
+            "browser": "chrome"
+          }
+        },
+        {
+          "intent": "search_web",
+          "action": "google_search",
+          "parameters": {
+            "query": "my calendar today"
+          }
+        },
+        {
+          "intent": "open_app",
+          "action": "open_app_generic",
+          "parameters": {
+            "app_name": "notepad"
+          }
+        },
+        {
+          "intent": "system_control",
+          "action": "screenshot",
+          "parameters": {}
+        }
+      ]
+    }
+  ]
+}

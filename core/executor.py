@@ -313,13 +313,122 @@ def _handle_read_screen(action: str, params: dict) -> dict:
     return cc.ocr_screen(region=region)
 
 
+# Intent/action pairs that must never run unconfirmed inside an automation.
+_DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
+    ("file_operation",  "delete_file"),
+    ("system_control",  "shutdown"),
+    ("system_control",  "restart"),
+    ("system_control",  "sleep"),
+    ("close_app",       "force_quit"),
+})
+
+# Entire intents blocked in workflows until a real confirmation flow exists.
+_BLOCKED_INTENTS: frozenset[str] = frozenset({"code_execution"})
+
+# Intents that are valid step targets when saving a workflow.
+# Excludes: code_execution (blocked), automation_task (no nesting), unknown (invalid).
+_KNOWN_STEP_INTENTS: frozenset[str] = frozenset({
+    "open_app", "close_app", "search_web", "type_text", "control_mouse",
+    "system_control", "file_operation", "browser_automation",
+    "read_screen", "reminder_task", "jarvis_meta",
+})
+
+
 def _handle_automation_task(action: str, params: dict) -> dict:
+    from core.automation import workflow_library
+
+    if action == "list_workflows":
+        workflows = workflow_library.list_all()
+        if not workflows:
+            return _ok("No workflows defined.")
+        lines = [f"- {w['name']}  [{w['id']}]  {'ON' if w.get('enabled') else 'OFF'}" for w in workflows]
+        return _ok("\n".join(lines))
+
+    if action == "create_workflow":
+        task_name = params.get("task_name", "")
+        steps = params.get("steps", [])
+        if not task_name:
+            return _err("No task_name provided for workflow creation.")
+        if not isinstance(steps, list) or not steps:
+            return _err("Steps must be a non-empty list.")
+        slug = task_name.lower().replace(" ", "_")
+        # Reject duplicates — require an explicit different name.
+        if workflow_library.get(slug) is not None:
+            return _err(
+                f"Workflow '{task_name}' already exists. "
+                "Use a different name or delete the existing one first."
+            )
+        for i, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                return _err(f"Step {i} must be a dict, got {type(step).__name__}.")
+            s_intent = step.get("intent", "")
+            s_action = step.get("action", "")
+            if not s_intent:
+                return _err(f"Step {i} is missing 'intent'.")
+            if s_intent in _BLOCKED_INTENTS:
+                return _err(f"Step {i} uses blocked intent '{s_intent}'.")
+            if s_intent not in _KNOWN_STEP_INTENTS:
+                return _err(f"Step {i} has unrecognised intent '{s_intent}'.")
+            if not isinstance(step.get("parameters", {}), dict):
+                return _err(f"Step {i} 'parameters' must be a dict.")
+            if (s_intent, s_action) in _DANGEROUS_STEPS:
+                return _err(f"Step {i} contains dangerous action '{s_action}'.")
+        wf = {
+            "id": slug,
+            "name": task_name,
+            "trigger": "Manual",
+            "enabled": True,
+            "last_run": "",
+            "steps": steps,
+        }
+        workflow_library.add(wf)
+        return _ok(f"Workflow '{task_name}' created with {len(steps)} step(s).")
+
     steps = params.get("steps", [])
+    task_name = params.get("task_name", "")
+
+    # Named lookup: resolve steps from the workflow library when not inlined.
+    workflow_id: str = ""
+    if task_name and not steps:
+        wf = workflow_library.get(task_name)
+        if wf is None:
+            return _err(f"Workflow not found: {task_name!r}")
+        # Reject disabled workflows — they must be enabled before running.
+        if not wf.get("enabled", True):
+            return _err(f"Workflow '{wf['name']}' is disabled. Enable it before running.")
+        steps = wf.get("steps", [])
+        workflow_id = wf.get("id", "")
+
     if not steps:
         return _err("No steps provided in automation task")
 
+    # Preflight: reject workflows containing blocked or dangerous steps.
+    for step in steps:
+        intent = step.get("intent", "")
+        action = step.get("action", "")
+        if intent in _BLOCKED_INTENTS:
+            return _err(
+                f"Workflow contains a '{intent}' step — "
+                "code execution requires manual confirmation, not automation."
+            )
+        if (intent, action) in _DANGEROUS_STEPS:
+            return _err(
+                f"Workflow contains dangerous step '{action}' — "
+                "run that step manually so it can be confirmed."
+            )
+
+    total = len(steps)
     results = []
+    all_ok = True
     for i, step in enumerate(steps, 1):
+        try:
+            from core.signals import signals
+            signals.status_changed.emit(
+                f"Automation: step {i}/{total} — {step.get('action', '').replace('_', ' ')}"
+            )
+        except Exception:
+            pass
+
         sub = dispatch({
             "intent":     step.get("intent", "unknown"),
             "action":     step.get("action", ""),
@@ -328,9 +437,15 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         })
         results.append(f"Step {i}: {'OK' if sub['success'] else 'FAIL'} — {sub['output'] or sub['error']}")
         if not sub["success"]:
-            break   # abort on first failure
+            all_ok = False
+            break
 
-    return _ok("\n".join(results))
+    # Only record last_run when the entire workflow completed without failure.
+    if workflow_id and all_ok:
+        workflow_library.mark_run(workflow_id)
+
+    summary = "\n".join(results)
+    return _ok(summary) if all_ok else _err(summary)
 
 
 # ── Reminders ─────────────────────────────────────────────────────────────────
