@@ -101,12 +101,39 @@ class VoiceEngine:
     def __init__(self):
         self._tts_lock = threading.Lock()
         self._listening = threading.Event()
+        # Transient session mute flags (do not persist to disk). Set via
+        # set_mic_muted() / set_tts_muted() — typically from the Quick Settings
+        # popover. When muted, listen() / say() short-circuit cleanly so the
+        # rest of the pipeline (callbacks, signals) keeps a consistent shape.
+        self._mic_muted = False
+        self._tts_muted = False
+
+    # ── Mute controls ────────────────────────────────────────────────────────
+
+    def set_mic_muted(self, muted: bool) -> None:
+        self._mic_muted = bool(muted)
+
+    def set_tts_muted(self, muted: bool) -> None:
+        self._tts_muted = bool(muted)
+
+    @property
+    def mic_muted(self) -> bool:
+        return self._mic_muted
+
+    @property
+    def tts_muted(self) -> bool:
+        return self._tts_muted
 
     # ── TTS ──────────────────────────────────────────────────────────────────
 
     def say(self, text: str, on_ready: Callable[[], None] | None = None) -> None:
         """Speak *text* using ElevenLabs TTS. Non-blocking."""
         if not text.strip():
+            return
+        if self._tts_muted:
+            # Still fire on_ready so any UI animation chained to playback start
+            # (e.g. transcript reveal) doesn't stall waiting for muted audio.
+            self._notify_ready(on_ready)
             return
         threading.Thread(target=self._say_thread, args=(text, on_ready), daemon=True).start()
 
@@ -312,6 +339,12 @@ class VoiceEngine:
         phrase_time_limit: float = 12.0,
     ) -> None:
         """Capture mic → transcribe → call *callback(text)*. Non-blocking."""
+        if self._mic_muted:
+            # Surface the muted state through on_error so the UI can reset its
+            # listening pill instead of hanging in a "listening" visual state.
+            if on_error is not None:
+                on_error("Microphone muted.")
+            return
         threading.Thread(
             target=self._listen_thread,
             args=(callback, on_error, timeout, phrase_time_limit),

@@ -6,7 +6,7 @@ from datetime import datetime
 
 import psutil
 import qtawesome as qta
-from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QStyle, QStyleOption, QWidget
 
@@ -18,10 +18,12 @@ from ui.theme import CYAN, FM, TOPBAR_H, BOTBAR_H
 # meet at the same y, producing one continuous line across the screen.
 TOPBAR_HEIGHT = 64
 
+# (icon_name, tooltip, attribute_name) — attribute_name is used to expose the
+# button as self._btn_<attr> so callers can anchor popovers to its geometry.
 _TOPBAR_ICONS = (
-    ("ph.sliders-horizontal", "Settings"),
-    ("ph.terminal-window",    "Terminal"),
-    ("ph.broadcast",          "Broadcast"),
+    ("ph.sliders-horizontal", "Quick settings",  "settings"),
+    ("ph.terminal-window",    "Command palette", "terminal"),
+    ("ph.broadcast",          "Wake-word listener", "broadcast"),
 )
 
 
@@ -69,6 +71,11 @@ def draw_glow_right_edge(widget: QWidget, painter: QPainter,
 
 
 class TopBar(QWidget):
+    # Per-icon signals — main.py wires these to popovers / palettes.
+    settings_clicked  = pyqtSignal()
+    terminal_clicked  = pyqtSignal()
+    broadcast_clicked = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(TOPBAR_HEIGHT)
@@ -76,6 +83,11 @@ class TopBar(QWidget):
         # because QSS can't reproduce the soft cyan halo from the reference.
         self.setStyleSheet("background:rgba(8,15,17,0.85);")
         self._view_name = "Dashboard"
+        # Icon buttons are stored as attributes so callers can read their
+        # global geometry (mapToGlobal) when anchoring popovers.
+        self._btn_settings:  QPushButton | None = None
+        self._btn_terminal:  QPushButton | None = None
+        self._btn_broadcast: QPushButton | None = None
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(24, 0, 18, 0)
@@ -131,7 +143,15 @@ class TopBar(QWidget):
         icons_lay.setContentsMargins(0, 0, 0, 0)
         icons_lay.setSpacing(8)
 
-        for name, tip in _TOPBAR_ICONS:
+        # Map attribute name → outbound signal so each button has a
+        # purpose-built emitter without a chain of if/elif inside the loop.
+        signal_for = {
+            "settings":  self.settings_clicked,
+            "terminal":  self.terminal_clicked,
+            "broadcast": self.broadcast_clicked,
+        }
+
+        for name, tip, attr in _TOPBAR_ICONS:
             btn = QPushButton()
             btn.setFixedSize(42, 42)
             btn.setCursor(Qt.PointingHandCursor)
@@ -148,6 +168,10 @@ class TopBar(QWidget):
                 "}"
                 "QPushButton:hover{background:rgba(0,229,255,0.12);}"
             )
+            sig = signal_for.get(attr)
+            if sig is not None:
+                btn.clicked.connect(sig.emit)
+            setattr(self, f"_btn_{attr}", btn)
             icons_lay.addWidget(btn)
         lay.addWidget(icons_wrap)
 
@@ -162,6 +186,14 @@ class TopBar(QWidget):
     def set_cpu(self, pct: int):
         """Receive CPU % from _CpuCard's signal so both displays stay in sync."""
         self._cpu.setText(f"CPU: {pct}%")
+
+    def icon_button(self, name: str) -> QPushButton | None:
+        """Look up a top-right icon button by name (settings|terminal|broadcast).
+
+        Returned button can be used by callers to anchor popovers via
+        button.mapToGlobal(QPoint(0, button.height())).
+        """
+        return getattr(self, f"_btn_{name}", None)
 
     def _tick(self):
         try:

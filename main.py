@@ -9,11 +9,14 @@ from datetime import datetime
 
 import psutil
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
+    QShortcut,
+)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QPainter, QPalette, QColor, QBrush, QRadialGradient, QFont,
-    QFontMetrics,
+    QFontMetrics, QKeySequence,
 )
 
 from ui.theme import PRIMARY, CYAN, BG, RADIUS_LG, _c, _primary, load_jarvis_fonts
@@ -24,12 +27,18 @@ from ui.voice import VoiceView
 from ui.automation import AutomationView
 from ui.history import HistoryView
 from ui.settings import SettingsView
+from ui.popovers import QuickSettingsPopover, SystemStatusPopover
+from ui.command_palette import CommandPalette
 from data.mock import MOCK_HISTORY
-from core.brain import ask_claude_async
+from core.brain import ask_claude_async, TAG_INTENT_MAP
 from core.executor import dispatch
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
 from core.browser import browser
+
+# Sidebar nav slot for the Settings page — kept as a constant so any future
+# nav reorder only needs to change one line.
+_SETTINGS_NAV_IDX = 4
 
 
 class JarvisWindow(QMainWindow):
@@ -123,6 +132,37 @@ class JarvisWindow(QMainWindow):
         self._dashboard.left.confirm_bar.confirmed.connect(self._on_confirmed)
         self._dashboard.left.confirm_bar.cancelled.connect(self._on_cancelled)
         self._pending_result: dict | None = None
+
+        # ── Quick settings popover (TopBar sliders icon) ──────────────────────
+        # Transient session flag — bypass confirmation for destructive actions.
+        # OFF by default (and intentionally not persisted) so a stale toggle
+        # can never silently survive a restart.
+        self._auto_confirm = False
+        self._quick_settings = QuickSettingsPopover(self)
+        self._quick_settings.mic_muted_changed.connect(self._on_mic_mute_toggled)
+        self._quick_settings.tts_muted_changed.connect(self._on_tts_mute_toggled)
+        self._quick_settings.auto_confirm_changed.connect(self._on_auto_confirm_toggled)
+        self._quick_settings.open_settings.connect(
+            lambda: self._sidebar.goto(_SETTINGS_NAV_IDX)
+        )
+        self._topbar.settings_clicked.connect(self._show_quick_settings)
+
+        # ── Command palette (TopBar terminal icon + Ctrl+K) ───────────────────
+        # Parented to the main window so it can paint a full-window dim
+        # backdrop and resize with the window without extra plumbing.
+        self._palette = CommandPalette(self, frozenset(TAG_INTENT_MAP.keys()))
+        self._palette.command_submitted.connect(self._on_palette_command)
+        self._topbar.terminal_clicked.connect(self._toggle_palette)
+        # Global Ctrl+K — works from any view, even with no input focused.
+        self._palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._palette_shortcut.setContext(Qt.ApplicationShortcut)
+        self._palette_shortcut.activated.connect(self._toggle_palette)
+
+        # ── System status popover (TopBar broadcast icon) ─────────────────────
+        # Read-only health view of all subsystems. Refreshed on every open so
+        # values are always live — no background polling needed.
+        self._system_status = SystemStatusPopover(self)
+        self._topbar.broadcast_clicked.connect(self._show_system_status)
 
         for h in self._history:
             self._dashboard.left.transcript.add_exchange(
@@ -251,10 +291,22 @@ class JarvisWindow(QMainWindow):
 
         # Confirmation-required: show confirm bar and hold
         if result.get("requires_confirmation"):
+            # Auto-confirm short-circuits the hold — used when the user has
+            # explicitly opted in via Quick Settings. The dispatch() gate still
+            # enforces _CONFIRMATION_REQUIRED_ACTIONS; we just pass confirmed=True.
+            if self._auto_confirm:
+                self._execute_result(result, intent, conf, resp, hud, confirmed=True)
+                return
             self._pending_result = result
             self._dashboard.left.typing.hide_typing()
             self._set_state("idle")
             self._dashboard.left.status_lbl.setText(resp or "Awaiting confirmation, sir.")
+            # Mirror the pending state on the Voice page so the inspector
+            # turns amber instead of looking idle while user decides.
+            self._voice_view.set_pending(
+                intent, result.get("action", ""), conf,
+                resp or "Awaiting confirmation, sir.",
+            )
             return
 
         self._execute_result(result, intent, conf, resp, hud)
@@ -293,6 +345,14 @@ class JarvisWindow(QMainWindow):
         self._history_view.refresh_history(self._history, uptime_str=f"{h}h {m:02d}m")
         self._voice_view.update_transcript(
             self._history[-1]["you"] if self._history else "", display_resp, intent, conf)
+        # Phase 2: surface the real executor outcome on the Voice page
+        self._voice_view.set_execution(
+            intent,
+            result.get("action", ""),
+            conf,
+            bool(exec_out.get("success")),
+            exec_out.get("error"),
+        )
 
         self._set_state("processing")
         self._dashboard.left.status_lbl.setText(display_resp)
@@ -359,6 +419,88 @@ class JarvisWindow(QMainWindow):
         self._pending_result = None
         self._set_state("idle")
         self._dashboard.left.status_lbl.setText("Command cancelled, sir.")
+        self._voice_view.clear_pending()
+
+    # ── Quick settings popover handlers ───────────────────────────────────────
+
+    def _show_quick_settings(self):
+        # Sync the popover's toggle state with the live engine flags every time
+        # it opens — defends against drift if anything else mutated them.
+        from core.voice import voice_engine
+        self._quick_settings.sync_state(
+            mic_muted=voice_engine.mic_muted,
+            tts_muted=voice_engine.tts_muted,
+            auto_confirm=self._auto_confirm,
+        )
+        anchor = self._topbar.icon_button("settings")
+        self._quick_settings.show_below(anchor)
+
+    def _show_system_status(self):
+        # refresh() pulls fresh values from config / voice_engine / browser /
+        # executor on every open, so the popover never shows stale state.
+        self._system_status.refresh()
+        anchor = self._topbar.icon_button("broadcast")
+        self._system_status.show_below(anchor)
+
+    def _on_mic_mute_toggled(self, muted: bool):
+        from core.voice import voice_engine
+        voice_engine.set_mic_muted(muted)
+        self._dashboard.toast.show_toast(
+            "Microphone muted." if muted else "Microphone live.",
+            "warning" if muted else "info",
+        )
+        # If we're currently mid-listen, drop back to idle so the UI doesn't
+        # sit in a "listening" pose while the engine is muted.
+        if muted and self._state == "listening":
+            self._set_state("idle")
+
+    def _on_tts_mute_toggled(self, muted: bool):
+        from core.voice import voice_engine
+        voice_engine.set_tts_muted(muted)
+        self._dashboard.toast.show_toast(
+            "TTS output muted." if muted else "TTS output enabled.",
+            "warning" if muted else "info",
+        )
+
+    def _on_auto_confirm_toggled(self, on: bool):
+        self._auto_confirm = bool(on)
+        self._dashboard.toast.show_toast(
+            "Auto-confirm ON — destructive actions run instantly."
+            if on else "Auto-confirm OFF — confirmation prompts restored.",
+            "error" if on else "info",
+        )
+
+    # ── Command palette handlers ──────────────────────────────────────────────
+
+    def _toggle_palette(self):
+        # Refresh recents from history before showing so the chips reflect the
+        # most recent commands the user actually issued. We pull the user's
+        # side ("you") from each history entry, newest first, dedup.
+        seen: set[str] = set()
+        recents: list[str] = []
+        for entry in reversed(self._history):
+            cmd = (entry.get("you") or "").strip()
+            if not cmd or cmd in seen:
+                continue
+            seen.add(cmd)
+            recents.append(cmd)
+            if len(recents) >= 5:
+                break
+        self._palette.set_recents(recents)
+        self._palette.toggle()
+
+    def _on_palette_command(self, cmd: str):
+        # Same path as the dashboard command bar — single funnel into routing.
+        self._process_cmd(cmd)
+
+    # The palette is a child widget of the main window. Qt sizes child
+    # widgets via QMainWindow's central layout, but since the palette is
+    # parented directly to the main window (not the central widget), we
+    # need to keep it sized to the window manually.
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_palette") and self._palette.isVisible():
+            self._palette.resize(self.size())
 
     def _set_state(self, s):
         self._state = s

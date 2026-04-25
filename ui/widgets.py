@@ -683,7 +683,12 @@ class ToastNotification(QWidget):
     def _reposition(self):
         if not self.parent():
             return
-        self.setGeometry(self.parent().width() - 300, 10, 280, 36)
+        toast_w = 280
+        right_column_w = 260
+        margin = 24
+        gap = 16
+        x = self.parent().width() - margin - right_column_w - gap - toast_w
+        self.setGeometry(max(margin, x), 10, toast_w, 36)
         self._label.setGeometry(0, 0, 280, 36)
 
     def show_toast(self, text, _kind="info"):

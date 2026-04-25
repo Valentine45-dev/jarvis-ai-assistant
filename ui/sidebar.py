@@ -289,3 +289,13 @@ class HudSidebar(QWidget):
             b.set_active(i == active_footer)
 
         self.nav_changed.emit(stack_idx)
+
+    def goto(self, nav_idx: int) -> None:
+        """Public navigation hook for code that doesn't own the sidebar buttons.
+
+        Mirrors a real user click on nav slot *nav_idx* (0=System, 1=Voice,
+        2=Automate, 3=History, 4=Config) so the active highlight + nav_changed
+        signal stay consistent regardless of who triggered the navigation.
+        """
+        if 0 <= nav_idx < len(self._nav_buttons):
+            self._handle_click("nav", nav_idx)
