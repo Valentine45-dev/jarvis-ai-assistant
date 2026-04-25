@@ -44,12 +44,25 @@ class AppConfig:
 
     @classmethod
     def load(cls):
-        """Load from JSON if it exists, otherwise fall back to env vars."""
+        """Load from JSON if it exists, then overlay env vars.
+
+        API keys live in .env only — they are never written to jarvis.json.
+        Overlaying env vars here ensures they are always picked up even after
+        a config.save() has created jarvis.json without them.
+        """
         if _JSON_PATH.exists():
             try:
                 data = json.loads(_JSON_PATH.read_text())
-                fields = {f for f in cls.__dataclass_fields__}
-                return cls(**{k: v for k, v in data.items() if k in fields})
+                fields = set(cls.__dataclass_fields__)
+                instance = cls(**{k: v for k, v in data.items() if k in fields})
+                # Env vars always win — API keys must come from .env, not JSON.
+                env = cls.from_env()
+                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key",
+                            "claude_model", "wake_word", "debug_mode"):
+                    env_val = getattr(env, key)
+                    if env_val:
+                        setattr(instance, key, env_val)
+                return instance
             except Exception:
                 pass
         return cls.from_env()

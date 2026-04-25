@@ -23,6 +23,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 from config.settings import config
 from core import computer_control as cc
@@ -110,11 +111,11 @@ def _handle_search_web(action: str, params: dict) -> dict:
     platform_key = params.get("platform", "google")
 
     urls = {
-        "google":       f"https://www.google.com/search?q={query.replace(' ', '+')}",
-        "youtube":      f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}",
-        "github":       f"https://github.com/search?q={query.replace(' ', '+')}",
-        "stackoverflow": f"https://stackoverflow.com/search?q={query.replace(' ', '+')}",
-        "wikipedia":    f"https://en.wikipedia.org/wiki/Special:Search?search={query.replace(' ', '_')}",
+        "google":        f"https://www.google.com/search?q={quote_plus(query)}",
+        "youtube":       f"https://www.youtube.com/results?search_query={quote_plus(query)}",
+        "github":        f"https://github.com/search?q={quote_plus(query)}",
+        "stackoverflow": f"https://stackoverflow.com/search?q={quote_plus(query)}",
+        "wikipedia":     f"https://en.wikipedia.org/wiki/Special:Search?search={quote_plus(query)}",
     }
     url = urls.get(platform_key, urls["google"])
     webbrowser.open(url)
