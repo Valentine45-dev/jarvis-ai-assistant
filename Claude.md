@@ -225,25 +225,21 @@ Execute a multi-step workflow or predefined routine.
 **Actions:**
 
 - `run_workflow` — Execute a named automation chain
-- `create_workflow` — Define a new automation
+- `create_workflow` — Define and persist a new automation
 - `list_workflows` — List available automations
+- `remove_workflow` — Delete a named workflow (destructive — always `requires_confirmation: true`)
+- `rename_workflow` — Rename an existing workflow
 
 **Parameters:**
 
 ```json
-{
-  "task_name": "string — workflow identifier",
-  "steps": [
-    {
-      "intent": "string — intent for this step",
-      "action": "string — action for this step",
-      "parameters": {}
-    }
-  ]
-}
+{ "task_name": "string — workflow identifier" }
+{ "task_name": "string", "steps": [{ "intent": "string", "action": "string", "parameters": {} }] }
+{ "task_name": "string — workflow to rename", "new_name": "string — new display name" }
 ```
 
 **HUD Label:** `AUTOMATION`
+**Confirmation:** `true` for `remove_workflow`
 
 -----
 
