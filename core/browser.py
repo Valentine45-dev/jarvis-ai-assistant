@@ -2,13 +2,21 @@
 Persistent Playwright Chrome session.
 Uses playwright.sync_api — no asyncio, compatible with PyQt5's event loop.
 
-Lifecycle (Phase 1):
+Lifecycle:
   browser.start()       — launch Chrome; call at JARVIS startup
   browser.stop()        — close Chrome; call at shutdown / closeEvent
-  browser.navigate(url) → {success, output, error}
 
-Phase 2 actions (click, fill, read) are stubbed — returning a clear message
-so the executor always gets a valid result dict.
+Navigation:   browser.navigate(url)
+Interaction:  browser.click_element(selector, text, x, y)
+              browser.fill_form(fields)
+              browser.read_page()
+              browser.extract_content(selector)
+Screenshots:  browser.screenshot_page(path)
+              browser.screenshot_element(selector, path)
+Tabs:         browser.new_tab(url)
+              browser.close_tab()
+
+All public methods return {success: bool, output: str, error: str}.
 """
 
 from __future__ import annotations
@@ -87,6 +95,10 @@ class BrowserSession:
             self._ready = False
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    @property
+    def is_ready(self) -> bool:
+        return self._ready
 
     def _not_ready(self) -> dict | None:
         """Return _err if session is not ready, else None."""

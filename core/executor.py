@@ -49,7 +49,7 @@ def _handle_open_app(action: str, params: dict) -> dict:
     if action == "open_url" or url:
         target = url or app
         # Route through Playwright so JARVIS controls the tab
-        if browser._ready:
+        if browser.is_ready:
             return browser.navigate(target)
         # Browser not started yet — fall back to OS open
         webbrowser.open(target)
@@ -95,7 +95,7 @@ def _handle_close_app(action: str, params: dict) -> dict:
 
     if _OS == "windows":
         result = subprocess.run(
-            ["taskkill", "/F" if action == "force_quit" else "/IM", f"{name}.exe"],
+            ["taskkill", "/F", "/IM", f"{name}.exe"] if action == "force_quit" else ["taskkill", "/IM", f"{name}.exe"],
             capture_output=True, text=True
         )
         return _ok(result.stdout) if result.returncode == 0 else _err(result.stderr)
@@ -272,10 +272,13 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 def _handle_browser_automation(action: str, params: dict) -> dict:
     url = params.get("url", "")
 
-    if action in ("navigate", "new_tab"):
+    if action == "navigate":
         if not url:
             return _err("No URL provided")
         return browser.navigate(url)
+
+    if action == "new_tab":
+        return browser.new_tab(url)
 
     if action == "click_element":
         return browser.click_element(
