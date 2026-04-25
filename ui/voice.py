@@ -42,7 +42,8 @@ _STATE_LABELS = {
     "idle":      ("AWAITING INPUT",  "rgba(195,245,255,0.45)"),
     "listening": ("LISTENING",       CYAN),
     "thinking":  ("PROCESSING",      CYAN),
-    "speaking":  ("RESPONDING",      "#83fba5"),
+    "processing": ("PROCESSING",     CYAN),
+    "speaking":  ("SPEAKING",        "#83fba5"),
 }
 
 

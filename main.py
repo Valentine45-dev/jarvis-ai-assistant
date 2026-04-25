@@ -288,7 +288,7 @@ class JarvisWindow(QMainWindow):
         self._voice_view.update_transcript(
             self._history[-1]["you"] if self._history else "", display_resp, intent, conf)
 
-        self._set_state("speaking")
+        self._set_state("processing")
         self._dashboard.left.status_lbl.setText(display_resp)
 
         self._transcript_update_token += 1
@@ -313,11 +313,14 @@ class JarvisWindow(QMainWindow):
         )
         self._dashboard.toast.show_toast(toast_msg, kind)
 
-        QTimer.singleShot(2000, lambda: self._set_state("idle"))
-
     def _on_tts_ready(self, payload: object):
         token, text, j_time, intent, conf = payload
+        self._set_state_if_current(token, "speaking")
         self._update_transcript_if_current(token, text, j_time, intent, conf)
+        QTimer.singleShot(
+            2000,
+            lambda: self._set_state_if_current(token, "idle"),
+        )
 
     def _update_transcript_if_current(
         self, token: int, text: str, j_time: str, intent: str, conf: float
@@ -326,6 +329,12 @@ class JarvisWindow(QMainWindow):
         if token != self._transcript_update_token:
             return
         self._dashboard.left.transcript.update_last_jarvis(text, j_time, intent, conf)
+
+    def _set_state_if_current(self, token: int, state: str):
+        """Ignore stale state timers after a newer command/response starts."""
+        if token != self._transcript_update_token:
+            return
+        self._set_state(state)
 
     def _on_confirmed(self):
         if self._pending_result:
@@ -346,7 +355,7 @@ class JarvisWindow(QMainWindow):
 
     def _set_state(self, s):
         self._state = s
-        orb_map = {"idle": 0, "listening": 1, "thinking": 2, "speaking": 3}
+        orb_map = {"idle": 0, "listening": 1, "thinking": 2, "processing": 2, "speaking": 3}
         self._dashboard.left.orb.set_state(orb_map.get(s, 0))
         self._dashboard.left.mic.set_listening(s == "listening")
 
@@ -364,6 +373,8 @@ class JarvisWindow(QMainWindow):
             self._dashboard.left.hud_status.set_status("LISTENING")
         elif s == "thinking":
             pass  # set by _process_cmd
+        elif s == "processing":
+            self._dashboard.left.hud_status.set_status("PROCESSING")
         elif s == "speaking":
             self._dashboard.left.hud_status.set_status("SPEAKING")
 

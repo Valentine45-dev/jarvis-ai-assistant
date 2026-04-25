@@ -26,66 +26,13 @@ from PyQt5.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
     QWidget,
 )
 import qtawesome as qta
 
+from ui.components.panels import GlassPanel
+from ui.components.transcript import TerminalLog, TranscriptPanel
 from ui.theme import BG, CYAN, FM, FN, GREEN, PRIMARY, RED, WARNING, _c, _primary
-
-
-class GlassPanel(QWidget):
-    """Semi-transparent panel with corner brackets."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._show_brackets = True
-        self._fill = True
-        self._fill_color = QColor(21, 29, 30, 100)
-
-    def set_show_brackets(self, show: bool):
-        self._show_brackets = show
-        self.update()
-
-    def set_fill(self, fill: bool):
-        self._fill = fill
-        self.update()
-
-    def set_fill_color(self, color):
-        """Override panel fill color (QColor or RGBA tuple)."""
-        if isinstance(color, QColor):
-            self._fill_color = color
-        else:
-            try:
-                r, g, b, *rest = color
-                a = rest[0] if rest else 255
-                self._fill_color = QColor(int(r), int(g), int(b), int(a))
-            except Exception:
-                return
-        self.update()
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, False)
-        w, h = self.width(), self.height()
-        if self._fill:
-            p.fillRect(0, 0, w, h, self._fill_color)
-        if self._show_brackets:
-            # subtle full-rect border, alpha 35 cyan
-            p.setPen(QPen(QColor(0, 229, 255, 35), 1))
-            p.drawRect(0, 0, w - 1, h - 1)
-            # corner brackets, alpha 180 cyan, 10px
-            p.setPen(QPen(QColor(0, 229, 255, 180), 1))
-            b = 10
-            p.drawLine(0, 0, b, 0)
-            p.drawLine(0, 0, 0, b)
-            p.drawLine(w - 1 - b, 0, w - 1, 0)
-            p.drawLine(w - 1, 0, w - 1, b)
-            p.drawLine(0, h - 1, b, h - 1)
-            p.drawLine(0, h - 1 - b, 0, h - 1)
-            p.drawLine(w - 1 - b, h - 1, w - 1, h - 1)
-            p.drawLine(w - 1, h - 1 - b, w - 1, h - 1)
 
 
 class ModuleIDLabel(QLabel):
@@ -211,45 +158,6 @@ class ScanLineOverlay(QWidget):
         grad.setColorAt(0.5, QColor(0, 229, 255, 76))
         grad.setColorAt(1, QColor(0, 229, 255, 0))
         p.fillRect(0, self._y - 1, self.width(), 2, grad)
-
-
-class TerminalLog(QTextEdit):
-    """Read-only terminal log with a blinking block cursor."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setReadOnly(True)
-        self._show_cursor = True
-        self._base_lines = []
-        self.setStyleSheet(
-            "QTextEdit{"
-            "background:transparent;"
-            "border:none;"
-            f"color:{PRIMARY};"
-            f"font-family:'{FM}';"
-            "font-size:12px;"
-            "}"
-        )
-        self._cursor_timer = QTimer(self)
-        self._cursor_timer.timeout.connect(self._toggle_cursor)
-        self._cursor_timer.start(500)
-
-    def set_lines(self, lines):
-        self._base_lines = list(lines)
-        self._render()
-
-    def append_line(self, line: str):
-        self._base_lines.append(line)
-        self._render()
-
-    def _toggle_cursor(self):
-        self._show_cursor = not self._show_cursor
-        self._render()
-
-    def _render(self):
-        cursor = "\n\u2588" if self._show_cursor else "\n "
-        self.setPlainText("\n".join(self._base_lines) + cursor)
-        self.moveCursor(self.textCursor().End)
 
 
 class LineChartWidget(QWidget):
@@ -621,51 +529,6 @@ class GreetingCard(GlassPanel):
         p.setFont(QFont(FN, 10))
         p.drawText(10, 40, f"Commands: {self._commands}")
         p.drawText(10, 58, f"Uptime: {self._uptime_s // 60}m")
-
-
-class TranscriptPanel(GlassPanel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._rows = []
-        self._view = QTextEdit(self)
-        self._view.setReadOnly(True)
-        self._view.setStyleSheet(
-            "QTextEdit{background:transparent;border:none;"
-            f"color:{PRIMARY};font-family:'{FM}';font-size:14px;"
-            "line-height:1.6;}"
-        )
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.addWidget(self._view)
-
-    def add_exchange(self, you, y_time, jarvis="", j_time="", intent="", conf=None):
-        self._rows.append((you, y_time, jarvis, j_time, intent, conf))
-        self._render()
-
-    def update_last_jarvis(self, text, j_time="", intent="", conf=None):
-        if not self._rows:
-            return
-        you, y_time, _, _, old_intent, old_conf = self._rows[-1]
-        self._rows[-1] = (
-            you,
-            y_time,
-            text,
-            j_time,
-            intent or old_intent,
-            conf if conf is not None else old_conf,
-        )
-        self._render()
-
-    def _render(self):
-        lines = []
-        for you, y_time, jarvis, j_time, intent, conf in self._rows:
-            lines.append(f"[{y_time}] YOU: {you}")
-            if jarvis:
-                suffix = f" ({intent}, {int(conf * 100)}%)" if intent and conf is not None else ""
-                lines.append(f"[{j_time}] JARVIS: {jarvis}{suffix}")
-            lines.append("")
-        self._view.setPlainText("\n".join(lines))
-        self._view.moveCursor(self._view.textCursor().End)
 
 
 class TypingIndicator(QLabel):
