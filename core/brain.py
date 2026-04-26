@@ -168,6 +168,15 @@ def ask_claude(
     if context:
         ctx.update(context)
 
+    # Inject last read_page result so Claude can answer follow-up "what does it say"
+    try:
+        from core.executor import get_page_cache
+        cached_page = get_page_cache()
+        if cached_page:
+            ctx["last_page_content"] = cached_page[:600]
+    except Exception:
+        pass
+
     # 4. Compose user message — cmd_text stored in history; full user_msg sent to Claude
     cmd_text = cleaned if cleaned else text
     user_msg = cmd_text

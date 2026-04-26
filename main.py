@@ -278,7 +278,16 @@ class JarvisWindow(QMainWindow):
         self._dashboard.left.status_lbl.setText(f'Processing: "{cmd}"')
         self._dashboard.left.typing.show_typing()
 
-        # Warn if @tag was unrecognised (surfaced by brain via _unknown_tag)
+        # Priority: resolve pending confirmation before routing to brain.
+        # This handles "yes/no" replies to executor confirmation prompts
+        # (e.g. "folder doesn't exist — shall I create it?").
+        from core.executor import get_pending_confirmation, resolve_confirmation
+        if get_pending_confirmation():
+            resolved = resolve_confirmation(cmd)
+            self._on_confirmation_resolved(resolved)
+            return
+
+        # Normal flow: route through Claude
         def _on_result(result: dict):
             if result.get("_unknown_tag"):
                 self._dashboard.toast.show_toast(
@@ -317,6 +326,45 @@ class JarvisWindow(QMainWindow):
 
         self._execute_result(result, intent, conf, resp, hud)
 
+    # Intents where personality.say() drives the spoken response (honest pass/fail)
+    _ACTION_INTENTS: frozenset = frozenset({
+        "open_app", "close_app", "search_web", "type_text", "control_mouse",
+        "system_control", "file_operation", "code_execution", "browser_automation",
+        "read_screen", "automation_task", "reminder_task",
+    })
+    _FACTUAL_ACTIONS: frozenset = frozenset({"tell_time", "tell_date", "status_report"})
+
+    def _on_confirmation_resolved(self, resolved: dict):
+        """Called on the Qt main thread after a pending confirmation is resolved."""
+        j_time = datetime.now().strftime("%H:%M")
+        self._dashboard.left.typing.hide_typing()
+
+        display_resp = resolved.get("output", "")
+        if not display_resp:
+            display_resp = "Done, sir." if resolved.get("success") else "Understood, standing down, sir."
+
+        if self._history:
+            self._history[-1].update({
+                "jarvis": display_resp, "jTime": j_time,
+                "intent": "confirmation", "conf": 1.0,
+            })
+
+        self._set_state("processing")
+        self._dashboard.left.status_lbl.setText(display_resp)
+        self._dashboard.left.hud_status.set_status("CONFIRMED" if resolved.get("success") else "CANCELLED")
+
+        self._transcript_update_token += 1
+        t = self._transcript_update_token
+        payload = (t, display_resp, j_time, "confirmation", 1.0)
+        try:
+            from core.voice import voice_engine
+            voice_engine.say(display_resp, on_ready=lambda: self._tts_ready.emit(payload))
+        except Exception:
+            self._tts_ready.emit(payload)
+
+        kind = "success" if resolved.get("success") else "info"
+        self._dashboard.toast.show_toast(display_resp, kind)
+
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         confirmed: bool = False):
         """Dispatch to OS + update all HUD surfaces."""
@@ -325,10 +373,48 @@ class JarvisWindow(QMainWindow):
         j_time = datetime.now().strftime("%H:%M")
         self._dashboard.left.typing.hide_typing()
 
-        # Use executor output as response text if Claude gave a generic one
-        display_resp = resp
-        if exec_out.get("output") and intent not in ("jarvis_meta", "unknown"):
-            pass   # keep Claude's spoken response for TTS; output is for logs
+        # ── needs_confirmation from executor (e.g. folder not found) ────────
+        # Not the same as Claude's requires_confirmation — this is the executor
+        # asking the user a yes/no mid-execution.
+        if exec_out.get("needs_confirmation"):
+            display_resp = exec_out.get("output", "Awaiting your confirmation, sir.")
+            self._dashboard.left.status_lbl.setText(display_resp)
+            self._set_state("idle")
+            self._transcript_update_token += 1
+            t = self._transcript_update_token
+            payload = (t, display_resp, j_time, intent, conf)
+            try:
+                from core.voice import voice_engine
+                voice_engine.say(display_resp, on_ready=lambda: self._tts_ready.emit(payload))
+            except Exception:
+                self._tts_ready.emit(payload)
+            self._dashboard.toast.show_toast(display_resp, "warning")
+            if self._history:
+                self._history[-1].update({"jarvis": display_resp, "jTime": j_time,
+                                          "intent": intent, "conf": conf})
+            return
+
+        # ── Build spoken response — personality-driven, honest about failure ──
+        from core.personality import say as personality_say
+
+        if intent in self._ACTION_INTENTS:
+            status       = "ok" if exec_out["success"] else "err"
+            display_resp = personality_say(
+                intent, result.get("action", ""),
+                status,
+                exec_out.get("output", ""),
+                exec_out.get("error", ""),
+            )
+        elif intent == "jarvis_meta":
+            if result.get("action") in self._FACTUAL_ACTIONS and exec_out.get("output"):
+                display_resp = exec_out["output"]
+            elif result.get("action") == "conversational" and exec_out.get("output"):
+                # Page cache answer
+                display_resp = exec_out["output"]
+            else:
+                display_resp = resp   # Claude's conversational response
+        else:
+            display_resp = resp       # unknown / other — use Claude's response
 
         if self._history:
             self._history[-1].update({

@@ -211,7 +211,41 @@ def ocr_screen(region: dict | None = None) -> dict:
 
 # ── SYSTEM ────────────────────────────────────────────────────────────────────
 
-def set_volume(action: str) -> dict:
+def set_volume(action: str, level: int | None = None) -> dict:
+    # pycaw gives precise Windows volume control
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from ctypes import cast, POINTER
+        from comtypes import CLSCTX_ALL
+
+        devices   = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        vol       = cast(interface, POINTER(IAudioEndpointVolume))
+
+        if level is not None:
+            scalar = max(0.0, min(1.0, level / 100.0))
+            vol.SetMasterVolumeLevelScalar(scalar, None)
+            return _ok(f"{level}%")
+
+        current = int(vol.GetMasterVolumeLevelScalar() * 100)
+        if action == "volume_mute":
+            is_muted = bool(vol.GetMute())
+            vol.SetMute(not is_muted, None)
+            return _ok("Unmuted" if is_muted else "Muted")
+        if action == "volume_up":
+            new_level = min(100, current + 10)
+            vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
+            return _ok(f"{new_level}%")
+        if action == "volume_down":
+            new_level = max(0, current - 10)
+            vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
+            return _ok(f"{new_level}%")
+    except ImportError:
+        pass  # fall through to pyautogui media keys
+    except Exception:
+        pass
+
+    # Fallback: pyautogui media keys (each press ≈ 2% on Windows)
     pag = _pag()
     if pag is None:
         return _err("pyautogui not installed — run: uv add pyautogui")
@@ -221,8 +255,10 @@ def set_volume(action: str) -> dict:
             "volume_down": "volumedown",
             "volume_mute": "volumemute",
         }
-        pag.press(key_map.get(action, "volumeup"))
-        return _ok(f"Volume: {action}")
+        key = key_map.get(action, "volumeup")
+        for _ in range(5):    # 5 presses ≈ 10% change
+            pag.press(key)
+        return _ok(action.replace("_", " ").title())
     except pag.FailSafeException:
         return _err("FAILSAFE triggered — mouse moved to corner")
     except Exception as exc:

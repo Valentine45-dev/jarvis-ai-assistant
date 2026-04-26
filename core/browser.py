@@ -186,9 +186,28 @@ class BrowserSession:
                 return _err(msg)
 
     def fill_form(self, fields: dict) -> dict:
-        """Fill form fields. Each key is tried as: CSS selector → label text → placeholder.
-        fields = {"input[name='email']": "user@example.com", "Password": "secret"}
+        """Fill form fields. Each key is tried as CSS selector → label → placeholder
+        → well-known search selectors.
+
+        Uses click + Ctrl+A + Delete + press_sequentially so SPA event handlers
+        (YouTube, React, etc.) fire on every keystroke rather than a silent value set.
         """
+        # Well-known search bar selectors tried when the key hints at a search field
+        _SEARCH_SELECTORS = [
+            "input#search",                     # YouTube
+            "input[name='search_query']",       # YouTube
+            "ytd-searchbox input",              # YouTube shadow DOM
+            "input[name='q']",                  # Google, Bing
+            "textarea[name='q']",               # Google
+            "[aria-label*='Search']",           # ARIA generic
+            "[aria-label*='search']",
+            "input[type='search']",             # HTML5 generic
+            "[role='searchbox']",               # WAI-ARIA
+            "#search-input",                    # Common IDs
+            ".search-input",
+            "input[placeholder*='earch']",      # Fuzzy placeholder
+        ]
+
         with self._lock:
             guard = self._not_ready()
             if guard:
@@ -196,36 +215,69 @@ class BrowserSession:
             filled, errors = [], []
             for key, value in fields.items():
                 value = str(value)
-                success = False
-                # 1. CSS selector / XPath
+                loc   = None
+
+                # 1. CSS selector
                 try:
-                    loc = self._page.locator(key)
-                    if loc.count() > 0:
-                        loc.first.fill(value, timeout=_TIMEOUT)
-                        filled.append(key)
-                        success = True
+                    candidate = self._page.locator(key)
+                    if candidate.count() > 0 and candidate.first.is_visible(timeout=2_000):
+                        loc = candidate.first
                 except Exception:
                     pass
-                if success:
-                    continue
+
                 # 2. Label text
-                try:
-                    self._page.get_by_label(key, exact=False).first.fill(value, timeout=_TIMEOUT)
-                    filled.append(key)
-                    success = True
-                except Exception:
-                    pass
-                if success:
-                    continue
+                if loc is None:
+                    try:
+                        candidate = self._page.get_by_label(key, exact=False)
+                        if candidate.count() > 0:
+                            loc = candidate.first
+                    except Exception:
+                        pass
+
                 # 3. Placeholder text
-                try:
-                    self._page.get_by_placeholder(key, exact=False).first.fill(value, timeout=_TIMEOUT)
-                    filled.append(key)
-                    success = True
-                except Exception:
-                    pass
-                if not success:
+                if loc is None:
+                    try:
+                        candidate = self._page.get_by_placeholder(key, exact=False)
+                        if candidate.count() > 0:
+                            loc = candidate.first
+                    except Exception:
+                        pass
+
+                # 4. Well-known search selectors (when key implies a search bar)
+                if loc is None and any(
+                    w in key.lower() for w in ("search", "query", "find", "look")
+                ):
+                    for sel in _SEARCH_SELECTORS:
+                        try:
+                            candidate = self._page.locator(sel)
+                            if candidate.count() > 0 and candidate.first.is_visible(timeout=500):
+                                loc = candidate.first
+                                break
+                        except Exception:
+                            continue
+
+                # 5. Last resort: any visible text input on the page
+                if loc is None:
+                    try:
+                        candidate = self._page.locator("input:visible, textarea:visible")
+                        if candidate.count() > 0:
+                            loc = candidate.first
+                    except Exception:
+                        pass
+
+                if loc is None:
                     errors.append(key)
+                    continue
+
+                # Click → select all → delete → type keystroke-by-keystroke
+                try:
+                    loc.click(timeout=_TIMEOUT)
+                    loc.press("Control+a")
+                    loc.press("Delete")
+                    loc.press_sequentially(value, delay=50)
+                    filled.append(key)
+                except Exception as exc:
+                    errors.append(f"{key} ({exc})")
 
             if errors:
                 return _err(f"Could not fill: {', '.join(errors)}")
