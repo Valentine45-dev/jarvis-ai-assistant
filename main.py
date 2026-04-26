@@ -537,15 +537,31 @@ class JarvisWindow(QMainWindow):
         if mode == "executor":
             from core.executor import resolve_confirmation
             resolve_confirmation("no")
-        self._set_state("idle")
+
         msg = "Understood, standing down, sir."
+        j_time = datetime.now().strftime("%H:%M")
+
+        if self._history:
+            self._history[-1].update({
+                "jarvis": msg, "jTime": j_time,
+                "intent": "confirmation", "conf": 1.0,
+            })
+
+        self._set_state("processing")
+        self._dashboard.left.hud_status.set_status("CANCELLED")
         self._dashboard.left.status_lbl.setText(msg)
         self._voice_view.clear_pending()
+
+        # Route through _tts_ready so the transcript typewriter fires and
+        # state transitions to speaking → idle (mirrors _on_confirmation_resolved)
+        self._transcript_update_token += 1
+        t = self._transcript_update_token
+        payload = (t, msg, j_time, "confirmation", 1.0)
         try:
             from core.voice import voice_engine
-            voice_engine.say(msg)
+            voice_engine.say(msg, on_ready=lambda: self._tts_ready.emit(payload))
         except Exception:
-            pass
+            self._tts_ready.emit(payload)
 
     # ── Inline confirm card helpers ───────────────────────────────────────────
 

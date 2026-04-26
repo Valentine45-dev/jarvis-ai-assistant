@@ -120,23 +120,39 @@ def resolve_confirmation(user_response: str) -> dict:
 
 # ── Path helpers ──────────────────────────────────────────────────────────────
 
+_USER_FOLDERS = frozenset({
+    "documents", "downloads", "desktop", "pictures", "music",
+    "videos", "onedrive", "appdata",
+})
+
+
 def _safe_path(path_str: str) -> Path:
-    """Resolve path, correcting wrong C:\\Users\\<bad_name> guesses."""
+    """Resolve path, correcting wrong C:\\Users\\<bad_name> guesses and relative user-folder refs."""
     if not path_str:
         return Path.home() / "jarvis_file.txt"
 
     p = Path(path_str).expanduser()
     home = Path.home()
-
-    # Detect wrong username: path is under C:\Users\<X> but X != actual home name
     parts = p.parts
+
+    # Absolute path under C:\Users\<wrong_or_missing_username>\...
     if (len(parts) >= 3
             and parts[0].upper().rstrip("\\") in ("C:", "C:\\")
             and parts[1].lower() == "users"
             and parts[2].lower() != home.name.lower()
             and not (Path(parts[0]) / parts[1] / parts[2]).exists()):
         rest = parts[3:]
-        p = home / Path(*rest) if rest else home
+        if parts[2].lower() in _USER_FOLDERS:
+            # Claude skipped the username (e.g. C:\Users\Documents\...)
+            # Re-insert the real home: home\Documents\rest
+            p = home / parts[2] / Path(*rest) if rest else home / parts[2]
+        else:
+            # Genuinely wrong username — drop it, keep the rest
+            p = home / Path(*rest) if rest else home
+
+    # Relative path starting with a known user folder (e.g. "Documents/file.txt")
+    elif not p.is_absolute() and parts and parts[0].lower() in _USER_FOLDERS:
+        p = home / Path(*parts)
 
     return p
 
