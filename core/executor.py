@@ -1219,7 +1219,7 @@ def _file_op_create_directory(params: dict) -> dict:
     return request_confirmation(prompt, _do_mkdir)
 
 
-def _handle_file_operation(action: str, params: dict) -> dict:
+def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -> dict:
     raw_path = params.get("path", "")
     path     = _resolve_file_operation_path(raw_path) if raw_path else Path.home() / "jarvis_file.txt"
     dest     = _resolve_file_operation_path(params["destination"]) if params.get("destination") else None
@@ -1326,6 +1326,8 @@ def _handle_file_operation(action: str, params: dict) -> dict:
                 return {"success": False, "output": msg, "error": msg}
 
         from core.personality import ask as _ask
+        if confirmed:
+            return _do_delete()
         return request_confirmation(_ask("delete_file", item_desc), _do_delete)
 
     if action == "rename_file":
@@ -2132,6 +2134,8 @@ def dispatch(result: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
 
     handler = _HANDLERS.get(intent, _handle_unknown)
     try:
+        if intent == "file_operation":
+            return handler(action, params, confirmed=confirmed)
         return handler(action, params)
     except Exception as exc:
         if config.debug_mode:

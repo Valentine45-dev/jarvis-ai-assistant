@@ -107,6 +107,14 @@
           "parameters": {}
         }
       ]
+    },
+    {
+      "id": "morning_routine_1",
+      "name": "Morning Routine",
+      "trigger": "run morning routine",
+      "steps": [],
+      "enabled": true,
+      "last_run": null
     }
   ]
 }

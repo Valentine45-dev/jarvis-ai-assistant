@@ -226,9 +226,23 @@ class JarvisWindow(QMainWindow):
         self._palette_shortcut.activated.connect(self._toggle_palette)
 
         # Global Win+J (Meta+J) — summon / raise the JARVIS window from anywhere.
+        # QShortcut only fires when the Qt app has focus; the RegisterHotKey
+        # path below covers the case where another app is in the foreground.
         self._summon_shortcut = QShortcut(QKeySequence("Meta+J"), self)
         self._summon_shortcut.setContext(Qt.ApplicationShortcut)
         self._summon_shortcut.activated.connect(self._summon_window)
+
+        # System-wide Win+J via RegisterHotKey (Windows only).
+        self._win_hotkey_id: int | None = None
+        if sys.platform == "win32":
+            try:
+                MOD_WIN = 0x0008
+                VK_J    = 0x4A
+                _hid    = 0x4A12  # arbitrary unique ID (unlikely to collide)
+                if ctypes.windll.user32.RegisterHotKey(int(self.winId()), _hid, MOD_WIN, VK_J):
+                    self._win_hotkey_id = _hid
+            except Exception:
+                pass
 
         # ── System status popover (TopBar broadcast icon) ─────────────────────
         # Read-only health view of all subsystems. Refreshed on every open so
@@ -240,6 +254,11 @@ class JarvisWindow(QMainWindow):
         sys_t = QTimer(self)
         sys_t.timeout.connect(self._sys_tick)
         sys_t.start(2000)
+
+        # Populate history view with entries loaded from SQLite on startup
+        if self._history:
+            self._cmd_count = len(self._history)
+            self._history_view.refresh_history(self._history)
 
         # Sync JARVIS assistant config to Vapi platform (background, non-blocking)
         QTimer.singleShot(2000, sync_assistant_async)
@@ -585,6 +604,12 @@ class JarvisWindow(QMainWindow):
         # ── needs_confirmation from executor (e.g. folder not found) ────────
         # Not the same as Claude's requires_confirmation — this is the executor
         # asking the user a yes/no mid-execution.
+        if exec_out.get("needs_confirmation") and self._auto_confirm:
+            # Auto-confirm is active — skip the UI hold and execute immediately.
+            from core.executor import resolve_confirmation
+            resolved = resolve_confirmation("yes")
+            self._on_confirmation_resolved(resolved)
+            return
         if exec_out.get("needs_confirmation"):
             display_resp = exec_out.get("output", "Awaiting your confirmation, sir.")
             self._confirm_mode = "executor"
@@ -1089,8 +1114,27 @@ class JarvisWindow(QMainWindow):
         except Exception:
             pass
 
+    def nativeEvent(self, event_type, message):
+        """Catch WM_HOTKEY from RegisterHotKey (Win+J system-wide summon)."""
+        if sys.platform == "win32" and getattr(self, "_win_hotkey_id", None) is not None:
+            try:
+                from ctypes import wintypes
+                WM_HOTKEY = 0x0312
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == WM_HOTKEY and msg.wParam == self._win_hotkey_id:
+                    self._summon_window()
+                    return True, 0
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
     def closeEvent(self, event):
         """Shut down all subsystems cleanly before the window closes."""
+        if sys.platform == "win32" and self._win_hotkey_id is not None:
+            try:
+                ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._win_hotkey_id)
+            except Exception:
+                pass
         self._botbar._stop_rtt_thread()
         browser.stop()
         history_store.close()
