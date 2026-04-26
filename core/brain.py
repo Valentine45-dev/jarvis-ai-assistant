@@ -26,7 +26,9 @@ from core.memory import memory
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-_CLAUDE_MD = Path(__file__).parent.parent / "Claude.md"
+_ROOT = Path(__file__).parent.parent
+# Repo uses `CLAUDE.md`; some environments reference `Claude.md` — try both.
+_CLAUDE_CANDIDATES = (_ROOT / "CLAUDE.md", _ROOT / "Claude.md")
 
 # Cached system prompt — read once, reused every call.
 _system_prompt_text: str | None = None
@@ -35,9 +37,14 @@ _system_prompt_text: str | None = None
 def _get_system_prompt() -> str:
     global _system_prompt_text
     if _system_prompt_text is None:
-        try:
-            _system_prompt_text = _CLAUDE_MD.read_text(encoding="utf-8")
-        except Exception:
+        for path in _CLAUDE_CANDIDATES:
+            try:
+                if path.is_file():
+                    _system_prompt_text = path.read_text(encoding="utf-8")
+                    break
+            except Exception:
+                continue
+        if _system_prompt_text is None:
             _system_prompt_text = (
                 "You are JARVIS. Return a single valid JSON object only. "
                 "No markdown, no code fences, no explanations."

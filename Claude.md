@@ -213,6 +213,11 @@ Control system-level functions.
 { "save_path": "string — optional: screenshot save location" }
 ```
 
+**Volume — absolute vs step:**
+- **Step (default):** `volume_up` / `volume_down` **without** `level` → raise/lower by one step (~10% on Windows with pycaw).
+- **Absolute master volume:** include `"level": <0–100>` with `volume_up` or `volume_down` (action name is ignored when `level` is set; executor applies the scalar directly). Use this when the user says **“100%”**, **“max”**, **“full volume”**, **“set volume to 50”** → `"level": 100` or `50`. Phrases like **“increase it to 100%”** must still set **`level`: 100**, not a bare `volume_up` with no level.
+- **Mute** uses `volume_mute` only (do not send `level` for mute).
+
 **HUD Label:** `SYS CONTROL`
 **Confirmation:** `true` for `shutdown`, `restart`, `sleep`
 
@@ -240,6 +245,12 @@ Execute a multi-step workflow or predefined routine.
 
 **HUD Label:** `AUTOMATION`
 **Confirmation:** `true` for `remove_workflow`
+
+**Routing — when *not* to use `automation_task`:**
+- Do **not** route generic compound requests (e.g. *“open Notepad and write hello”*) to `automation_task` **unless** you provide a complete, valid **`steps`** array that lists each real intent (`open_app`, `type_text`, etc.) with parameters. A vague or invented `task_name` alone is wrong.
+- Prefer **`open_app`** (e.g. `open_app_generic` with `app_name`: `notepad`) for *“open X”* first; the user can issue *“type …”* as a follow-up **`type_text`** command, unless they clearly want one atomic chain — then use `run_workflow` with explicit **`steps`** (not a placeholder routine name).
+- Reserve **`run_workflow`** + **`task_name`** for **saved library workflows** that actually exist. If the user did not name a stored routine, either use **inline `steps`** or **non-automation** intents.
+- **Confidence:** if you are unsure between `automation_task` and `open_app` + `type_text`, prefer **not** `automation_task` unless `steps` is fully specified.
 
 -----
 
@@ -836,7 +847,7 @@ The Python layer (`brain.py`) strips @tags from input before sending to you. Whe
 
 -----
 
-*JARVIS AI System — Claude Configuration v2.1*
+*JARVIS AI System — Claude Configuration v2.2*
 *Built by Malakai V Weah*
 *Stack: Anthropic Claude API + ElevenLabs TTS + Google STT + Playwright + PyQt5 HUD*
 
@@ -878,3 +889,8 @@ Multi-step `automation_task` commands must use the **minimum** confidence score 
 - **Reminder floor:** `delay_seconds < 5` is coerced to `5`.
 - **STT normalisation:** whitespace collapsed, repeated punctuation stripped before routing.
 - **Unknown fallback invariant:** `action` must be `"none"` and `parameters` must be `{}` when intent is `unknown`.
+- **Volume `level` coercion (v2.2):** String values like `"max"`, `"100%"` in `parameters.level` are normalised to `0–100` in `executor.py` before calling the OS mixer.
+
+### `automation_task` vs compound phrasing (v2.2)
+
+See **§7 `automation_task` — Routing**. `automation_task` is for **named workflows** or **explicit `steps`**; ad-hoc “do A then B” should default to **`open_app`**, **`type_text`**, etc., not a fuzzy `run_workflow` without real steps.

@@ -128,10 +128,11 @@ class JarvisWindow(QMainWindow):
         signals.error_occurred.connect(
             lambda msg: self._dashboard.toast.show_toast(msg, "error"))
 
-        # Wire confirmation bar signals
-        self._dashboard.left.confirm_bar.confirmed.connect(self._on_confirmed)
-        self._dashboard.left.confirm_bar.cancelled.connect(self._on_cancelled)
+        # Wire inline transcript confirmation card signals
+        self._dashboard.left.transcript.confirmed.connect(self._on_confirmed)
+        self._dashboard.left.transcript.cancelled.connect(self._on_cancelled)
         self._pending_result: dict | None = None
+        self._confirm_mode: str | None = None  # "claude" | "executor" | None
 
         # ── Quick settings popover (TopBar sliders icon) ──────────────────────
         # Transient session flag — bypass confirmation for destructive actions.
@@ -264,6 +265,10 @@ class JarvisWindow(QMainWindow):
     }
 
     def _process_cmd(self, cmd: str):
+        if self._state == "awaiting_confirmation":
+            self._dashboard.toast.show_toast(
+                "Please respond to the pending confirmation first, sir.", "warning")
+            return
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
         self._history.append({
@@ -304,7 +309,7 @@ class JarvisWindow(QMainWindow):
         resp   = result.get("response", "")
         hud    = result.get("hud_status", self._INTENT_HUD.get(intent, "STANDBY"))
 
-        # Confirmation-required: show confirm bar and hold
+        # Confirmation-required: show inline confirm card and hold
         if result.get("requires_confirmation"):
             # Auto-confirm short-circuits the hold — used when the user has
             # explicitly opted in via Quick Settings. The dispatch() gate still
@@ -313,15 +318,18 @@ class JarvisWindow(QMainWindow):
                 self._execute_result(result, intent, conf, resp, hud, confirmed=True)
                 return
             self._pending_result = result
+            self._confirm_mode = "claude"
+            prompt = resp or "Awaiting confirmation, sir."
             self._dashboard.left.typing.hide_typing()
-            self._set_state("idle")
-            self._dashboard.left.status_lbl.setText(resp or "Awaiting confirmation, sir.")
-            # Mirror the pending state on the Voice page so the inspector
-            # turns amber instead of looking idle while user decides.
-            self._voice_view.set_pending(
-                intent, result.get("action", ""), conf,
-                resp or "Awaiting confirmation, sir.",
-            )
+            self._show_confirm_card(prompt)
+            # Mirror the pending state on the Voice page
+            self._voice_view.set_pending(intent, result.get("action", ""), conf, prompt)
+            # Speak the prompt without tying it to the state-transition machinery
+            try:
+                from core.voice import voice_engine
+                voice_engine.say(prompt)
+            except Exception:
+                pass
             return
 
         self._execute_result(result, intent, conf, resp, hud)
@@ -378,20 +386,21 @@ class JarvisWindow(QMainWindow):
         # asking the user a yes/no mid-execution.
         if exec_out.get("needs_confirmation"):
             display_resp = exec_out.get("output", "Awaiting your confirmation, sir.")
-            self._dashboard.left.status_lbl.setText(display_resp)
-            self._set_state("idle")
-            self._transcript_update_token += 1
-            t = self._transcript_update_token
-            payload = (t, display_resp, j_time, intent, conf)
-            try:
-                from core.voice import voice_engine
-                voice_engine.say(display_resp, on_ready=lambda: self._tts_ready.emit(payload))
-            except Exception:
-                self._tts_ready.emit(payload)
-            self._dashboard.toast.show_toast(display_resp, "warning")
+            self._confirm_mode = "executor"
             if self._history:
                 self._history[-1].update({"jarvis": display_resp, "jTime": j_time,
                                           "intent": intent, "conf": conf})
+            # Update transcript text directly (no token-gated animation)
+            self._dashboard.left.transcript.update_last_jarvis(
+                display_resp, j_time, intent, conf)
+            self._show_confirm_card(display_resp)
+            self._dashboard.toast.show_toast(display_resp, "warning")
+            # Speak prompt fire-and-forget (no state-transition callback)
+            try:
+                from core.voice import voice_engine
+                voice_engine.say(display_resp)
+            except Exception:
+                pass
             return
 
         # ── Build spoken response — personality-driven, honest about failure ──
@@ -406,11 +415,17 @@ class JarvisWindow(QMainWindow):
                 exec_out.get("error", ""),
             )
         elif intent == "jarvis_meta":
-            if result.get("action") in self._FACTUAL_ACTIONS and exec_out.get("output"):
-                display_resp = exec_out["output"]
-            elif result.get("action") == "conversational" and exec_out.get("output"):
-                # Page cache answer
-                display_resp = exec_out["output"]
+            action_name = result.get("action", "")
+            if action_name in self._FACTUAL_ACTIONS and exec_out.get("output"):
+                # Personality formats: "It's 7:25 AM, sir." / "Today is Sunday…"
+                status       = "ok" if exec_out["success"] else "err"
+                display_resp = personality_say(
+                    intent, action_name, status,
+                    exec_out.get("output", ""),
+                    exec_out.get("error", ""),
+                )
+            elif action_name == "conversational" and exec_out.get("output"):
+                display_resp = exec_out["output"]   # page cache answer
             else:
                 display_resp = resp   # Claude's conversational response
         else:
@@ -495,7 +510,10 @@ class JarvisWindow(QMainWindow):
         self._set_state(state)
 
     def _on_confirmed(self):
-        if self._pending_result:
+        self._hide_confirm_card()
+        mode = self._confirm_mode
+        self._confirm_mode = None
+        if mode == "claude" and self._pending_result:
             r = self._pending_result
             self._pending_result = None
             self._execute_result(
@@ -506,12 +524,40 @@ class JarvisWindow(QMainWindow):
                 r.get("hud_status", "STANDBY"),
                 confirmed=True,
             )
+        elif mode == "executor":
+            from core.executor import resolve_confirmation
+            resolved = resolve_confirmation("yes")
+            self._on_confirmation_resolved(resolved)
 
     def _on_cancelled(self):
+        self._hide_confirm_card()
+        mode = self._confirm_mode
+        self._confirm_mode = None
         self._pending_result = None
+        if mode == "executor":
+            from core.executor import resolve_confirmation
+            resolve_confirmation("no")
         self._set_state("idle")
-        self._dashboard.left.status_lbl.setText("Command cancelled, sir.")
+        msg = "Understood, standing down, sir."
+        self._dashboard.left.status_lbl.setText(msg)
         self._voice_view.clear_pending()
+        try:
+            from core.voice import voice_engine
+            voice_engine.say(msg)
+        except Exception:
+            pass
+
+    # ── Inline confirm card helpers ───────────────────────────────────────────
+
+    def _show_confirm_card(self, prompt: str) -> None:
+        """Show the transcript confirm card and enter awaiting_confirmation state."""
+        wait_line = self._dashboard.left.transcript.show_confirm(prompt)
+        self._dashboard.left.typing.hide_typing()
+        self._set_state("awaiting_confirmation")
+        self._dashboard.left.status_lbl.setText(wait_line)
+
+    def _hide_confirm_card(self) -> None:
+        self._dashboard.left.transcript.hide_confirm()
 
     # ── Quick settings popover handlers ───────────────────────────────────────
 
@@ -608,7 +654,10 @@ class JarvisWindow(QMainWindow):
 
     def _set_state(self, s):
         self._state = s
-        orb_map = {"idle": 0, "listening": 1, "thinking": 2, "processing": 2, "speaking": 3}
+        orb_map = {
+            "idle": 0, "listening": 1, "thinking": 2, "processing": 2,
+            "speaking": 3, "awaiting_confirmation": 2,
+        }
         self._dashboard.left.orb.set_state(orb_map.get(s, 0))
         self._dashboard.left.mic.set_listening(s == "listening")
 
@@ -630,9 +679,12 @@ class JarvisWindow(QMainWindow):
             self._dashboard.left.hud_status.set_status("PROCESSING")
         elif s == "speaking":
             self._dashboard.left.hud_status.set_status("SPEAKING")
+        elif s == "awaiting_confirmation":
+            self._dashboard.left.hud_status.set_status("AWAITING RESPONSE")
 
         pill = self._dashboard.left.state_pill
-        pill.setText(s.upper())
+        _pill_labels = {"awaiting_confirmation": "WAITING"}
+        pill.setText(_pill_labels.get(s, s.upper()))
         pf = QFont(pill.font())
         pf.setLetterSpacing(QFont.AbsoluteSpacing, 3)
         pill.setMinimumWidth(max(120, QFontMetrics(pf).horizontalAdvance(pill.text()) + 46))
@@ -651,6 +703,10 @@ class JarvisWindow(QMainWindow):
                 "color:rgba(210,220,245,0.88);border:1px solid rgba(0,102,255,0.28);"
                 f"background:rgba(0,102,255,0.05);{pill_base}")
             self._dashboard.left.status_lbl.setText("Awaiting command, sir.")
+        elif s == "awaiting_confirmation":
+            self._dashboard.left.state_pill.setStyleSheet(
+                "color:rgba(255,190,50,0.90);border:1px solid rgba(255,190,50,0.40);"
+                f"background:rgba(255,190,50,0.08);{pill_base}")
         else:
             self._dashboard.left.state_pill.setStyleSheet(
                 "color:rgba(210,220,245,0.88);border:1px solid rgba(0,102,255,0.42);"

@@ -41,6 +41,30 @@ def _ok(output: str = "") -> dict:
 def _err(msg: str) -> dict:
     return {"success": False, "output": "", "error": msg}
 
+
+def _coerce_volume_level(params: dict) -> int | None:
+    """Parse `parameters.level` for absolute 0–100% volume. Returns None to mean 'step up/down'."""
+    raw = params.get("level")
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return max(0, min(100, int(raw)))
+    s = str(raw).strip().lower()
+    if s in ("max", "full", "maximum", "100%", "all", "highest"):
+        return 100
+    if s.endswith("%"):
+        try:
+            return max(0, min(100, int(s[:-1].strip())))
+        except ValueError:
+            return None
+    try:
+        return max(0, min(100, int(float(s))))
+    except ValueError:
+        return None
+
+
 def _confirm(prompt: str) -> dict:
     """Return a 'needs confirmation' sentinel with the prompt as output."""
     return {"success": True, "output": prompt, "error": "", "needs_confirmation": True}
@@ -494,9 +518,11 @@ def _handle_control_mouse(action: str, params: dict) -> dict:
 
 
 def _handle_system_control(action: str, params: dict) -> dict:
-    if action in ("volume_up", "volume_down", "volume_mute"):
-        level = params.get("level")
-        return cc.set_volume(action, level=int(level) if level is not None else None)
+    if action in ("volume_up", "volume_down"):
+        # Absolute level when e.g. "set to 100%" / "max" — any coerced 0–100
+        return cc.set_volume(action, level=_coerce_volume_level(params))
+    if action == "volume_mute":
+        return cc.set_volume("volume_mute", level=None)
 
     if action == "screenshot":
         save_param = params.get("save_path") or params.get("folder") or None
@@ -511,9 +537,9 @@ def _handle_system_control(action: str, params: dict) -> dict:
                     folder = Path.home() / "Desktop"
                 path = str(folder / f"JARVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
                 return cc.screenshot(path=path)
+            from core.personality import ask as _ask
             return request_confirmation(
-                f"I can't find a folder called '{missing_folder}', sir. "
-                f"Shall I save it to the Desktop instead?",
+                _ask("folder_not_found", missing_folder),
                 _create_and_screenshot,
             )
 
@@ -581,8 +607,9 @@ def _handle_file_operation(action: str, params: dict) -> dict:
                 except Exception as exc:
                     return _err(str(exc))
 
+            from core.personality import ask as _ask
             return request_confirmation(
-                f"The folder '{folder_name}' doesn't exist, sir. Shall I create it?",
+                _ask("folder_not_found", folder_name),
                 _do_create,
             )
 
@@ -986,18 +1013,18 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
 
 def _handle_jarvis_meta(action: str, params: dict) -> dict:
     if action == "tell_time":
-        t = datetime.now().strftime("%I:%M %p").lstrip("0")
-        return _ok(f"The time is {t}, sir.")
+        # Return raw time — personality.say() formats the sentence
+        return _ok(datetime.now().strftime("%I:%M %p").lstrip("0"))
     if action == "tell_date":
-        d = datetime.now().strftime("%A, %d %B %Y")
-        return _ok(f"Today is {d}, sir.")
+        # Return raw date — personality.say() formats the sentence
+        return _ok(datetime.now().strftime("%A, %d %B %Y"))
     if action == "status_report":
         import psutil
         cpu = psutil.cpu_percent(interval=0.3)
         mem = psutil.virtual_memory()
         return _ok(
-            f"CPU at {cpu:.0f}%, memory at {mem.percent:.0f}% "
-            f"({mem.used/1e9:.1f} of {mem.total/1e9:.1f} GB used)."
+            f"CPU {cpu:.0f}%, memory {mem.percent:.0f}% "
+            f"({mem.used/1e9:.1f}/{mem.total/1e9:.1f} GB)"
         )
     if action == "conversational":
         # Check page cache for "what does it say" queries

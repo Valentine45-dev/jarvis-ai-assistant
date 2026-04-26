@@ -4,7 +4,8 @@ PyAutoGUI  — mouse / keyboard automation
 Pytesseract — OCR / read_screen
 Windows ctypes — screen lock, system calls
 All deps are lazy-imported so the module loads cleanly even when absent.
-Every public function returns {"success": bool, "output": str, "error": str}.
+Every pu
+\blic function returns {"success": bool, "output": str, "error": str}.
 """
 
 from __future__ import annotations
@@ -213,14 +214,22 @@ def ocr_screen(region: dict | None = None) -> dict:
 
 def set_volume(action: str, level: int | None = None) -> dict:
     # pycaw gives precise Windows volume control
+    pycaw_missing = False
     try:
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
         from ctypes import cast, POINTER
         from comtypes import CLSCTX_ALL
 
-        devices   = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        device = AudioUtilities.GetSpeakers()
+        # Newer pycaw wraps IMMDevice in AudioDevice; fall back to ._dev for the raw COM object
+        raw = getattr(device, '_dev', device)
+        interface = raw.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
         vol       = cast(interface, POINTER(IAudioEndpointVolume))
+
+        if action == "volume_mute":
+            is_muted = bool(vol.GetMute())
+            vol.SetMute(not is_muted, None)
+            return _ok("Unmuted" if is_muted else "Muted")
 
         if level is not None:
             scalar = max(0.0, min(1.0, level / 100.0))
@@ -228,24 +237,24 @@ def set_volume(action: str, level: int | None = None) -> dict:
             return _ok(f"{level}%")
 
         current = int(vol.GetMasterVolumeLevelScalar() * 100)
-        if action == "volume_mute":
-            is_muted = bool(vol.GetMute())
-            vol.SetMute(not is_muted, None)
-            return _ok("Unmuted" if is_muted else "Muted")
         if action == "volume_up":
             new_level = min(100, current + 10)
-            vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
-            return _ok(f"{new_level}%")
-        if action == "volume_down":
+        else:
             new_level = max(0, current - 10)
-            vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
-            return _ok(f"{new_level}%")
-    except ImportError:
-        pass  # fall through to pyautogui media keys
-    except Exception:
-        pass
+        vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
+        return _ok(f"{new_level}%")
 
-    # Fallback: pyautogui media keys (each press ≈ 2% on Windows)
+    except ImportError:
+        pycaw_missing = True
+    except Exception as exc:
+        # Surface the real error — never silently swallow pycaw failures
+        return _err(f"Volume control failed: {exc}")
+
+    # Absolute level requires pycaw — pyautogui keys cannot target a specific %
+    if level is not None:
+        return _err("pycaw not installed — run: uv add pycaw  (required for absolute volume)")
+
+    # Fallback: pyautogui media keys for step up/down/mute only (no pycaw)
     pag = _pag()
     if pag is None:
         return _err("pyautogui not installed — run: uv add pyautogui")

@@ -429,6 +429,7 @@ dependencies = [
     { name = "playwright" },
     { name = "psutil" },
     { name = "pyautogui" },
+    { name = "pycaw" },
     { name = "pyperclip" },
     { name = "pyqt5" },
     { name = "pyqt5-qt5" },
@@ -449,6 +450,7 @@ requires-dist = [
     { name = "playwright", specifier = ">=1.58.0" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pyautogui", specifier = ">=0.9.54" },
+    { name = "pycaw", specifier = ">=20251023" },
     { name = "pyperclip", specifier = ">=1.11.0" },
     { name = "pyqt5", specifier = ">=5.15.11" },
     { name = "pyqt5-qt5", specifier = "==5.15.2" },
@@ -799,6 +801,19 @@ dependencies = [
     { name = "pytweening" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/65/ff/cdae0a8c2118a0de74b6cf4cbcdcaf8fd25857e6c3f205ce4b1794b27814/PyAutoGUI-0.9.54.tar.gz", hash = "sha256:dd1d29e8fd118941cb193f74df57e5c6ff8e9253b99c7b04f39cfc69f3ae04b2", size = 61236, upload-time = "2023-05-24T20:11:32.972Z" }
+
+[[package]]
+name = "pycaw"
+version = "20251023"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "comtypes" },
+    { name = "psutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/81/19181e3118a503f94d8689fbbed60616e85d08cee3a295c11245ae73018f/pycaw-20251023.tar.gz", hash = "sha256:19935b92eb5efc3f3ea5ee8a2d37ca49009e9dc00f83d067b74b9922e84b5b3b", size = 23421, upload-time = "2025-10-23T18:26:45.087Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ff/bc/f60c1622da5c53770c2d62457b5b6fc9623ab41b9d276269b857cd337e22/pycaw-20251023-py3-none-any.whl", hash = "sha256:ef06d234a2fe3c175925a2a8c7ed8824e450851014fdb7d900af1b56ce422d4e", size = 25849, upload-time = "2025-10-23T18:26:43.955Z" },
+]
 
 [[package]]
 name = "pycparser"
