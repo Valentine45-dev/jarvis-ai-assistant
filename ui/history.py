@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from collections import Counter
+from datetime import datetime
+
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -61,7 +64,6 @@ class _StatCard(GlassPanel):
 # ── Command log row ────────────────────────────────────────────────────────
 
 _STATUS_STATE = {"success": "active", "warning": "standby", "error": "error"}
-_STATUS_COLOR = {"success": GREEN, "warning": WARNING, "error": RED}
 
 
 class _LogRow(QWidget):
@@ -69,10 +71,10 @@ class _LogRow(QWidget):
         super().__init__(parent)
         self.setFixedHeight(34)
 
-        conf = float(entry.get("confidence", entry.get("conf", 0.0)))
+        conf   = float(entry.get("confidence", entry.get("conf", 0.0)))
         status = entry.get("status", "success")
         intent = entry.get("intent", "unknown")
-        cmd = entry.get("you", "")
+        cmd    = entry.get("you", "")
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 0, 12, 0)
@@ -100,9 +102,7 @@ class _LogRow(QWidget):
         intent_lbl = QLabel(intent.replace("_", "·"))
         intent_lbl.setFixedWidth(106)
         intent_lbl.setFont(_mono(10))
-        intent_lbl.setStyleSheet(
-            f"color:{CYAN};background:transparent;border:none;"
-        )
+        intent_lbl.setStyleSheet(f"color:{CYAN};background:transparent;border:none;")
         lay.addWidget(intent_lbl)
 
         conf_color = CYAN if conf >= 0.9 else WARNING if conf >= 0.7 else RED
@@ -115,6 +115,12 @@ class _LogRow(QWidget):
         )
         lay.addWidget(conf_lbl)
 
+    def enterEvent(self, _):
+        self.setStyleSheet("background:rgba(0,229,255,0.05);")
+
+    def leaveEvent(self, _):
+        self.setStyleSheet("background:transparent;")
+
 
 class _LogTable(QWidget):
     """Scrollable list of _LogRow widgets."""
@@ -125,7 +131,6 @@ class _LogTable(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Column header
         col_hdr = QWidget()
         col_hdr.setFixedHeight(26)
         col_hdr.setStyleSheet("background:rgba(0,229,255,0.04);")
@@ -148,26 +153,22 @@ class _LogTable(QWidget):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color:rgba(0,229,255,0.12);background:rgba(0,229,255,0.12);")
+        sep.setStyleSheet(
+            "color:rgba(0,229,255,0.12);background:rgba(0,229,255,0.12);"
+        )
         sep.setFixedHeight(1)
         outer.addWidget(sep)
 
-        # Scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             "QScrollArea{background:transparent;border:none;}"
-            "QScrollBar:vertical{"
-            "background:rgba(0,0,0,0);width:6px;"
-            "}"
+            "QScrollBar:vertical{background:rgba(0,0,0,0);width:6px;}"
             "QScrollBar::handle:vertical{"
-            "background:rgba(0,229,255,0.25);border-radius:3px;min-height:20px;"
-            "}"
-            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{"
-            "height:0px;"
-            "}"
+            "background:rgba(0,229,255,0.25);border-radius:3px;min-height:20px;}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}"
         )
 
         self._container = QWidget()
@@ -181,7 +182,6 @@ class _LogTable(QWidget):
         outer.addWidget(scroll, 1)
 
     def set_entries(self, entries: list):
-        # Remove existing rows
         for i in reversed(range(self._rows_lay.count())):
             item = self._rows_lay.takeAt(i)
             if item.widget():
@@ -200,11 +200,157 @@ class _LogTable(QWidget):
             self._rows_lay.addStretch(1)
             return
 
-        for entry in entries[-50:]:   # cap at 50 most recent
-            row = _LogRow(entry)
-            self._rows_lay.addWidget(row)
-
+        for entry in entries:
+            self._rows_lay.addWidget(_LogRow(entry))
         self._rows_lay.addStretch(1)
+
+
+# ── Intent breakdown panel ─────────────────────────────────────────────────
+
+class _IntentBreakdown(GlassPanel):
+    """Right panel: top intents by frequency with labeled bars."""
+
+    MAX_SHOWN = 6
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.set_fill_color(QColor(10, 17, 19, 220))
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        hdr = QWidget()
+        hdr.setFixedHeight(36)
+        hdr.setStyleSheet("background:transparent;")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(14, 0, 14, 0)
+        t = QLabel("INTENT BREAKDOWN")
+        t.setFont(_mono(10, bold=True))
+        t.setStyleSheet(
+            f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;"
+        )
+        hl.addWidget(t)
+        outer.addWidget(hdr)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(
+            "color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);"
+        )
+        sep.setFixedHeight(1)
+        outer.addWidget(sep)
+
+        self._body = QWidget()
+        self._body.setStyleSheet("background:transparent;")
+        self._body_lay = QVBoxLayout(self._body)
+        self._body_lay.setContentsMargins(14, 14, 14, 14)
+        self._body_lay.setSpacing(12)
+        outer.addWidget(self._body, 1)
+
+    def update_breakdown(self, entries: list):
+        while self._body_lay.count():
+            item = self._body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not entries:
+            lbl = QLabel("NO DATA")
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet(
+                "color:rgba(0,229,255,0.20);letter-spacing:3px;"
+                "background:transparent;border:none;"
+            )
+            self._body_lay.addStretch(1)
+            self._body_lay.addWidget(lbl, 0, Qt.AlignCenter)
+            self._body_lay.addStretch(1)
+            return
+
+        counts = Counter(
+            e.get("intent", "unknown") for e in entries if e.get("intent")
+        )
+        total = sum(counts.values()) or 1
+
+        for intent, count in counts.most_common(self.MAX_SHOWN):
+            w = QWidget()
+            w.setStyleSheet("background:transparent;")
+            wl = QVBoxLayout(w)
+            wl.setContentsMargins(0, 0, 0, 0)
+            wl.setSpacing(3)
+
+            label_row = QHBoxLayout()
+            name_lbl = QLabel(intent.replace("_", "·"))
+            name_lbl.setFont(_mono(9))
+            name_lbl.setStyleSheet(
+                f"color:{CYAN};background:transparent;border:none;"
+            )
+            cnt_lbl = QLabel(str(count))
+            cnt_lbl.setFont(_mono(9, bold=True))
+            cnt_lbl.setStyleSheet(
+                "color:rgba(132,147,150,0.70);background:transparent;border:none;"
+            )
+            label_row.addWidget(name_lbl, 1)
+            label_row.addWidget(cnt_lbl)
+            wl.addLayout(label_row)
+
+            bar = SegmentedBar(segments=8, value=count / total, color=CYAN)
+            bar.setFixedHeight(5)
+            wl.addWidget(bar)
+
+            self._body_lay.addWidget(w)
+
+        self._body_lay.addStretch(1)
+
+
+# ── Filter bar ─────────────────────────────────────────────────────────────
+
+class _FilterBar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(44)
+        self.setStyleSheet(
+            "background:rgba(8,15,17,0.55);"
+            "border:1px solid rgba(0,229,255,0.09);"
+        )
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setSpacing(10)
+
+        lbl = QLabel("FILTER")
+        lbl.setFont(_mono(8, bold=True))
+        lbl.setStyleSheet(
+            "color:rgba(0,229,255,0.45);letter-spacing:2px;"
+            "background:transparent;border:none;"
+        )
+        lay.addWidget(lbl)
+
+        div = QFrame()
+        div.setFrameShape(QFrame.VLine)
+        div.setStyleSheet(
+            "color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);"
+        )
+        div.setFixedWidth(1)
+        lay.addWidget(div)
+
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("type to filter commands…")
+        self.input.setStyleSheet(
+            "QLineEdit{background:transparent;border:none;"
+            f"color:{CYAN};font-family:'{FM}';font-size:11px;letter-spacing:1px;}"
+        )
+        lay.addWidget(self.input, 1)
+
+        clr = QPushButton("✕")
+        clr.setCursor(Qt.PointingHandCursor)
+        clr.setFixedSize(20, 20)
+        clr.setStyleSheet(
+            "QPushButton{color:rgba(0,229,255,0.35);background:transparent;"
+            "border:none;font-size:11px;}"
+            "QPushButton:hover{color:rgba(0,229,255,0.85);}"
+        )
+        clr.clicked.connect(self.input.clear)
+        lay.addWidget(clr)
 
 
 # ── Main view ──────────────────────────────────────────────────────────────
@@ -212,11 +358,14 @@ class _LogTable(QWidget):
 class HistoryView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._start_time = datetime.now()
+        self._all_entries: list = []   # newest-first, full unfiltered list
+
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(12)
 
-        # ── Header ────────────────────────────────────────────────────────────
+        # ── Header ──────────────────────────────────────────────────────────
         head = QHBoxLayout()
         title = QLabel("COMMAND_LOG")
         title.setStyleSheet(
@@ -249,21 +398,34 @@ class HistoryView(QWidget):
         )
         root.addWidget(subtitle)
 
-        # ── Stat cards ────────────────────────────────────────────────────────
+        # ── Stat cards ───────────────────────────────────────────────────────
         stats_row = QHBoxLayout()
         stats_row.setSpacing(12)
-
-        self._card_total = _StatCard("TOTAL COMMANDS", "0", 0.0)
-        self._card_conf = _StatCard("AVG CONFIDENCE", "0%", 0.0)
-        self._card_uptime = _StatCard("SESSION UPTIME", "-- H -- M", 0.0)
-
+        self._card_total  = _StatCard("TOTAL COMMANDS", "0",      0.0)
+        self._card_conf   = _StatCard("AVG CONFIDENCE", "0%",     0.0)
+        self._card_uptime = _StatCard("SESSION UPTIME", "0h 00m", 0.0)
         for card in (self._card_total, self._card_conf, self._card_uptime):
             card.setFixedHeight(110)
             stats_row.addWidget(card, 1)
-
         root.addLayout(stats_row)
 
-        # ── Command log ───────────────────────────────────────────────────────
+        # ── Filter bar ───────────────────────────────────────────────────────
+        self._filter_bar = _FilterBar()
+        root.addWidget(self._filter_bar)
+
+        # Restarts on each keystroke; fires _apply_filter 250ms after last key
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(250)
+        self._filter_timer.timeout.connect(self._apply_filter)
+        self._filter_bar.input.textChanged.connect(
+            lambda _: self._filter_timer.start()
+        )
+
+        # ── Body: log (left 70%) + intent breakdown (right 30%) ─────────────
+        body = QHBoxLayout()
+        body.setSpacing(12)
+
         log_panel = GlassPanel()
         log_panel.set_fill_color(QColor(10, 17, 19, 220))
         lp_lay = QVBoxLayout(log_panel)
@@ -293,36 +455,70 @@ class HistoryView(QWidget):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);")
+        sep.setStyleSheet(
+            "color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);"
+        )
         sep.setFixedHeight(1)
         lp_lay.addWidget(sep)
 
         self._table = _LogTable()
         lp_lay.addWidget(self._table, 1)
+        body.addWidget(log_panel, 7)
 
-        root.addWidget(log_panel, 1)
+        self._breakdown = _IntentBreakdown()
+        body.addWidget(self._breakdown, 3)
 
-        # Populate with mock data at startup
+        root.addLayout(body, 1)
+
+        # Self-updating uptime — fires every 60s, no dependency on main.py
+        self._uptime_timer = QTimer(self)
+        self._uptime_timer.setInterval(60_000)
+        self._uptime_timer.timeout.connect(self._tick_uptime)
+        self._uptime_timer.start()
+        self._tick_uptime()  # populate immediately at "0h 00m"
+
         self.refresh_history(MOCK_HISTORY_FULL)
         self._clear_btn.clicked.connect(self._on_clear)
 
-    def refresh_history(self, entries: list, uptime_str: str = ""):
-        """Called from main.py after each command completes."""
-        total = len(entries)
-        if total:
-            avg_conf = sum(
-                float(e.get("confidence", e.get("conf", 0.0))) for e in entries
-            ) / total
-        else:
-            avg_conf = 0.0
+    # ── Internal helpers ────────────────────────────────────────────────────
 
+    def _tick_uptime(self):
+        secs = int((datetime.now() - self._start_time).total_seconds())
+        h, m = divmod(secs // 60, 60)
+        self._card_uptime.set_metrics(f"{h}h {m:02d}m", min(1.0, secs / 14400))
+
+    def _apply_filter(self):
+        q = self._filter_bar.input.text().strip().lower()
+        visible = (
+            [e for e in self._all_entries if q in e.get("you", "").lower()]
+            if q else self._all_entries
+        )
+        n = len(visible)
+        self._entry_count.setText(f"{n} {'ENTRY' if n == 1 else 'ENTRIES'}")
+        self._table.set_entries(visible[:50])
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def refresh_history(self, entries: list, uptime_str: str = ""):
+        """Called from main.py after each command completes.
+
+        uptime_str is accepted for API compatibility but session uptime is
+        computed internally via _tick_uptime so the card never shows '--'.
+        """
+        total = len(entries)
+        avg_conf = (
+            sum(float(e.get("confidence", e.get("conf", 0.0))) for e in entries) / total
+            if total else 0.0
+        )
         self._card_total.set_metrics(str(total), min(1.0, total / 50.0))
         self._card_conf.set_metrics(f"{int(avg_conf * 100)}%", avg_conf)
-        if uptime_str:
-            self._card_uptime.set_metrics(uptime_str, 0.5)
 
-        self._entry_count.setText(f"{total} {'ENTRY' if total == 1 else 'ENTRIES'}")
-        self._table.set_entries(list(reversed(entries)))
+        # Store newest-first; filter and table read from this
+        self._all_entries = list(reversed(entries))
+        self._apply_filter()
+
+        # Breakdown always reflects the full unfiltered history
+        self._breakdown.update_breakdown(entries)
 
     def _on_clear(self):
         self.refresh_history([])

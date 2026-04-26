@@ -10,8 +10,8 @@ from PyQt5.QtWidgets import (
 )
 
 from config.settings import config
-from ui.theme import BG, CYAN, FM, PRIMARY
-from ui.widgets import GlassPanel, ToggleSwitch
+from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
+from ui.widgets import GlassPanel, StatusPip, ToggleSwitch
 
 
 def _mono(size: int, bold: bool = False):
@@ -106,6 +106,109 @@ def _field(label: str, widget: QWidget, label_w: int = 120) -> QHBoxLayout:
     return row
 
 
+# ── Connection health strip ────────────────────────────────────────────────
+
+class _HealthStrip(QWidget):
+    """Three-pill strip showing live connection state for key subsystems."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(50)
+        self.setStyleSheet(
+            "background:rgba(8,15,17,0.55);"
+            "border:1px solid rgba(0,229,255,0.09);"
+        )
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setSpacing(0)
+
+        self._anthro_pip, self._anthro_val = self._pill(lay, "ANTHROPIC")
+        self._div(lay)
+        self._eleven_pip, self._eleven_val = self._pill(lay, "ELEVENLABS")
+        self._div(lay)
+        self._browser_pip, self._browser_val = self._pill(lay, "BROWSER")
+        lay.addStretch(1)
+
+        self.refresh()
+
+    def _pill(self, layout, label: str):
+        pill = QWidget()
+        pill.setStyleSheet("background:transparent;")
+        pl = QHBoxLayout(pill)
+        pl.setContentsMargins(14, 0, 14, 0)
+        pl.setSpacing(7)
+
+        pip = StatusPip("standby")
+        pip.setFixedSize(8, 8)
+        pl.addWidget(pip, 0, Qt.AlignVCenter)
+
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            "color:rgba(132,147,150,0.45);font-family:'Roboto Mono';"
+            "font-size:8px;letter-spacing:1px;background:transparent;border:none;"
+        )
+        val = QLabel("—")
+        val.setStyleSheet(
+            "color:rgba(132,147,150,0.65);font-family:'Roboto Mono';"
+            "font-size:10px;font-weight:700;background:transparent;border:none;"
+        )
+        col.addWidget(lbl)
+        col.addWidget(val)
+        pl.addLayout(col)
+        layout.addWidget(pill)
+        return pip, val
+
+    @staticmethod
+    def _div(layout):
+        d = QFrame()
+        d.setFrameShape(QFrame.VLine)
+        d.setStyleSheet(
+            "color:rgba(0,229,255,0.10);background:rgba(0,229,255,0.10);"
+        )
+        d.setFixedWidth(1)
+        layout.addWidget(d)
+
+    def _set_pill(self, pip: StatusPip, val_lbl: QLabel, ok: bool,
+                  ok_text: str = "CONNECTED", fail_text: str = "MISSING"):
+        color = GREEN if ok else RED
+        pip.set_status("active" if ok else "error")
+        val_lbl.setText(ok_text if ok else fail_text)
+        val_lbl.setStyleSheet(
+            f"color:{color};font-family:'Roboto Mono';"
+            "font-size:10px;font-weight:700;background:transparent;border:none;"
+        )
+
+    def refresh(self):
+        """Re-read live state. Call after config save or on page show."""
+        self._set_pill(
+            self._anthro_pip, self._anthro_val,
+            bool(config.anthropic_api_key),
+        )
+        self._set_pill(
+            self._eleven_pip, self._eleven_val,
+            bool(config.elevenlabs_api_key),
+        )
+        try:
+            from core.browser import browser
+            ready = browser.is_ready
+        except Exception:
+            ready = False
+        self._set_pill(
+            self._browser_pip, self._browser_val,
+            ready, ok_text="READY", fail_text="STARTING",
+        )
+        if not ready:
+            # amber instead of red — browser may still be initialising
+            self._browser_pip.set_status("standby")
+            self._browser_val.setStyleSheet(
+                f"color:{WARNING};font-family:'Roboto Mono';"
+                "font-size:10px;font-weight:700;background:transparent;border:none;"
+            )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -119,6 +222,7 @@ class SettingsView(QWidget):
         root.setSpacing(12)
 
         # ── Header ────────────────────────────────────────────────────────────
+        head = QHBoxLayout()
         title = QLabel("SYSTEM_CONFIG")
         title.setStyleSheet(
             "QLabel{"
@@ -127,13 +231,27 @@ class SettingsView(QWidget):
             "background:transparent;border:none;"
             "}"
         )
+        head.addWidget(title, 1)
+
+        self._unsaved_lbl = QLabel("● UNSAVED")
+        self._unsaved_lbl.setFont(_mono(9, bold=True))
+        self._unsaved_lbl.setStyleSheet(
+            f"color:{WARNING};letter-spacing:2px;background:transparent;border:none;"
+        )
+        self._unsaved_lbl.setVisible(False)
+        head.addWidget(self._unsaved_lbl, 0, Qt.AlignVCenter)
+        root.addLayout(head)
+
         subtitle = QLabel("RUNTIME CONFIGURATION  //  API & AUDIO SETTINGS")
         subtitle.setStyleSheet(
             "QLabel{color:rgba(132,147,150,0.9);font-family:'Roboto Mono';"
             "font-size:11px;letter-spacing:1px;background:transparent;border:none;}"
         )
-        root.addWidget(title)
         root.addWidget(subtitle)
+
+        # ── Health strip ──────────────────────────────────────────────────────
+        self._health = _HealthStrip()
+        root.addWidget(self._health)
 
         # ── Upper row: API config + JARVIS meta ───────────────────────────────
         upper = QHBoxLayout()
@@ -160,14 +278,21 @@ class SettingsView(QWidget):
         self._anthro_key.setEchoMode(QLineEdit.Password)
         self._anthro_key.setPlaceholderText("sk-ant-...")
         self._anthro_key.setStyleSheet(_INPUT_SS)
-        self._anthro_key.setToolTip("Anthropic API key — kept in memory only unless saved")
+        self._anthro_key.setToolTip("Anthropic API key — kept in .env, not saved to JSON")
         ab.addLayout(_field("ANTHROPIC_KEY", self._anthro_key))
+
+        self._eleven_key = QLineEdit(config.elevenlabs_api_key)
+        self._eleven_key.setEchoMode(QLineEdit.Password)
+        self._eleven_key.setPlaceholderText("el-...")
+        self._eleven_key.setStyleSheet(_INPUT_SS)
+        self._eleven_key.setToolTip("ElevenLabs API key for TTS — kept in .env, not saved to JSON")
+        ab.addLayout(_field("ELEVENLABS_KEY", self._eleven_key))
 
         self._vapi_key = QLineEdit(config.vapi_api_key)
         self._vapi_key.setEchoMode(QLineEdit.Password)
         self._vapi_key.setPlaceholderText("vapi-...")
         self._vapi_key.setStyleSheet(_INPUT_SS)
-        self._vapi_key.setToolTip("Vapi API key for STT/TTS")
+        self._vapi_key.setToolTip("Vapi API key")
         ab.addLayout(_field("VAPI_KEY", self._vapi_key))
 
         self._model_combo = QComboBox()
@@ -282,7 +407,6 @@ class SettingsView(QWidget):
         # ── Lower: Audio Configuration ────────────────────────────────────────
         audio_panel = GlassPanel()
         audio_panel.set_fill_color(QColor(10, 17, 19, 220))
-        audio_panel.setFixedHeight(150)
         audio_lay = QVBoxLayout(audio_panel)
         audio_lay.setContentsMargins(0, 0, 0, 0)
         audio_lay.setSpacing(0)
@@ -297,7 +421,6 @@ class SettingsView(QWidget):
         ab2.setContentsMargins(14, 12, 14, 12)
         ab2.setSpacing(24)
 
-        # Mic sensitivity slider
         mic_col = QVBoxLayout()
         mic_col.setSpacing(6)
         mic_col.addWidget(_section_lbl("MIC_SENSITIVITY"))
@@ -310,14 +433,12 @@ class SettingsView(QWidget):
         self._mic_val.setFixedWidth(34)
         self._mic_val.setFont(_mono(10))
         self._mic_val.setStyleSheet(f"color:{CYAN};background:transparent;border:none;")
-        self._mic_slider.valueChanged.connect(
-            lambda v: self._mic_val.setText(f"{v}%"))
+        self._mic_slider.valueChanged.connect(lambda v: self._mic_val.setText(f"{v}%"))
         mic_row.addWidget(self._mic_slider, 1)
         mic_row.addWidget(self._mic_val)
         mic_col.addLayout(mic_row)
         ab2.addLayout(mic_col, 1)
 
-        # TTS speed slider
         tts_col = QVBoxLayout()
         tts_col.setSpacing(6)
         tts_col.addWidget(_section_lbl("TTS_SPEED"))
@@ -330,14 +451,12 @@ class SettingsView(QWidget):
         self._tts_val.setFixedWidth(38)
         self._tts_val.setFont(_mono(10))
         self._tts_val.setStyleSheet(f"color:{CYAN};background:transparent;border:none;")
-        self._tts_slider.valueChanged.connect(
-            lambda v: self._tts_val.setText(f"{v}%"))
+        self._tts_slider.valueChanged.connect(lambda v: self._tts_val.setText(f"{v}%"))
         tts_row.addWidget(self._tts_slider, 1)
         tts_row.addWidget(self._tts_val)
         tts_col.addLayout(tts_row)
         ab2.addLayout(tts_col, 1)
 
-        # Noise gate toggle
         ng_col = QVBoxLayout()
         ng_col.setSpacing(6)
         ng_col.addWidget(_section_lbl("NOISE_GATE"))
@@ -352,23 +471,52 @@ class SettingsView(QWidget):
         audio_lay.addWidget(audio_body, 1)
         root.addWidget(audio_panel)
 
+        # ── Wire all fields → unsaved indicator ───────────────────────────────
+        for sig in (
+            self._anthro_key.textChanged,
+            self._eleven_key.textChanged,
+            self._vapi_key.textChanged,
+            self._voice_input.textChanged,
+            self._wake_input.textChanged,
+        ):
+            sig.connect(lambda _: self._mark_dirty())
+
+        self._model_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
+        self._theme_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
+        self._debug_toggle.toggled.connect(lambda _: self._mark_dirty())
+        self._scan_toggle.toggled.connect(lambda _: self._mark_dirty())
+        self._mic_slider.valueChanged.connect(lambda _: self._mark_dirty())
+        self._tts_slider.valueChanged.connect(lambda _: self._mark_dirty())
+        self._noise_toggle.toggled.connect(lambda _: self._mark_dirty())
+
+    # ── Unsaved indicator ─────────────────────────────────────────────────────
+
+    def _mark_dirty(self):
+        self._unsaved_lbl.setVisible(True)
+
+    def _mark_clean(self):
+        self._unsaved_lbl.setVisible(False)
+
     # ── Actions ───────────────────────────────────────────────────────────────
 
     def _apply_cfg(self):
         config.anthropic_api_key = self._anthro_key.text().strip()
-        config.vapi_api_key      = self._vapi_key.text().strip()
-        config.claude_model      = self._model_combo.currentData()
-        config.wake_word         = self._wake_input.text().strip() or "jarvis"
-        config.tts_voice         = self._voice_input.text().strip()
-        config.theme             = self._theme_combo.currentData()
-        config.debug_mode        = self._debug_toggle.isChecked()
-        config.mic_sensitivity   = self._mic_slider.value()
-        config.tts_speed         = self._tts_slider.value()
-        config.noise_gate        = self._noise_toggle.isChecked()
+        config.elevenlabs_api_key = self._eleven_key.text().strip()
+        config.vapi_api_key       = self._vapi_key.text().strip()
+        config.claude_model       = self._model_combo.currentData()
+        config.wake_word          = self._wake_input.text().strip() or "jarvis"
+        config.tts_voice          = self._voice_input.text().strip()
+        config.theme              = self._theme_combo.currentData()
+        config.debug_mode         = self._debug_toggle.isChecked()
+        config.mic_sensitivity    = self._mic_slider.value()
+        config.tts_speed          = self._tts_slider.value()
+        config.noise_gate         = self._noise_toggle.isChecked()
 
         try:
             config.save()
             self._apply_btn.setText("SAVED ✓")
+            self._mark_clean()
+            self._health.refresh()
         except Exception:
             self._apply_btn.setText("SAVE ERROR")
 

@@ -99,7 +99,7 @@ class _PageMicButton(QPushButton):
         self.update()
 
     def _tick(self):
-        # Smooth 0..1..0 oscillation, ~1.5s per full cycle at 60ms tick
+        # 1..0..1 oscillation via abs(1 - phase), ~1.5s per full cycle at 60ms tick
         self._pulse_phase = (self._pulse_phase + 0.08) % 2.0
         self.update()
 
