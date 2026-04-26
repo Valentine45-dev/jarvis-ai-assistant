@@ -776,16 +776,67 @@ def _handle_system_control(action: str, params: dict) -> dict:
     return _ok(f"System: {action}")
 
 
+def _strip_llm_path_placeholders(p: Path) -> Path:
+    """The model often invents a `/.keep/jarvis_note` tail on folder paths; drop that."""
+    try:
+        parts = list(p.parts)
+    except (TypeError, ValueError, OSError):
+        return p
+    for i, part in enumerate(parts):
+        if part.casefold() == ".keep":
+            return Path(*parts[:i]) if i else p
+    return p
+
+
+def _file_op_create_directory(params: dict) -> dict:
+    """Create a single directory (and parents). Same confirm UI as create_file — no default file."""
+    raw_path = params.get("path", "")
+    s = (raw_path or "").strip()
+    if not s:
+        return _err("No path provided")
+    path = _strip_llm_path_placeholders(_resolve_file_operation_path(s))
+    if path.exists() and path.is_file():
+        return _err(f"That path is already a file: {path.name}")
+    try:
+        target_display = str(path.resolve())
+    except (OSError, ValueError, RuntimeError):
+        target_display = str(path)
+    prompt = (
+        f"Create this folder, sir? (Parent folders are created if needed.)\n\n"
+        f"Folder: {target_display}"
+    )
+
+    def _do_mkdir() -> dict:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return _ok(f"Created folder: {path.name}")
+        except PermissionError:
+            return _err(f"Permission denied: {path}")
+        except Exception as exc:
+            return _err(str(exc))
+
+    return request_confirmation(prompt, _do_mkdir)
+
+
 def _handle_file_operation(action: str, params: dict) -> dict:
     raw_path = params.get("path", "")
     path     = _resolve_file_operation_path(raw_path) if raw_path else Path.home() / "jarvis_file.txt"
     dest     = _resolve_file_operation_path(params["destination"]) if params.get("destination") else None
 
-    if action == "create_file":
-        content = params.get("content", "")
+    if action == "create_directory":
+        return _file_op_create_directory(params)
 
-        # If path has no extension and no filename, add a default
-        if not path.suffix and not raw_path.endswith("/") and not raw_path.endswith("\\"):
+    if action == "create_file":
+        path = _strip_llm_path_placeholders(path)
+        content = params.get("content", "")
+        content_stripped = (content or "").strip() if isinstance(content, str) else ""
+        raw_n = (raw_path or "").replace("\\", "/")
+        has_trailing = len(raw_n) > 0 and raw_n.rstrip().endswith("/")
+
+        if not path.suffix and not has_trailing and not content_stripped:
+            return _file_op_create_directory({"path": str(path), **{k: v for k, v in params.items() if k != "path"}})
+
+        if not path.suffix:
             path = path / "jarvis_note.txt"
 
         parent = path.parent
@@ -838,24 +889,93 @@ def _handle_file_operation(action: str, params: dict) -> dict:
 
     if action == "delete_file":
         if not path.exists():
-            return _err(f"Not found: {path}")
-        try:
-            if path.is_dir():
-                shutil.rmtree(path)
+            found = _find_existing_item(path)
+            if found:
+                path = found
             else:
-                path.unlink()
-            return _ok(f"Deleted: {path.name}")
-        except PermissionError:
-            return _err(f"Permission denied deleting: {path.name}")
-        except Exception as exc:
-            return _err(str(exc))
+                return _err(f"Cannot find {path.name!r} — check the name and try again.")
+        try:
+            full_path_str = str(path.resolve())
+        except (OSError, ValueError):
+            full_path_str = str(path)
+        is_dir = path.is_dir()
+        kind = "Folder" if is_dir else "File"
+        lines = [f"{kind}: {full_path_str}"]
+        if is_dir:
+            try:
+                n = sum(1 for _ in path.rglob("*"))
+                lines.append(f"Contains: {n} item(s) — all will be permanently removed")
+            except (PermissionError, OSError):
+                lines.append("Note: all contents will be permanently removed")
+
+        item_desc = "\n".join(lines)
+
+        def _do_delete() -> dict:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                return _ok(f"Deleted: {path.name}")
+            except PermissionError:
+                msg = f"Permission denied: {path.name}"
+                return {"success": False, "output": msg, "error": msg}
+            except Exception as exc:
+                msg = str(exc)
+                return {"success": False, "output": msg, "error": msg}
+
+        from core.personality import ask as _ask
+        return request_confirmation(_ask("delete_file", item_desc), _do_delete)
+
+    if action == "rename_file":
+        if not path.exists():
+            found = _find_existing_item(path)
+            if found:
+                path = found
+            else:
+                return _err(f"Cannot find {path.name!r} — check the name and try again.")
+        new_name_raw = (params.get("new_name") or params.get("destination") or "").strip()
+        if not new_name_raw:
+            return _err("No new name provided for rename.")
+        new_filename = Path(new_name_raw).name or new_name_raw
+        dest_path = path.parent / new_filename
+        try:
+            loc_str = str(path.parent.resolve())
+        except (OSError, ValueError):
+            loc_str = str(path.parent)
+        rename_desc = f"From: {path.name}\nTo:   {new_filename}\nIn:   {loc_str}"
+
+        def _do_rename() -> dict:
+            try:
+                if dest_path.exists():
+                    msg = f"'{new_filename}' already exists in that location"
+                    return {"success": False, "output": msg, "error": msg}
+                path.rename(dest_path)
+                return _ok(f"Renamed to {new_filename}")
+            except PermissionError:
+                msg = "Permission denied"
+                return {"success": False, "output": msg, "error": msg}
+            except Exception as exc:
+                msg = str(exc)
+                return {"success": False, "output": msg, "error": msg}
+
+        from core.personality import ask as _ask
+        return request_confirmation(_ask("rename_file", rename_desc), _do_rename)
 
     if action == "move_file":
+        if not path.exists():
+            found = _find_existing_item(path)
+            if found:
+                path = found
+        # Plain filename with no separators → rename in place (same directory)
+        raw_dest_str = (params.get("destination") or "").strip()
+        if raw_dest_str and "/" not in raw_dest_str and "\\" not in raw_dest_str:
+            dest = path.parent / raw_dest_str
         if dest is None:
             return _err("No destination provided")
         try:
             shutil.move(str(path), str(dest))
-            return _ok(f"Moved {path.name} to {dest.name}")
+            return _ok(f"Moved {path.name} → {dest.name}")
         except Exception as exc:
             return _err(str(exc))
 
@@ -916,6 +1036,49 @@ def _locate_file(name: str) -> Path | None:
             for p in root.rglob(name):
                 if p.is_file():
                     return p
+        except (PermissionError, OSError):
+            pass
+    return None
+
+
+def _find_existing_item(path: Path) -> Path | None:
+    """Find an existing file or folder when the exact resolved path does not exist.
+
+    Strategy:
+    1. Walk up to the nearest existing ancestor and rglob for path.name inside it.
+       This handles "jarvis-project/executor.py" where executor.py lives in core/.
+    2. Fall back to a broad rglob across Desktop / Documents / Downloads / home.
+    """
+    target = path.name
+    if not target:
+        return None
+
+    # Step 1: nearest existing ancestor
+    ancestor = path.parent
+    while ancestor != ancestor.parent:
+        if ancestor.exists() and ancestor.is_dir():
+            try:
+                for found in ancestor.rglob(target):
+                    if found.exists():
+                        return found
+            except (PermissionError, OSError):
+                pass
+            break
+        ancestor = ancestor.parent
+
+    # Step 2: broad fallback
+    for root in (
+        Path.home() / "Desktop",
+        Path.home() / "Documents",
+        Path.home() / "Downloads",
+        Path.home(),
+    ):
+        if not root.exists():
+            continue
+        try:
+            for found in root.rglob(target):
+                if found.exists():
+                    return found
         except (PermissionError, OSError):
             pass
     return None
@@ -1030,7 +1193,7 @@ _BLOCKED_INTENTS: frozenset[str] = frozenset({"code_execution"})
 
 _CONFIRMATION_REQUIRED_ACTIONS: frozenset[tuple[str, str]] = frozenset({
     ("automation_task", "remove_workflow"),
-    ("file_operation",  "delete_file"),
+    # delete_file is confirmed executor-side (shows resolved path in the card)
     ("system_control",  "shutdown"),
     ("system_control",  "restart"),
     ("system_control",  "sleep"),
@@ -1154,11 +1317,11 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             "requires_confirmation": False,
         })
         if sub.get("needs_confirmation"):
-            return _err(
-                f"Step {i}/{total} needs interactive confirmation ({step.get('intent')}/"
-                f"{step.get('action')}) — e.g. file create. Routines cannot complete that "
-                f"in one run; issue the command directly, or remove that step from the workflow."
-            )
+            # Same dict as a direct `create_file` / folder prompt — main shows the
+            # confirm card. `_PENDING["fn"]` was set by the nested `dispatch` call.
+            # After the user confirms, only that step's callback runs; remaining
+            # workflow steps in *this* invocation are skipped (no resume queue yet).
+            return sub
         results.append(f"Step {i}: {'OK' if sub['success'] else 'FAIL'} — {sub['output'] or sub['error']}")
         if not sub["success"]:
             all_ok = False

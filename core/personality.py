@@ -303,6 +303,17 @@ _P: dict[tuple, dict] = {
             "Creation failed, sir. {e}",
         ],
     },
+    ("file_operation", "create_directory"): {
+        "ok": [
+            "Folder is ready, sir. {o}",
+            "Directory created. {o}",
+            "Done — {o}",
+        ],
+        "err": [
+            "Couldn't create that folder — {e}",
+            "That folder failed, sir. {e}",
+        ],
+    },
     ("file_operation", "read_file"): {
         "ok": [
             "Here's what's in it, sir: {o}",
@@ -363,6 +374,17 @@ _P: dict[tuple, dict] = {
             "Done — copy's there.",
         ],
         "err": ["Copy failed — {e}"],
+    },
+    ("file_operation", "rename_file"): {
+        "ok": [
+            "Renamed, sir. {o}",
+            "Done — {o}",
+            "All set. {o}",
+        ],
+        "err": [
+            "Rename failed — {e}",
+            "Couldn't rename that, sir. {e}",
+        ],
     },
 
     # ── SCREEN READ ──────────────────────────────────────────────────
@@ -525,6 +547,20 @@ _P: dict[tuple, dict] = {
             "That'll {o} permanently, sir. Confirm?",
         ],
     },
+    ("confirmation", "delete_file"): {
+        "ask": [
+            "Are you sure you want to delete this, sir?\n\n{o}",
+            "This cannot be undone, sir:\n\n{o}\n\nShall I proceed?",
+            "Confirm permanent deletion, sir:\n\n{o}",
+        ],
+    },
+    ("confirmation", "rename_file"): {
+        "ask": [
+            "Shall I rename it, sir?\n\n{o}",
+            "Confirm the rename below:\n\n{o}",
+            "Ready to rename — confirm, sir?\n\n{o}",
+        ],
+    },
 }
 
 _DEFAULT = {
@@ -569,11 +605,17 @@ def say(intent: str, action: str, status: str, output: str = "", error: str = ""
             return last
         return s
 
+    def _trim_error(s: str, cap: int = 500) -> str:
+        """Errors are explanations, not path listings — no basename shortcut."""
+        if not s:
+            return ""
+        return s[:cap] + "…" if len(s) > cap else s
+
     if (intent, action) in _NO_TRIM or (intent, "*") in _NO_TRIM:
         o = output      # full output — never trim listings, OCR, code results
     else:
         o = _trim(output)
-    e = _trim(error, 80)
+    e = _trim_error(error)
 
     template = random.choice(variants)
     try:

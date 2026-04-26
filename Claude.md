@@ -252,6 +252,8 @@ Execute a multi-step workflow or predefined routine.
 **HUD Label:** `AUTOMATION`
 **Confirmation:** `true` for `remove_workflow`
 
+**Executor — steps that need a UI confirm (e.g. `create_file`):** If a step would open the file/folder **confirm card**, the workflow **bubbles** that to the user (same as a direct `file_operation` — the card was previously suppressed and an error was returned instead). After the user confirms, **only that step’s action runs**; **later steps in the same `run_workflow` are not auto-continued** in this build. For “create folder + file with full content” prefer a **single** `file_operation` / `create_file` (or separate commands) rather than a long **workflow** that mixes confirm-required steps.
+
 **Routing — when *not* to use `automation_task`:**
 - Do **not** route generic compound requests (e.g. *“open Notepad and write hello”*) to `automation_task` **unless** you provide a complete, valid **`steps`** array that lists each real intent (`open_app`, `type_text`, etc.) with parameters. A vague or invented `task_name` alone is wrong.
 - Prefer **`open_app`** (e.g. `open_app_generic` with `app_name`: `notepad`) for *“open X”* first; the user can issue *“type …”* as a follow-up **`type_text`** command, unless they clearly want one atomic chain — then use `run_workflow` with explicit **`steps`** (not a placeholder routine name).
@@ -326,10 +328,12 @@ File system operations — create, read, move, delete files.
 
 **Actions:**
 
-- `create_file` — Create a new file (executor shows a **path confirmation** in the UI before writing; do **not** set `requires_confirmation` in JSON for this — the shell handles it)
+- `create_directory` — Create a **folder** only (and parent folders as needed). Use for *“create a folder …”*, *“make a directory …”*, *“new folder …”*. Same in-app confirmation as `create_file`. **Do not** use `create_file` for folder-only requests.
+- `create_file` — Create a new **file** (executor shows a **path confirmation** in the UI before writing; do **not** set `requires_confirmation` in JSON for this — the shell handles it). If the user asked for a **folder** but you mis-routed to `create_file` with **empty `content`** and a path **without** a file extension, the executor treats it as **`create_directory`** — but **prefer `create_directory` + `path`** explicitly so JSON is unambiguous.
 - `read_file` — Read file contents
 - `delete_file` — Delete a file
-- `move_file` — Move/rename a file
+- `rename_file` — Rename a file or folder **in place** (same location, name changes only). **Prefer this over `move_file`** when the user says "rename". Supply `path` (old name/path) and `new_name` (new filename only — no directory separators).
+- `move_file` — Move a file to a different location
 - `copy_file` — Copy a file
 - `list_directory` — List contents of a directory
 - `search_files` — Search for files by name or pattern
@@ -340,13 +344,16 @@ File system operations — create, read, move, delete files.
 { "path": "string — file path" }
 { "destination": "string — destination path for move/copy" }
 { "content": "string — content for file creation" }
+{ "path": "string — current file/folder path", "new_name": "string — new filename only (no path separators)" }
 { "pattern": "string — search pattern (glob)" }
 ```
 
 **Path resolution (important):** For **relative** paths, the first segment (e.g. `jarvis_UI_SCREENS` in `jarvis_UI_SCREENS/file.py`) is **resolved to an existing folder** by searching under **the user profile** (`Path.home()`): common locations first, then a bounded walk (prunes e.g. `node_modules`, `.git`). If several folders share the name, the **shallowest** wins, then paths under **Documents** are preferred. If **no** such folder exists, new paths are rooted under **`JARVIS_DEFAULT_CREATE_PARENT`** (env: `documents` | `desktop` | `downloads` | `home`; default **Documents**), **not** the JARVIS process CWD. Prefer giving **`Documents/…`** or a **full absolute path** when the user names a specific location.
 
+**Do not** invent `/.keep/`, `jarvis_note`, or other placeholder path segments. For a new folder, set **`path`** to that folder only (e.g. `Documents/TEsting`); the shell strips bogus `.keep` tails if they appear, but you must not emit them.
+
 **HUD Label:** `FILE OPS`
-**Confirmation:** `true` in JSON for `delete_file` only. **`create_file`** is confirmed in-app with the resolved **file** and **folder** path shown; keep `requires_confirmation` **`false`** for `create_file` (avoid double prompt).
+**Confirmation:** `true` in JSON for `delete_file` only. **`create_file`** and **`create_directory`** are confirmed in-app; keep `requires_confirmation` **`false`** in JSON (avoid double prompt).
 
 -----
 
@@ -569,6 +576,22 @@ The `response` field is spoken aloud via TTS. Follow these rules:
   "response": "Awaiting confirmation to sleep, sir.",
   "hud_status": "SLEEP PENDING",
   "requires_confirmation": true
+}
+```
+
+-----
+
+**Input:** `"Rename notes.txt to journal.txt"`
+
+```json
+{
+  "intent": "file_operation",
+  "action": "rename_file",
+  "parameters": { "path": "notes.txt", "new_name": "journal.txt" },
+  "confidence": 0.96,
+  "response": "Renaming the file now, sir.",
+  "hud_status": "FILE OPS",
+  "requires_confirmation": false
 }
 ```
 

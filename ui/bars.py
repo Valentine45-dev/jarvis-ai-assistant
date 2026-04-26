@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
+import socket
+import subprocess
+import sys
 from datetime import datetime
 
 import psutil
 import qtawesome as qta
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPen
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QStyle, QStyleOption, QWidget
 
 from ui.theme import CYAN, FM, TOPBAR_H, BOTBAR_H
@@ -33,6 +37,187 @@ def _qicon(name: str, color: str):
         return qta.icon(name, color=color)
     except Exception:
         return None
+
+
+def _subprocess_kw() -> dict:
+    """Windows: hide console window for status probes."""
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
+def _battery_state() -> tuple[int | None, bool]:
+    """Return (percent 0–100, power_plugged) or (None, False) if no battery sensor."""
+    try:
+        bat = psutil.sensors_battery()
+    except Exception:
+        return None, False
+    if bat is None:
+        return None, False
+    pct = bat.percent
+    if pct is None:
+        return None, False
+    return int(round(float(pct))), bool(bat.power_plugged)
+
+
+def _wifi_data_connected() -> bool:
+    """True when a wireless-like interface is up with a routable IPv4, or Windows Wi‑Fi reports connected."""
+    stats = psutil.net_if_stats()
+    addrs = psutil.net_if_addrs()
+    keywords = (
+        "wi-fi",
+        "wi fi",
+        "wlan",
+        "wireless",
+        "802.11",
+        "wifi",
+        "wlp",
+        "wlo",
+        "wlx",
+    )
+    for name, st in stats.items():
+        if not st.isup:
+            continue
+        nl = name.lower()
+        if not any(k in nl for k in keywords):
+            continue
+        for snic in addrs.get(name, []):
+            if snic.family != socket.AF_INET or not snic.address:
+                continue
+            a = str(snic.address)
+            if a.startswith("127."):
+                continue
+            if a.startswith("169.254."):
+                continue
+            return True
+
+    if sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                ["netsh", "wlan", "show", "interfaces"],
+                capture_output=True,
+                text=True,
+                timeout=2.5,
+                **_subprocess_kw(),
+            )
+            s = r.stdout or ""
+            if re.search(r"State\s*:\s*connected", s, re.IGNORECASE):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+class _BatteryGlyph(QWidget):
+    """Phone-style battery outline, terminal nub, and left-to-right fill."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pct = 100
+        self._plugged = False
+        self.setFixedSize(32, 16)
+
+    def set_state(self, pct: int, plugged: bool) -> None:
+        self._pct = max(0, min(100, int(pct)))
+        self._plugged = bool(plugged)
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w, h = float(self.width()), float(self.height())
+        body = QRectF(1.0, 2.0, 22.0, h - 4.0)
+        nub = QRectF(body.right() + 0.5, h / 2.0 - 2.0, 2.0, 4.0)
+
+        low = self._pct < 20
+        if low:
+            fill = QColor(255, 149, 60)
+        elif self._plugged:
+            fill = QColor(0x83, 0xFB, 0xA5)
+        else:
+            fill = QColor(CYAN)
+
+        border = QColor(255, 255, 255, 200)
+        p.setPen(QPen(border, 1.1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(body, 2.2, 2.2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(border)
+        p.drawRoundedRect(nub, 0.5, 0.5)
+
+        inner = body.adjusted(2.0, 2.0, -2.0, -2.0)
+        fill_w = max(0.0, inner.width() * (self._pct / 100.0))
+        if fill_w > 0.5:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(fill))
+            p.drawRoundedRect(QRectF(inner.left(), inner.top(), fill_w, inner.height()), 0.8, 0.8)
+
+        if self._plugged:
+            cx = body.center().x()
+            t = body.top() - 2.2
+            bolt = QPainterPath()
+            bolt.moveTo(cx - 0.4, t)
+            bolt.lineTo(cx + 2.2, t + 2.4)
+            bolt.lineTo(cx + 0.35, t + 2.4)
+            bolt.lineTo(cx + 1.9, t + 7.2)
+            bolt.lineTo(cx - 1.3, t + 3.6)
+            bolt.lineTo(cx + 0.9, t + 3.6)
+            bolt.closeSubpath()
+            p.setPen(QPen(QColor(255, 255, 255, 230), 0.35))
+            p.setBrush(QColor(255, 255, 255, 252))
+            p.drawPath(bolt)
+
+
+class _BatteryStatusBlock(QWidget):
+    """Glyph + percentage, hidden when `sensors_battery` is unavailable (e.g. some desktops)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._glyph = _BatteryGlyph()
+        self._label = QLabel("—%")
+        self._label.setStyleSheet(
+            f"QLabel{{color:{CYAN};"
+            f"font-family:'{FM}';"
+            "font-size:11px;font-weight:700;letter-spacing:0px;"
+            "background:transparent;}"
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(self._glyph, 0, Qt.AlignVCenter)
+        lay.addWidget(self._label, 0, Qt.AlignVCenter)
+        self.setVisible(False)
+
+    def set_state(self, pct: int | None, plugged: bool) -> None:
+        if pct is None:
+            self.setVisible(False)
+            return
+        self.setVisible(True)
+        self._glyph.set_state(pct, plugged)
+        self._label.setText(f"{pct}%")
+
+
+class _WifiIcon(QWidget):
+    """Wi‑Fi arcs + dot; matches cyan HUD. Visibility controlled by parent."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(22, 16)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        c = QColor(CYAN)
+        p.setPen(QPen(c, 1.15, Qt.SolidLine, Qt.FlatCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        cx = self.width() / 2.0
+        base_y = float(self.height() - 1.0)
+        for r in (8.0, 5.5, 3.0):
+            rect = QRectF(cx - r, base_y - 2.0 * r, 2.0 * r, 2.0 * r)
+            p.drawArc(rect, 30 * 16, 120 * 16)
+        p.setPen(Qt.NoPen)
+        p.setBrush(c)
+        p.drawEllipse(QPointF(cx, base_y - 0.5), 1.4, 1.4)
 
 
 def draw_glow_underline(widget: QWidget, painter: QPainter,
@@ -132,6 +317,15 @@ class TopBar(QWidget):
                 "}"
             )
             stats_lay.addWidget(w)
+
+        self._wifi = _WifiIcon()
+        self._wifi.setToolTip("Wi‑Fi: connected")
+        self._wifi.setVisible(False)
+        stats_lay.addWidget(self._wifi, 0, Qt.AlignVCenter)
+
+        self._battery = _BatteryStatusBlock()
+        self._battery.setToolTip("Battery (system sensor)")
+        stats_lay.addWidget(self._battery, 0, Qt.AlignVCenter)
         lay.addWidget(stats_wrap)
 
         lay.addStretch(1)
@@ -202,6 +396,19 @@ class TopBar(QWidget):
         except Exception:
             pass
         self._uptime.setText(f"UPTIME: {datetime.now().strftime('%H:%M:%S')}")
+
+        try:
+            b_pct, b_plug = _battery_state()
+            self._battery.set_state(b_pct, b_plug)
+        except Exception:
+            self._battery.set_state(None, False)
+
+        try:
+            has_wifi = _wifi_data_connected()
+            self._wifi.setVisible(has_wifi)
+            self._wifi.setToolTip("Wi‑Fi: connected" if has_wifi else "")
+        except Exception:
+            self._wifi.setVisible(False)
 
     def paintEvent(self, event):
         # Draw the QSS background (the rgba fill) first, then layer the
