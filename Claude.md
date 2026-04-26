@@ -135,8 +135,6 @@ Search the web or a specific platform.
 { "platform": "string — optional: google|youtube|github|stackoverflow|wikipedia" }
 ```
 
-**HUD Label:** `WEB SEARCH`
-
 -----
 
 ### 4. `type_text`
@@ -293,7 +291,7 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `navigate` — Go to a URL in the controlled Chrome tab and wait for load
 - `click_element` — Click a web element by CSS selector, visible text, or pixel coordinates
 - `fill_form` — Fill one or more form fields by CSS selector, label text, or placeholder
-- `read_page` — Extract all visible text from the current page (up to 4,000 chars)
+- `read_page` — **Tab + page:** document title, current URL, then visible text from the page (body text up to 4,000 chars). Succeeds even when little or no body text exists (title/URL always included).
 - `extract_text` — Extract text from a specific element by CSS selector
 - `screenshot` — Full-page screenshot or element screenshot
 - `new_tab` — Open a new tab and optionally navigate to a URL
@@ -345,6 +343,8 @@ File system operations — create, read, move, delete files.
 { "pattern": "string — search pattern (glob)" }
 ```
 
+**Path resolution (important):** For **relative** paths, the first segment (e.g. `jarvis_UI_SCREENS` in `jarvis_UI_SCREENS/file.py`) is **resolved to an existing folder** by searching under **the user profile** (`Path.home()`): common locations first, then a bounded walk (prunes e.g. `node_modules`, `.git`). If several folders share the name, the **shallowest** wins, then paths under **Documents** are preferred. If **no** such folder exists, new paths are rooted under **`JARVIS_DEFAULT_CREATE_PARENT`** (env: `documents` | `desktop` | `downloads` | `home`; default **Documents**), **not** the JARVIS process CWD. Prefer giving **`Documents/…`** or a **full absolute path** when the user names a specific location.
+
 **HUD Label:** `FILE OPS`
 **Confirmation:** `true` in JSON for `delete_file` only. **`create_file`** is confirmed in-app with the resolved **file** and **folder** path shown; keep `requires_confirmation` **`false`** for `create_file` (avoid double prompt).
 
@@ -392,6 +392,8 @@ Commands directed at JARVIS itself — status, settings, identity.
 - `tell_date` — Report current date
 - `tell_joke` — Tell a JARVIS-appropriate quip
 - `conversational` — Handle casual conversation
+- `quit_application` — **Exit the JARVIS app** (executor closes the window after TTS; use a warm spoken `response` such as a short goodbye)
+- `close_jarvis` — **Alias** of `quit_application` (same behaviour)
 
 **Parameters:**
 
@@ -401,7 +403,24 @@ Commands directed at JARVIS itself — status, settings, identity.
 { "wake_word": "string — new wake word" }
 ```
 
-**HUD Label:** `STANDBY`
+**HUD Label:** `STANDBY` — for quit, use `GOODBYE` or `SHUTTING DOWN`
+**Confirmation:** `false` for `quit_application` / `close_jarvis` (intentional exit; not destructive to user data)
+
+-----
+
+**Input examples (quit):** `"Close JARVIS"`, `"Exit the app"`, `"Quit yourself"`, `"Shut down the assistant"` (meaning **this app** — not the computer; for **PC** power off use `system_control` → `shutdown`).
+
+```json
+{
+  "intent": "jarvis_meta",
+  "action": "quit_application",
+  "parameters": {},
+  "confidence": 0.99,
+  "response": "Very well, sir. Closing the application — until we meet again.",
+  "hud_status": "GOODBYE",
+  "requires_confirmation": false
+}
+```
 
 -----
 

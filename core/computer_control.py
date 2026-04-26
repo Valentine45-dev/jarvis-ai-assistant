@@ -4,16 +4,25 @@ PyAutoGUI  — mouse / keyboard automation
 Pytesseract — OCR / read_screen
 Windows ctypes — screen lock, system calls
 All deps are lazy-imported so the module loads cleanly even when absent.
-Every pu
-\blic function returns {"success": bool, "output": str, "error": str}.
+Every public function returns {"success": bool, "output": str, "error": str}.
 """
 
 from __future__ import annotations
 
+import os
 import platform
+import shutil
 from pathlib import Path
 
 _OS = platform.system().lower()
+
+# So TESSERACT_CMD in .env is available even if this module is imported before config.settings
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    pass
 
 
 # ── Result helpers ────────────────────────────────────────────────────────────
@@ -41,6 +50,38 @@ def _pyt():
         return pytesseract
     except ImportError:
         return None
+
+
+def _resolve_tesseract_cmd(pyt) -> str | None:
+    """Point pytesseract at tesseract.exe if not on PATH (common on Windows)."""
+    inner = pyt.pytesseract
+    for key in ("TESSERACT_CMD", "TESSERACT_PATH"):
+        override = (os.getenv(key) or "").strip().strip('"')
+        if override:
+            ex = Path(override)
+            if ex.is_file():
+                inner.tesseract_cmd = str(ex)
+                return str(ex)
+    for name in ("tesseract", "tesseract.exe"):
+        which = shutil.which(name)
+        if which:
+            inner.tesseract_cmd = which
+            return which
+    if _OS == "windows":
+        for base in (
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ):
+            ex = Path(base) / "Tesseract-OCR" / "tesseract.exe"
+            if ex.is_file():
+                inner.tesseract_cmd = str(ex)
+                return str(ex)
+    if _OS == "darwin":
+        for ex in (Path("/opt/homebrew/bin/tesseract"), Path("/usr/local/bin/tesseract")):
+            if ex.is_file():
+                inner.tesseract_cmd = str(ex)
+                return str(ex)
+    return None
 
 
 # ── KEYBOARD ──────────────────────────────────────────────────────────────────
@@ -189,6 +230,12 @@ def ocr_screen(region: dict | None = None) -> dict:
         return _err("pytesseract not installed — run: uv add pytesseract")
     if pag is None:
         return _err("pyautogui not installed — run: uv add pyautogui")
+    if _resolve_tesseract_cmd(pyt) is None:
+        return _err(
+            "Tesseract OCR engine not found. Install the binary (add to PATH), or set "
+            "TESSERACT_CMD in .env to the full path of tesseract.exe. "
+            "Windows installer: https://github.com/UB-Mannheim/tesseract/wiki"
+        )
     try:
         if region:
             img = pag.screenshot(
@@ -204,8 +251,8 @@ def ocr_screen(region: dict | None = None) -> dict:
         msg = str(exc)
         if "tesseract" in msg.lower():
             return _err(
-                "Tesseract binary not found — "
-                "download from: github.com/UB-Mannheim/tesseract/wiki"
+                "Tesseract failed to run. Reinstall or set TESSERACT_CMD in .env to "
+                "tesseract.exe — https://github.com/UB-Mannheim/tesseract/wiki"
             )
         return _err(msg)
 

@@ -10,7 +10,12 @@ from datetime import datetime
 import psutil
 
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QStackedWidget,
     QShortcut,
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -29,7 +34,6 @@ from ui.history import HistoryView
 from ui.settings import SettingsView
 from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
-from data.mock import MOCK_HISTORY
 from core.brain import ask_claude_async, TAG_INTENT_MAP
 from core.executor import dispatch
 from core.signals import signals
@@ -39,6 +43,23 @@ from core.browser import browser
 # Sidebar nav slot for the Settings page — kept as a constant so any future
 # nav reorder only needs to change one line.
 _SETTINGS_NAV_IDX = 4
+
+
+def _pending_should_yield_to_new_command(cmd: str) -> bool:
+    """If True, a full new directive should go to the brain, not to resolve_confirmation()."""
+    s = (cmd or "").strip()
+    if len(s) > 100:
+        return True
+    low = s.lower()
+    # Another command phrased as a task (not a short yes / no to the last prompt)
+    if len(s) > 20:
+        for needle in (
+            "create ", "create a", "write ", "make ", "open ", "read ", "search ",
+            "list ", "delete ", "run ", "go to", "remind", "check ", "put ", "save ",
+        ):
+            if needle in low:
+                return True
+    return False
 
 
 class JarvisWindow(QMainWindow):
@@ -112,7 +133,7 @@ class JarvisWindow(QMainWindow):
 
         self._state = "idle"
         self._confidence = 95
-        self._history = list(MOCK_HISTORY)
+        self._history = []  # session log; only real exchanges (no mock seed)
         self._session_start = datetime.now()
         self._cmd_count = 0
         self._transcript_update_token = 0
@@ -164,10 +185,6 @@ class JarvisWindow(QMainWindow):
         # values are always live — no background polling needed.
         self._system_status = SystemStatusPopover(self)
         self._topbar.broadcast_clicked.connect(self._show_system_status)
-
-        for h in self._history:
-            self._dashboard.left.transcript.add_exchange(
-                h["you"], h["time"], h["jarvis"], h["jTime"])
 
         self._sys_tick()
         sys_t = QTimer(self)
@@ -283,14 +300,29 @@ class JarvisWindow(QMainWindow):
         self._dashboard.left.status_lbl.setText(f'Processing: "{cmd}"')
         self._dashboard.left.typing.show_typing()
 
-        # Priority: resolve pending confirmation before routing to brain.
-        # This handles "yes/no" replies to executor confirmation prompts
-        # (e.g. "folder doesn't exist — shall I create it?").
-        from core.executor import get_pending_confirmation, resolve_confirmation
+        # Priority: resolve pending confirmation before routing to brain — but if the
+        # user typed a new full command (not a short yes/no), drop stale pending and
+        # route the new command to the brain (avoids misfiring "standing down" on sentences).
+        from core.executor import (
+            abandon_pending_confirmation,
+            get_pending_confirmation,
+            resolve_confirmation,
+        )
+
         if get_pending_confirmation():
-            resolved = resolve_confirmation(cmd)
-            self._on_confirmation_resolved(resolved)
-            return
+            if _pending_should_yield_to_new_command(cmd):
+                abandon_pending_confirmation()
+                self._hide_confirm_card()
+                self._confirm_mode = None
+                self._pending_result = None
+                try:
+                    self._voice_view.clear_pending()
+                except Exception:
+                    pass
+            else:
+                resolved = resolve_confirmation(cmd)
+                self._on_confirmation_resolved(resolved)
+                return
 
         # Normal flow: route through Claude
         def _on_result(result: dict):
@@ -320,16 +352,27 @@ class JarvisWindow(QMainWindow):
             self._pending_result = result
             self._confirm_mode = "claude"
             prompt = resp or "Awaiting confirmation, sir."
+            j_time = datetime.now().strftime("%H:%M")
+            if self._history:
+                self._history[-1].update({
+                    "jarvis": prompt, "jTime": j_time,
+                    "intent": intent, "conf": conf,
+                })
+            # Same TTS + typewriter lockstep as _execute_result (do not type before audio).
+            self._transcript_update_token += 1
+            transcript_token = self._transcript_update_token
+            transcript_payload = (transcript_token, prompt, j_time, intent, conf)
             self._dashboard.left.typing.hide_typing()
             self._show_confirm_card(prompt)
-            # Mirror the pending state on the Voice page
             self._voice_view.set_pending(intent, result.get("action", ""), conf, prompt)
-            # Speak the prompt without tying it to the state-transition machinery
             try:
                 from core.voice import voice_engine
-                voice_engine.say(prompt)
+                voice_engine.say(
+                    prompt,
+                    on_ready=lambda: self._tts_ready.emit(transcript_payload),
+                )
             except Exception:
-                pass
+                self._tts_ready.emit(transcript_payload)
             return
 
         self._execute_result(result, intent, conf, resp, hud)
@@ -390,17 +433,21 @@ class JarvisWindow(QMainWindow):
             if self._history:
                 self._history[-1].update({"jarvis": display_resp, "jTime": j_time,
                                           "intent": intent, "conf": conf})
-            # Update transcript text directly (no token-gated animation)
-            self._dashboard.left.transcript.update_last_jarvis(
-                display_resp, j_time, intent, conf)
+            # Match normal commands: do not run the JARVIS typewriter until TTS is ready
+            # (same as voice_engine.say → _tts_ready → update_last_jarvis).
+            self._transcript_update_token += 1
+            transcript_token = self._transcript_update_token
+            transcript_payload = (transcript_token, display_resp, j_time, intent, conf)
             self._show_confirm_card(display_resp)
             self._dashboard.toast.show_toast(display_resp, "warning")
-            # Speak prompt fire-and-forget (no state-transition callback)
             try:
                 from core.voice import voice_engine
-                voice_engine.say(display_resp)
+                voice_engine.say(
+                    display_resp,
+                    on_ready=lambda: self._tts_ready.emit(transcript_payload),
+                )
             except Exception:
-                pass
+                self._tts_ready.emit(transcript_payload)
             return
 
         # ── Build spoken response — personality-driven, honest about failure ──
@@ -416,7 +463,14 @@ class JarvisWindow(QMainWindow):
             )
         elif intent == "jarvis_meta":
             action_name = result.get("action", "")
-            if action_name in self._FACTUAL_ACTIONS and exec_out.get("output"):
+            if (
+                action_name in ("quit_application", "close_jarvis")
+                and exec_out.get("quit_application")
+            ):
+                display_resp = (resp or "").strip() or (
+                    "Understood, sir. Closing JARVIS — we shall speak again."
+                )
+            elif action_name in self._FACTUAL_ACTIONS and exec_out.get("output"):
                 # Personality formats: "It's 7:25 AM, sir." / "Today is Sunday…"
                 status       = "ok" if exec_out["success"] else "err"
                 display_resp = personality_say(
@@ -476,24 +530,41 @@ class JarvisWindow(QMainWindow):
                 display_resp,
                 on_ready=lambda: self._tts_ready.emit(transcript_payload),
             )
+            if exec_out.get("quit_application"):
+                # Approximate time for TTS to finish (on_done not wired on MCI path).
+                delay_ms = 400 if voice_engine.tts_muted else min(
+                    30000, 1800 + len(display_resp) * 72
+                )
+                QTimer.singleShot(delay_ms, QApplication.instance().quit)
         except Exception:
             self._tts_ready.emit(transcript_payload)
+            if exec_out.get("quit_application"):
+                QTimer.singleShot(500, QApplication.instance().quit)
 
         kind = "error" if not exec_out["success"] else "success"
         toast_msg = (
             exec_out["error"] if not exec_out["success"]
             else f"Command executed — {intent}"
         )
+        if exec_out.get("quit_application"):
+            toast_msg = "Shutting down JARVIS"
         self._dashboard.toast.show_toast(toast_msg, kind)
 
     def _on_tts_ready(self, payload: object):
         token, text, j_time, intent, conf = payload
         self._set_state_if_current(token, "speaking")
         self._update_transcript_if_current(token, text, j_time, intent, conf)
-        QTimer.singleShot(
-            2000,
-            lambda: self._set_state_if_current(token, "idle"),
-        )
+        # After the speaking animation window, return to a confirmation wait if
+        # a confirm card is still active (avoids "idle" while the user must choose).
+        def _post_speaking() -> None:
+            if token != self._transcript_update_token:
+                return
+            if getattr(self, "_confirm_mode", None) in ("claude", "executor"):
+                self._set_state("awaiting_confirmation")
+            else:
+                self._set_state("idle")
+
+        QTimer.singleShot(2000, _post_speaking)
 
     def _update_transcript_if_current(
         self, token: int, text: str, j_time: str, intent: str, conf: float

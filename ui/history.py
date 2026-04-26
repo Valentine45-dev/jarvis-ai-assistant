@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget,
 )
 
-from data.mock import MOCK_HISTORY_FULL
 from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
 from ui.widgets import GlassPanel, SegmentedBar, StatusPip
 
@@ -478,7 +477,7 @@ class HistoryView(QWidget):
         self._uptime_timer.start()
         self._tick_uptime()  # populate immediately at "0h 00m"
 
-        self.refresh_history(MOCK_HISTORY_FULL)
+        self.refresh_history([])
         self._clear_btn.clicked.connect(self._on_clear)
 
     # ── Internal helpers ────────────────────────────────────────────────────

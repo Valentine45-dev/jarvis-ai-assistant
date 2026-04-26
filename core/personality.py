@@ -541,6 +541,7 @@ _NO_TRIM: set[tuple[str, str]] = {
     ("reminder_task",    "list_reminders"),
     ("automation_task",  "list_workflows"),
     ("read_screen",      "*"),
+    ("browser_automation", "read_page"),
     ("code_execution",   "*"),
     ("jarvis_meta",      "status_report"),
 }

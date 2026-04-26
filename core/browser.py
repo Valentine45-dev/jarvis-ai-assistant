@@ -284,13 +284,22 @@ class BrowserSession:
             return _ok(f"Filled {len(filled)} field(s): {', '.join(filled)}")
 
     def read_page(self) -> dict:
-        """Extract visible text from the page. Tries semantic elements first for cleaner output."""
+        """Read tab metadata plus visible page text: document title, URL, then body (capped)."""
         _PAGE_CAP = 4_000
         with self._lock:
             guard = self._not_ready()
             if guard:
                 return guard
             try:
+                url = self._page.url
+                title = (self._page.title() or "").strip()
+                header = (
+                    "--- Tab ---\n"
+                    f"Document title: {title or '(none)'}\n"
+                    f"URL: {url}\n"
+                    "\n--- Page content ---\n"
+                )
+
                 text = ""
                 for sel in ("main", "article", '[role="main"]', "body"):
                     try:
@@ -302,13 +311,15 @@ class BrowserSession:
                                 break
                     except Exception:
                         continue
+
                 if not text:
-                    return _err("Could not read page content")
+                    return _ok(header + "(no visible text in main/article/body — try navigating or use read_screen.)")
+
                 truncated = len(text) > _PAGE_CAP
                 snippet = text[:_PAGE_CAP]
                 if truncated:
                     snippet += f"\n\n[... truncated — showing {_PAGE_CAP} of {len(text)} chars]"
-                return _ok(snippet)
+                return _ok(header + snippet)
             except Exception as exc:
                 return _err(str(exc))
 

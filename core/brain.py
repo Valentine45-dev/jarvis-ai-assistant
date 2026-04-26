@@ -251,6 +251,11 @@ def ask_claude(
     if unrecognised_tag:
         result["_unknown_tag"] = unrecognised_tag
 
+    # create_file: path confirmation is only in the executor (inline card). A brain-level
+    # requires_confirmation would block that flow or force a second confirm.
+    if result.get("intent") == "file_operation" and result.get("action") == "create_file":
+        result["requires_confirmation"] = False
+
     return result
 
 

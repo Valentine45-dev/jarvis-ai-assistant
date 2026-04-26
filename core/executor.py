@@ -66,8 +66,13 @@ def _coerce_volume_level(params: dict) -> int | None:
 
 
 def _confirm(prompt: str) -> dict:
-    """Return a 'needs confirmation' sentinel with the prompt as output."""
-    return {"success": True, "output": prompt, "error": "", "needs_confirmation": True}
+    """Return a 'needs confirmation' sentinel with the prompt as output.
+
+    success is False so nested dispatch (e.g. automation steps) does not count
+    this step as completed until the user confirms; main still handles UI via
+    needs_confirmation before checking success.
+    """
+    return {"success": False, "output": prompt, "error": "", "needs_confirmation": True}
 
 
 # ── Page cache (shared with brain.py for context injection) ───────────────────
@@ -92,6 +97,11 @@ def get_pending_confirmation() -> dict | None:
     return dict(_PENDING) if _PENDING else None
 
 
+def abandon_pending_confirmation() -> None:
+    """Drop a deferred action without running it (e.g. user sent a new full command)."""
+    _PENDING.clear()
+
+
 def request_confirmation(prompt: str, fn) -> dict:
     """Store a deferred action and return a confirmation-needed sentinel."""
     _PENDING.clear()
@@ -100,15 +110,33 @@ def request_confirmation(prompt: str, fn) -> dict:
     return _confirm(prompt)
 
 
+def _is_affirmative_reply(user_response: str) -> bool:
+    """True if the user is confirming (word-safe; avoids substring false positives)."""
+    import re
+    t = user_response.strip().lower()
+    if not t:
+        return False
+    for phrase in (
+        "go ahead", "do it", "create it", "sounds good", "that's fine",
+        "as planned", "please do", "proceed", "yes please",
+    ):
+        if phrase in t:
+            return True
+    if t in ("y", "yes", "yeah", "yep", "ok", "okay", "sure", "confirm", "please", "k"):
+        return True
+    toks = set(re.findall(r"[a-z0-9']+", t))
+    if toks & {"yes", "yeah", "yep", "sure", "confirm", "proceed", "absolutely", "ok"}:
+        return True
+    return False
+
+
 def resolve_confirmation(user_response: str) -> dict:
     """Call with the user's yes/no reply. Executes or cancels the pending action."""
     if not _PENDING:
         return _err("No pending action to confirm.")
-    _AFFIRMATIVE = {"yes", "yeah", "do it", "go ahead", "confirm", "sure", "ok",
-                    "yep", "absolutely", "please", "create it", "proceed"}
     fn = _PENDING.pop("fn", None)
     _PENDING.clear()
-    if any(w in user_response.strip().lower() for w in _AFFIRMATIVE):
+    if _is_affirmative_reply(user_response):
         if fn:
             try:
                 return fn()
@@ -124,6 +152,92 @@ _USER_FOLDERS = frozenset({
     "documents", "downloads", "desktop", "pictures", "music",
     "videos", "onedrive", "appdata",
 })
+
+# When searching the user profile, prune heavy or irrelevant subtrees
+_HOME_WALK_MAX_DEPTH = 8
+_HOME_PRUNE_DIR_NAMES: frozenset[str] = frozenset(
+    n.lower() for n in (
+        "node_modules", ".git", ".svn", ".hg", "__pycache__", ".venv", "venv",
+        "npm-cache", ".yarn", ".nuget", "packages",  # can be huge
+    )
+)
+# If dirpath contains these path fragments, do not descend (Windows)
+_HOME_PRUNE_PATH_FRAGMENTS: tuple[str, ...] = (
+    "\\appdata\\local\\packages\\",
+    "\\appdata\\local\\pip\\",
+    "\\node_modules\\",
+)
+
+
+def _default_create_parent() -> Path:
+    """When no existing folder is found, new paths go here (not CWD)."""
+    h = Path.home()
+    key = (os.getenv("JARVIS_DEFAULT_CREATE_PARENT") or "Documents").strip()
+    m = {
+        "documents": h / "Documents",
+        "desktop": h / "Desktop",
+        "downloads": h / "Downloads",
+        "home": h,
+    }
+    p = m.get(key.lower(), h / "Documents")
+    try:
+        return p if p.exists() or key.lower() == "home" else (h / "Documents")
+    except OSError:
+        return h / "Documents"
+
+
+def _prune_home_walk_dirnames(pdir: Path, dirnames: list[str], home: Path) -> None:
+    """In-place: drop dirs we should not descend into."""
+    low = str(pdir).lower() + "\\"
+    if any(frag in low for frag in _HOME_PRUNE_PATH_FRAGMENTS):
+        dirnames.clear()
+        return
+    to_remove = {d for d in dirnames if d.lower() in _HOME_PRUNE_DIR_NAMES or d.startswith(".")}
+    if not to_remove:
+        return
+    dirnames[:] = [d for d in dirnames if d not in to_remove]
+
+
+def _find_all_exact_name_in_profile(home: Path, n_lower: str) -> list[Path]:
+    """Find every directory directly under *home*'s tree whose *name* matches (casefold)."""
+    home = home.resolve()
+    if not n_lower or not home.exists():
+        return []
+    out: list[Path] = []
+    try:
+        for dirpath, dirnames, _ in os.walk(str(home), topdown=True):
+            pdir = Path(dirpath)
+            try:
+                depth = len(pdir.relative_to(home).parts)
+            except ValueError:
+                depth = 0
+            if depth > _HOME_WALK_MAX_DEPTH:
+                dirnames.clear()
+                continue
+            _prune_home_walk_dirnames(pdir, dirnames, home)
+            for dn in list(dirnames):
+                if dn.lower() == n_lower:
+                    c = pdir / dn
+                    if c.is_dir():
+                        out.append(c)
+    except (PermissionError, OSError, ValueError):
+        pass
+    return out
+
+
+def _pick_best_of_matches(cands: list[Path], home: Path) -> Path:
+    """Shallowest under profile wins; then prefer a path that uses Documents/."""
+
+    def _key(p: Path) -> tuple:
+        p = p.resolve()
+        try:
+            d = len(p.relative_to(home).parts)
+        except ValueError:
+            d = 99
+        doc = 0 if "Documents" in p.parts else 1
+        return (d, doc, str(p).lower())
+
+    return sorted(cands, key=_key)[0]
 
 
 def _safe_path(path_str: str) -> Path:
@@ -158,9 +272,16 @@ def _safe_path(path_str: str) -> Path:
 
 
 def _find_folder(name: str) -> Path | None:
-    """Find a folder by name in common user locations (fuzzy, case-insensitive)."""
+    """Find a folder by name: fast roots first, then full profile (Path.home()) tree.
+
+    Profile search is depth-bounded and prunes e.g. node_modules, .git, big AppData
+    package caches. Among multiple same-named folders, the **shallowest** wins, then
+    paths under **Documents** are preferred.
+    """
     home = Path.home()
     n = name.strip().lower()
+    if not n:
+        return None
 
     # Common shortcuts
     shortcuts: dict[str, Path] = {
@@ -181,37 +302,94 @@ def _find_folder(name: str) -> Path | None:
         p = shortcuts[n]
         return p if p.exists() else None
 
-    # Exact match in first-level children of common roots
-    roots = [home / "Desktop", home / "Documents", home / "Downloads", home,
-             Path("C:/Users"), home / "OneDrive"]
-    for root in roots:
+    # Fast: immediate children of Documents / Desktop / Downloads / home
+    for root in (
+        home / "Documents",
+        home / "Desktop",
+        home / "Downloads",
+        home,
+        home / "OneDrive" / "Documents",
+        home / "OneDrive",
+    ):
         if not root.exists():
             continue
         try:
             for p in root.iterdir():
                 if p.is_dir() and p.name.lower() == n:
                     return p
-        except PermissionError:
+        except (PermissionError, OSError):
             pass
 
-    # Fuzzy search (one level deeper)
+    # Deeper: anywhere under the user profile (same drive as C:\\Users\\<you>…)
+    cands = _find_all_exact_name_in_profile(home, n)
+    if cands:
+        uniq: dict[str, Path] = {}
+        for c in cands:
+            k = str(c.resolve())
+            if k not in uniq:
+                uniq[k] = c
+        u = list(uniq.values())
+        if len(u) == 1:
+            return u[0]
+        return _pick_best_of_matches(u, home)
+
+    # Fuzzy (bounded depth) under Documents / Desktop / Downloads only
     candidates: list[tuple[float, Path]] = []
-    for root in [home, home / "Desktop", home / "Documents", home / "Downloads"]:
+    for root in (home / "Documents", home / "Desktop", home / "Downloads"):
+        root = root.resolve()
         if not root.exists():
             continue
         try:
-            for p in root.rglob("*"):
-                if p.is_dir():
+            for dirpath, dirnames, _ in os.walk(str(root), topdown=True):
+                pdir = Path(dirpath)
+                try:
+                    if len(pdir.relative_to(root).parts) > 5:
+                        dirnames.clear()
+                        continue
+                except ValueError:
+                    pass
+                for dn in list(dirnames):
+                    p = pdir / dn
+                    if not p.is_dir():
+                        continue
                     score = difflib.SequenceMatcher(None, p.name.lower(), n).ratio()
-                    if score > 0.75:
+                    if score > 0.82:
                         candidates.append((score, p))
         except (PermissionError, OSError):
             pass
 
     if candidates:
-        candidates.sort(reverse=True)
+        def _key(item: tuple[float, Path]) -> tuple:
+            sc, pth = item
+            under_docs = 1 if "Documents" in pth.parts else 0
+            return (sc, under_docs, -len(pth.parts))
+
+        candidates.sort(key=_key, reverse=True)
         return candidates[0][1]
     return None
+
+
+def _resolve_file_operation_path(raw: str) -> Path:
+    """Resolve a user path. The first segment is looked up as a folder name under the
+    user profile (see *_find_folder*). If it does not exist, the path is rooted under
+    *JARVIS_DEFAULT_CREATE_PARENT* (default: Documents), not the JARVIS process CWD."""
+    if not raw or not str(raw).strip():
+        return Path.home() / "jarvis_file.txt"
+    s = str(raw).strip()
+    p = Path(s.replace("\\", "/"))
+    if p.is_absolute():
+        return _safe_path(s)
+    if not p.parts:
+        return Path.home() / "jarvis_file.txt"
+    first, *rest = p.parts
+    if first in (".", ".."):
+        return _safe_path(s)
+    found = _find_folder(first)
+    if found is not None:
+        if not rest:
+            return found
+        return (found / Path(*rest))
+    return _default_create_parent() / Path(*p.parts)
 
 
 def _resolve_screenshot_path(save_param: str | None) -> tuple[str, str | None]:
@@ -600,8 +778,8 @@ def _handle_system_control(action: str, params: dict) -> dict:
 
 def _handle_file_operation(action: str, params: dict) -> dict:
     raw_path = params.get("path", "")
-    path     = _safe_path(raw_path) if raw_path else Path.home() / "jarvis_file.txt"
-    dest     = _safe_path(params["destination"]) if params.get("destination") else None
+    path     = _resolve_file_operation_path(raw_path) if raw_path else Path.home() / "jarvis_file.txt"
+    dest     = _resolve_file_operation_path(params["destination"]) if params.get("destination") else None
 
     if action == "create_file":
         content = params.get("content", "")
@@ -975,6 +1153,12 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             "parameters": step.get("parameters", {}),
             "requires_confirmation": False,
         })
+        if sub.get("needs_confirmation"):
+            return _err(
+                f"Step {i}/{total} needs interactive confirmation ({step.get('intent')}/"
+                f"{step.get('action')}) — e.g. file create. Routines cannot complete that "
+                f"in one run; issue the command directly, or remove that step from the workflow."
+            )
         results.append(f"Step {i}: {'OK' if sub['success'] else 'FAIL'} — {sub['output'] or sub['error']}")
         if not sub["success"]:
             all_ok = False
@@ -1053,6 +1237,9 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         if cached:
             return _ok(cached[:800])
         return _ok("")
+    if action in ("quit_application", "close_jarvis"):
+        # Main window speaks `response` then calls QApplication.quit() on a timer
+        return {"success": True, "output": "", "error": "", "quit_application": True}
     return _ok(action)
 
 

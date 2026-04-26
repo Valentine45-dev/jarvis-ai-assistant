@@ -214,25 +214,8 @@ class _SysLogPanel(GlassPanel):
             "line-height:1.6;"
             "}"
         )
-        self.transcript._view.setPlainText(
-            "[14:02:44] INITIALIZING SEQUENCE...\n"
-            "[14:02:44] LOADING KERNEL MODULES [OK]\n"
-            "[14:02:45] MOUNTING VFS...       [OK]\n"
-            "[14:02:46] ESTABLISHING UPLINK... [OK]\n"
-            "[14:02:47] SYNCING TELEMETRY...\n"
-            "\n"
-            "> GET /api/v1/core/status\n"
-            "{\n"
-            "  \"status\": \"OPERATIONAL\",\n"
-            "  \"temperature\": 42.4,\n"
-            "  \"load\": [0.14, 0.22, 0.18],\n"
-            "  \"power_draw\": \"1.21 GW\",\n"
-            "  \"threat_level\": \"ALPHA_ZERO\"\n"
-            "}\n"
-            "\n"
-            "> AWAITING DIRECTIVE...\n"
-            "▌"
-        )
+        # Empty until a real user ↔ JARVIS exchange is added (no fake boot / API log).
+        self.transcript._view.setPlainText("")
         blay.addWidget(self.transcript, 1)
         outer.addWidget(body, 1)
 
