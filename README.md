@@ -1,41 +1,68 @@
 # J.A.R.V.I.S.
 
-J.A.R.V.I.S. is a desktop voice AI assistant built with Python, PyQt5, Anthropic Claude, and ElevenLabs. It presents a cinematic HUD interface and routes natural language commands into structured JSON actions for apps, files, system controls, automation, reminders, and voice feedback.
+J.A.R.V.I.S. is a desktop voice AI assistant built with Python, PyQt5, Anthropic Claude, and ElevenLabs. It presents a cinematic HUD and routes natural language into structured JSON commands for apps, files, system control, browser automation, reminders, code execution, and voice feedback.
 
-## Features
+**Full capability list (kept in sync with the code):** see [`context.md`](context.md) — section **“What JARVIS can do (capability list)”**.
 
-- PyQt5 HUD with dashboard, voice, automation, history, and settings views
-- Claude-powered JSON intent routing using the project prompt in `Claude.md`
-- Voice input through microphone capture and speech recognition
-- ElevenLabs TTS with transcript sync and typewriter-style responses
-- Animated `Thinking...` transcript placeholder while JARVIS prepares a response
-- OS command dispatcher for app launching, browser actions, screenshots, file operations, shell commands, reminders, and automation steps
-- Confirmation UI for destructive actions such as shutdown, restart, sleep, delete, force quit, deploy, and email send intents
-- Local runtime configuration through `.env` and settings UI
+---
 
-## Project Structure
+## Features (summary)
+
+### Core loop
+- **Claude** reads `CLAUDE.md` (or `Claude.md`) as the system prompt and returns **one JSON command** per request: intent, action, parameters, TTS line, HUD label, and whether **user confirmation** is required.
+- **`@tags`** (e.g. `@browser`, `@files`, `@system`) force intent routing; see the brain prompt for the map.
+- **`core/executor.py`** dispatches to OS handlers; maintains registries for **confirmation** and **dangerous** workflow steps.
+
+### Voice and HUD
+- PyQt5 HUD: **Dashboard** (transcript, arc reactor, telemetry), **Voice**, **Automation**, **History**, **Settings**.
+- **Google STT** (mic) and **ElevenLabs TTS** (with local fallback); **typewriter** transcript aligned with audio; **Thinking…** placeholder while work is in flight.
+- **Command palette** (**Ctrl+K**), **Quick Settings** (mic/TTS mute, session **auto-confirm**), **System Status** popover.
+- **Inline confirmation** in the transcript (cyan **CONFIRM** / red **CANCEL**) for both model-driven (`requires_confirmation`) and **executor** prompts (`needs_confirmation`).
+
+### What you can ask it to do (by area)
+- **Apps:** open browser, VS Code, terminal, file manager, Spotify, generic apps, URLs; close apps; **force quit** (with confirmation).
+- **Web:** Google, YouTube, GitHub, Stack Overflow, Wikipedia, generic search.
+- **Input:** type text, paste, hotkeys; mouse move, click, scroll, drag.
+- **System:** volume (incl. absolute level), screenshot (optional **region**), lock; **sleep**, **shut down**, **restart** — each **confirmed**; **sleep** vs **shut down** are distinct actions in the prompt and executor.
+- **Files:** create (with **executor confirmation** showing **file + folder** path; creates parent folders on confirm), read, delete (**confirmed**), move, copy, list, search.
+- **Code:** run Python, shell commands (`shell=False`), scripts, **git** and **npm**-style invocations.
+- **Browser (Playwright):** persistent Chrome — navigate, click, fill forms, read page, extract, screenshots, new/close tab.
+- **Screen:** OCR via Tesseract (`read_screen`).
+- **Reminders:** set, cancel, list (timer-based).
+- **Meta:** time, date, system status (CPU/memory), conversational / cache-backed answers; additional `jarvis_meta` actions are defined in **`CLAUDE.md`**.
+- **Automation:** named workflows in `data/workflows.json` — list, run, create, remove (**confirmed**), rename; dangerous steps are restricted when saving workflows.
+
+---
+
+## Project structure
 
 ```text
 .
-├── main.py              # PyQt application entry point
-├── Claude.md            # System prompt and JSON routing contract
-├── core/                # Brain, executor, voice, Vapi, signals, automation
-├── ui/                  # HUD views, widgets, theme, sidebar, dashboard
-├── config/              # Runtime configuration loader
-├── data/                # Mock history, intents, and automation examples
-├── assets/              # Logo and reference HUD assets
-├── fonts/               # Bundled UI fonts
-└── pyproject.toml       # Python dependencies and project metadata
+├── main.py                 # PyQt application entry point
+├── CLAUDE.md               # System prompt and JSON routing (try both cases on Windows)
+├── core/                   # Brain, executor, voice, browser, automation, computer control
+├── ui/                     # HUD, command palette, popovers, components (transcript / confirm card)
+├── config/                 # Runtime configuration
+├── data/                   # Mock history, intents, workflows.json
+├── assets/                 # Logo and reference assets
+├── fonts/                  # Bundled UI fonts
+├── context.md              # Handoff doc + full capability list
+└── pyproject.toml          # Dependencies and metadata
 ```
+
+---
 
 ## Requirements
 
-- Windows is the primary target for this version
-- Python matching `pyproject.toml`
-- `uv` recommended for dependency management
-- Anthropic API key for Claude intent routing
-- ElevenLabs API key for premium TTS
-- Optional Vapi API key for assistant platform sync
+- **Windows** is the primary target for this version.
+- Python matching **`pyproject.toml`** (e.g. 3.11+).
+- **`uv`** recommended for dependency management.
+- **Anthropic API key** for Claude intent routing.
+- **ElevenLabs API key** for premium TTS (optional fallback: local TTS).
+- Optional **Vapi** API key for assistant platform sync.
+- **Playwright + Chrome** for browser automation; **Tesseract** on `PATH` for OCR.
+
+---
 
 ## Setup
 
@@ -68,23 +95,28 @@ Run the app:
 uv run python main.py
 ```
 
-## How It Works
+---
 
-User input is sent to `core/brain.py`, which loads `Claude.md` as the system prompt and asks Claude to return one valid JSON command object. That parsed command is passed to `core/executor.py`, which dispatches the intent to the matching OS or assistant handler.
+## How it works
 
-For voice output, `core/voice.py` generates speech through ElevenLabs when configured, then falls back to local TTS if needed. The dashboard transcript starts with a live `Thinking...` placeholder and transitions into a typewriter animation when speech is ready.
+User input goes to **`core/brain.py`**, which loads **`CLAUDE.md`** and asks Claude for a single valid JSON command. That object is passed to **`core/executor.py`** → **`dispatch()`**, which runs the matching handler (apps, files, shell, browser, etc.).
 
-## Safety Notes
+Two confirmation paths exist: **before execute** (Claude `requires_confirmation` + executor registry) and **during execute** (`request_confirmation` → user confirms in UI → deferred callback runs). **Create file** uses the second path so the **full path** is shown on the card.
 
-JARVIS can route commands that affect the local system, including file operations, process control, shell execution, shutdown, restart, and sleep. Treat this as a trusted local assistant, not a sandbox.
+Voice output uses **`core/voice.py`** (ElevenLabs when configured). The dashboard transcript uses a **Thinking…** line, then typewriter output when audio is ready.
 
-Recommended hardening before daily use:
+---
 
-- Keep real secrets in `.env`, never committed files
-- Review destructive command confirmation behavior before enabling broad automation
-- Avoid running arbitrary shell commands from voice input until command policies are stricter
-- Keep `.env` and runtime config files out of git
+## Safety notes
+
+JARVIS can run commands that affect the local machine: files, processes, shell, power state, and browser. Treat it as a **trusted local** assistant.
+
+- Keep secrets in **`.env`**, not in git.
+- Review **confirmation** behaviour before enabling **auto-confirm** or broad automation.
+- Prefer stricter policies for **shell** and **code** execution if exposed to untrusted input.
+
+---
 
 ## Status
 
-This is an early v1 desktop assistant build. The HUD and command flow are functional, but the safety model, tests, and production hardening should be improved before relying on it for high-risk automation.
+Early desktop build: HUD and command pipeline are functional. Hardening, tests, and safety policy can be tightened for production use. See **`context.md`** for architecture detail, audit notes, and the full feature matrix.

@@ -497,6 +497,13 @@ _P: dict[tuple, dict] = {
             "'{o}' doesn't exist, sir. Create it?",
         ],
     },
+    ("confirmation", "create_file"): {
+        "ask": [
+            "Are you sure you want to create this file in this folder, sir?\n\n{o}",
+            "Are you sure you wanna create this file in this folder?\n\n{o}",
+            "Shall I create the file at the path below, sir?\n\n{o}",
+        ],
+    },
     ("confirmation", "confirmed"): {
         "ok": [
             "Done, sir.",

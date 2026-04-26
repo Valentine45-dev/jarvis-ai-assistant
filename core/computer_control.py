@@ -212,6 +212,26 @@ def ocr_screen(region: dict | None = None) -> dict:
 
 # ── SYSTEM ────────────────────────────────────────────────────────────────────
 
+def _osd_trigger(vol, exact_scalar: float) -> None:
+    """Simulate one volume key press to wake the Windows OSD, then snap back.
+
+    pycaw's SetMasterVolumeLevelScalar is silent (no Shell overlay). A real
+    key press via SendInput goes through the Windows input pipeline and shows
+    the OSD. We immediately reset to the exact scalar so the displayed value
+    is correct.
+    """
+    if _OS != "windows":
+        return
+    try:
+        pag = _pag()
+        if pag is None:
+            return
+        pag.press("volumeup")                              # wakes OSD, bumps +1 step
+        vol.SetMasterVolumeLevelScalar(exact_scalar, None) # snap back to exact level
+    except Exception:
+        pass  # OSD is cosmetic — never block the caller
+
+
 def set_volume(action: str, level: int | None = None) -> dict:
     # pycaw gives precise Windows volume control
     pycaw_missing = False
@@ -229,11 +249,13 @@ def set_volume(action: str, level: int | None = None) -> dict:
         if action == "volume_mute":
             is_muted = bool(vol.GetMute())
             vol.SetMute(not is_muted, None)
+            _osd_trigger(vol, vol.GetMasterVolumeLevelScalar())
             return _ok("Unmuted" if is_muted else "Muted")
 
         if level is not None:
             scalar = max(0.0, min(1.0, level / 100.0))
             vol.SetMasterVolumeLevelScalar(scalar, None)
+            _osd_trigger(vol, scalar)
             return _ok(f"{level}%")
 
         current = int(vol.GetMasterVolumeLevelScalar() * 100)
@@ -242,6 +264,7 @@ def set_volume(action: str, level: int | None = None) -> dict:
         else:
             new_level = max(0, current - 10)
         vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
+        _osd_trigger(vol, new_level / 100.0)
         return _ok(f"{new_level}%")
 
     except ImportError:

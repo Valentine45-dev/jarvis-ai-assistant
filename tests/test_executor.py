@@ -83,12 +83,17 @@ def test_search_youtube():
 def test_file_create():
     print("\n─── FILE CREATE ─────────────────────────────────────────────")
     print("  Creates ~/Desktop/jarvis_test.txt with content 'JARVIS was here'.")
+    print("  (First call returns path confirmation; we resolve with 'yes' as in the UI.)")
     _pause()
 
     r = _call("file_operation", "create_file", {
         "path": "~/Desktop/jarvis_test.txt",
         "content": "JARVIS was here",
     })
+    if r.get("needs_confirmation"):
+        print("  → needs_confirmation; simulating Confirm…")
+        from core.executor import resolve_confirmation
+        r = resolve_confirmation("yes")
     _report("file_operation → create_file", r)
 
 

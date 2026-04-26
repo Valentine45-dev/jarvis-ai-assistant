@@ -571,10 +571,12 @@ def _handle_system_control(action: str, params: dict) -> dict:
         return cc.lock_screen()
 
     if action in ("shutdown", "restart", "sleep"):
+        _win_root = os.environ.get("SystemRoot", r"C:\Windows")
+        _win_shutdown = os.path.join(_win_root, "System32", "shutdown.exe")
         cmds = {
             "windows": {
-                "shutdown": ["shutdown", "/s", "/t", "5"],
-                "restart":  ["shutdown", "/r", "/t", "5"],
+                "shutdown": [_win_shutdown, "/s", "/t", "5"],
+                "restart":  [_win_shutdown, "/r", "/t", "5"],
                 "sleep":    ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
             },
             "darwin": {
@@ -609,33 +611,36 @@ def _handle_file_operation(action: str, params: dict) -> dict:
             path = path / "jarvis_note.txt"
 
         parent = path.parent
-
-        if not parent.exists():
-            folder_name = parent.name
-
-            def _do_create():
-                try:
-                    parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(content, encoding="utf-8")
-                    return _ok(f"Folder created and file saved: {path.name}")
-                except PermissionError:
-                    return _err(f"Permission denied creating folder: {parent}")
-                except Exception as exc:
-                    return _err(str(exc))
-
-            from core.personality import ask as _ask
-            return request_confirmation(
-                _ask("folder_not_found", folder_name),
-                _do_create,
-            )
-
         try:
-            path.write_text(content, encoding="utf-8")
-            return _ok(f"Created: {path.name}")
-        except PermissionError:
-            return _err(f"Permission denied: {path}")
-        except Exception as exc:
-            return _err(str(exc))
+            target_display = str(path.resolve())
+        except (OSError, ValueError, RuntimeError):
+            target_display = str(path)
+        try:
+            folder_display = str(parent.resolve())
+        except (OSError, ValueError, RuntimeError):
+            folder_display = str(parent)
+
+        lines = [f"File:  {target_display}", f"Folder: {folder_display}"]
+        if not parent.exists():
+            lines.append(
+                "Note: that folder is not on disk yet — I can create it when you confirm."
+            )
+        path_summary = "\n".join(lines)
+
+        def _do_create() -> dict:
+            try:
+                if not parent.exists():
+                    parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                return _ok(f"Created: {path.name}")
+            except PermissionError:
+                return _err(f"Permission denied: {path}")
+            except Exception as exc:
+                return _err(str(exc))
+
+        from core.personality import ask as _ask
+
+        return request_confirmation(_ask("create_file", path_summary), _do_create)
 
     if action == "read_file":
         if not path.exists():
