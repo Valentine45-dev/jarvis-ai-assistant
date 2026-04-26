@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  JARVIS  Mark LXXXV brand mark.
+  JARVIS Mark LXXXV brand mark.
   Hexagonal frame around a glowing arc-reactor core.
-  Mirrors the in-app sidebar avatar (`ph.hexagon-fill`) and the
+  Mirrors the in-app sidebar avatar (ph.hexagon-fill) and the
   ArcReactorWidget so the brand reads consistently end-to-end.
-  Pure cyan stroke art  scales cleanly from 16x16 favicons up to large displays.
+  Pure cyan stroke art; scales cleanly from 16x16 favicons up to large displays.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
   <defs>

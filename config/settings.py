@@ -25,6 +25,8 @@ class AppConfig:
     wake_word: str = "jarvis"
     debug_mode: bool = False
     theme: str = "cyan"
+    # Display name for the user — spoken when asked e.g. "what's my name" (see CLAUDE.md + brain context).
+    user_name: str = "Valentine"
     tts_provider: str = "elevenlabs"
     tts_voice: str = "male-british"
     tts_speed: int = 100
@@ -62,6 +64,9 @@ class AppConfig:
                     env_val = getattr(env, key)
                     if env_val:
                         setattr(instance, key, env_val)
+                u = os.getenv("USER_NAME", "").strip()
+                if u:
+                    instance.user_name = u
                 return instance
             except Exception:
                 pass

@@ -99,15 +99,28 @@ def type_text(text: str, delay: float = 0.02) -> dict:
         return _err(str(exc))
 
 
+def _normalize_key_token(tok: str) -> str:
+    """Map common STT/NL phrases to pyautogui key names (esp. Windows key)."""
+    t = (tok or "").strip().lower()
+    aliases = {
+        "windows": "win",
+        "winkey": "win",
+        "lwin": "winleft",
+        "rwin": "winright",
+    }
+    return aliases.get(t, t)
+
+
 def press_key(combo: str) -> dict:
     pag = _pag()
     if pag is None:
         return _err("pyautogui not installed — run: uv add pyautogui")
     try:
         if "+" in combo:
-            pag.hotkey(*combo.lower().split("+"))
+            parts = [_normalize_key_token(s) for s in combo.split("+")]
+            pag.hotkey(*parts)
         else:
-            pag.press(combo.lower())
+            pag.press(_normalize_key_token(combo))
         return _ok(f"Pressed: {combo}")
     except pag.FailSafeException:
         return _err("FAILSAFE triggered — mouse moved to corner")
