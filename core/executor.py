@@ -271,6 +271,12 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
 
 def _handle_browser_automation(action: str, params: dict) -> dict:
+    # Lazy-start: only opens Chrome on the first browser command, not at app launch.
+    if not browser.is_ready:
+        browser.start()
+        if not browser.is_ready:
+            return _err(browser._start_err or "Browser failed to start.")
+
     url = params.get("url", "")
 
     if action == "navigate":

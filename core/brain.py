@@ -28,15 +28,21 @@ from core.memory import memory
 
 _CLAUDE_MD = Path(__file__).parent.parent / "Claude.md"
 
+# Cached system prompt — read once, reused every call.
+_system_prompt_text: str | None = None
 
-def _load_system_prompt() -> str:
-    try:
-        return _CLAUDE_MD.read_text(encoding="utf-8")
-    except Exception:
-        return (
-            "You are JARVIS. Return a single valid JSON object only. "
-            "No markdown, no code fences, no explanations."
-        )
+
+def _get_system_prompt() -> str:
+    global _system_prompt_text
+    if _system_prompt_text is None:
+        try:
+            _system_prompt_text = _CLAUDE_MD.read_text(encoding="utf-8")
+        except Exception:
+            _system_prompt_text = (
+                "You are JARVIS. Return a single valid JSON object only. "
+                "No markdown, no code fences, no explanations."
+            )
+    return _system_prompt_text
 
 
 # ── @tag routing ──────────────────────────────────────────────────────────────
@@ -168,13 +174,21 @@ def ask_claude(
     if ctx:
         user_msg += f"\n\ncontext: {json.dumps(ctx)}"
 
-    # 5. Call Claude — prepend conversation history for multi-turn context
+    # 5. Call Claude — prepend conversation history for multi-turn context.
+    #    The system prompt is large (~1 500 tokens); cache_control keeps it
+    #    cached for 5 minutes so repeated commands pay ~0.1× input cost.
     raw = ""
     try:
         msg = _get_client().messages.create(
             model=config.claude_model,
-            max_tokens=512,
-            system=_load_system_prompt(),
+            max_tokens=1024,
+            system=[
+                {
+                    "type": "text",
+                    "text": _get_system_prompt(),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=memory.get_messages() + [{"role": "user", "content": user_msg}],
         )
         raw = msg.content[0].text.strip()
@@ -194,6 +208,14 @@ def ask_claude(
 
     except anthropic.AuthenticationError:
         result = _fallback("invalid_api_key", raw_input)
+
+    except anthropic.RateLimitError:
+        result = _fallback("rate_limited", raw_input)
+
+    except anthropic.APIStatusError as exc:
+        if config.debug_mode:
+            print(f"[brain] API status {exc.status_code}: {exc.message}")
+        result = _fallback(f"api_error_{exc.status_code}", raw_input)
 
     except Exception as exc:
         if config.debug_mode:

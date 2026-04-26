@@ -176,9 +176,15 @@ class JarvisWindow(QMainWindow):
         # Sync JARVIS assistant config to Vapi platform (background, non-blocking)
         QTimer.singleShot(2000, sync_assistant_async)
 
-        # Start persistent Chrome session in background — doesn't block the UI
-        import threading
-        threading.Thread(target=browser.start, daemon=True, name="browser-init").start()
+        # Dim overlay — full-window dark layer toggled by Quick Settings.
+        # WA_TransparentForMouseEvents lets clicks pass through to the UI below.
+        self._dim_mode = False
+        self._dim_overlay = QWidget(self)
+        self._dim_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._dim_overlay.setStyleSheet("background:rgba(0,0,0,0.42);")
+        self._dim_overlay.hide()
+
+        self._quick_settings.dim_mode_changed.connect(self._on_dim_toggled)
 
     def _nav(self, idx):
         self._stack.setCurrentIndex(idx)
@@ -431,6 +437,7 @@ class JarvisWindow(QMainWindow):
             mic_muted=voice_engine.mic_muted,
             tts_muted=voice_engine.tts_muted,
             auto_confirm=self._auto_confirm,
+            dim_mode=self._dim_mode,
         )
         anchor = self._topbar.icon_button("settings")
         self._quick_settings.show_below(anchor)
@@ -470,6 +477,15 @@ class JarvisWindow(QMainWindow):
             "error" if on else "info",
         )
 
+    def _on_dim_toggled(self, on: bool):
+        self._dim_mode = bool(on)
+        if on:
+            self._dim_overlay.resize(self.size())
+            self._dim_overlay.raise_()
+            self._dim_overlay.show()
+        else:
+            self._dim_overlay.hide()
+
     # ── Command palette handlers ──────────────────────────────────────────────
 
     def _toggle_palette(self):
@@ -501,6 +517,8 @@ class JarvisWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "_palette") and self._palette.isVisible():
             self._palette.resize(self.size())
+        if hasattr(self, "_dim_overlay") and self._dim_overlay.isVisible():
+            self._dim_overlay.resize(self.size())
 
     def _set_state(self, s):
         self._state = s

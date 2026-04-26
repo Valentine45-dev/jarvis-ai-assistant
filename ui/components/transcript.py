@@ -65,6 +65,13 @@ class TranscriptPanel(GlassPanel):
         self._rows.append((you, y_time, jarvis, j_time, intent, conf))
         self._render()
 
+    def update_last_you(self, text, y_time=""):
+        if not self._rows:
+            return
+        _, _, jarvis, j_time, intent, conf = self._rows[-1]
+        self._rows[-1] = (text, y_time, jarvis, j_time, intent, conf)
+        self._render()
+
     def update_last_jarvis(self, text, j_time="", intent="", conf=None):
         if not self._rows:
             return

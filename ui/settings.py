@@ -525,8 +525,8 @@ class SettingsView(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(BG))
-        p.setPen(QPen(QColor(59, 73, 76, 28), 1))
-        for x in range(0, self.width(), 50):
-            p.drawLine(x, 0, x, self.height())
-        for y in range(0, self.height(), 50):
-            p.drawLine(0, y, self.width(), y)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 229, 255, 20))
+        for x in range(0, self.width() + 28, 28):
+            for y in range(0, self.height() + 28, 28):
+                p.drawEllipse(x - 1, y - 1, 2, 2)

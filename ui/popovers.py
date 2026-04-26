@@ -9,10 +9,11 @@ Public API:
             mic_muted_changed(bool)
             tts_muted_changed(bool)
             auto_confirm_changed(bool)
+            dim_mode_changed(bool)
             open_settings()
         methods:
-            show_below(QWidget)         # anchor under a topbar icon button
-            sync_state(mic, tts, conf)  # reflect current flag values on open
+            show_below(QWidget)                     # anchor under a topbar icon button
+            sync_state(mic, tts, conf, dim=False)   # reflect current flag values on open
 """
 
 from __future__ import annotations
@@ -60,19 +61,19 @@ class _ToggleRow(QWidget):
         col.setSpacing(2)
 
         lbl = QLabel(label)
-        lbl.setFont(_mono(10, bold=True))
+        lbl.setFont(_mono(11, bold=True))
         lbl.setStyleSheet(
-            "color:rgba(195,245,255,0.92);letter-spacing:1px;"
+            "color:rgba(195,245,255,0.95);letter-spacing:1px;"
             "background:transparent;border:none;"
         )
         col.addWidget(lbl)
 
         if helper:
-            help_color = WARNING if warn else "rgba(132,147,150,0.55)"
+            help_color = WARNING if warn else "rgba(160,180,185,0.82)"
             self._help_lbl = QLabel(helper)
             self._help_lbl.setStyleSheet(
                 f"color:{help_color};font-family:'Roboto Mono';"
-                "font-size:9px;letter-spacing:0.5px;"
+                "font-size:10px;letter-spacing:0.4px;"
                 "background:transparent;border:none;"
             )
             self._help_lbl.setWordWrap(True)
@@ -101,6 +102,7 @@ class QuickSettingsPopover(QFrame):
     mic_muted_changed    = pyqtSignal(bool)
     tts_muted_changed    = pyqtSignal(bool)
     auto_confirm_changed = pyqtSignal(bool)
+    dim_mode_changed     = pyqtSignal(bool)
     open_settings        = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -153,6 +155,13 @@ class QuickSettingsPopover(QFrame):
         self._row_conf.toggled.connect(self.auto_confirm_changed.emit)
         outer.addWidget(self._row_conf)
 
+        self._row_dim = _ToggleRow(
+            "DIM MODE",
+            "Reduce brightness for low-light use.",
+        )
+        self._row_dim.toggled.connect(self.dim_mode_changed.emit)
+        outer.addWidget(self._row_dim)
+
         outer.addWidget(self._sep())
 
         # Footer link → full settings page
@@ -183,11 +192,18 @@ class QuickSettingsPopover(QFrame):
 
     # ── Public API ───────────────────────────────────────────────────────────
 
-    def sync_state(self, mic_muted: bool, tts_muted: bool, auto_confirm: bool) -> None:
+    def sync_state(
+        self,
+        mic_muted: bool,
+        tts_muted: bool,
+        auto_confirm: bool,
+        dim_mode: bool = False,
+    ) -> None:
         """Reflect external flag values without re-emitting toggle signals."""
         self._row_mic.set_checked(mic_muted)
         self._row_tts.set_checked(tts_muted)
         self._row_conf.set_checked(auto_confirm)
+        self._row_dim.set_checked(dim_mode)
 
     def show_below(self, anchor: QWidget, x_offset: int = 0, y_gap: int = 6) -> None:
         """Pop up directly under *anchor*, right-aligned to its right edge.
