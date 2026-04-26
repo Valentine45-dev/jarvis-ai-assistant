@@ -7,11 +7,217 @@
 
 **Brain prompt:** `CLAUDE.md` (or `Claude.md` on case-insensitive systems) — loaded by `core/brain.py`
 
+### Session 2026-04-27 — Architecture hardening, background threads, live telemetry, workflow UI
+
+**Changes shipped in this session — quick reference:**
+
+| File | What changed |
+|------|--------------|
+| `main.py` | Phase 1: `_PendingConfirmation` dataclass, history `status` field, `_HISTORY_MAX`, `_TTS_MAX_CHARS`, amber auto-confirm banner, history persistence startup/save/clear, `import threading` |
+| `main.py` | Phase 2: `_exec_done` signal, `_execute_result` forks multi-step workflows to daemon thread, `_on_exec_done`, `_finish_execute` split |
+| `main.py` | Phase 3: `Win+J` global hotkey → `_summon_window()` |
+| `core/brain.py` | Token guard: `_infer_max_output_tokens` requires both creation verb AND file extension for 16k |
+| `core/browser.py` | `_not_ready()` auto-restarts once via `_recover()` before returning an error |
+| `core/executor.py` | `_PendingConfirmation` dataclass (typed, UUID id), replaces bare `_PENDING` dict |
+| `core/history_store.py` | **New** — SQLite history persistence (`data/session_history.db`, WAL, thread-safe) |
+| `ui/dashboard.py` | `_UplinkCard`: live TX/RX via `psutil.net_io_counters()` every 2 s, feeds sparkline |
+| `ui/automation.py` | `+ NEW` button in library header, `_NewWorkflowDialog`, `_create_workflow()` method |
+| `ui/history.py` | `history_cleared = pyqtSignal()`, emitted from `_on_clear()` |
+| `.gitignore` | Added `data/session_history.db`, `data/session_history.json` |
+
+---
+
+## How to Test — Session 2026-04-27 Changes
+
+Run JARVIS first: `uv run python main.py`
+
+---
+
+### 1 — History persists across restarts
+
+**What it tests:** `core/history_store.py` + SQLite at `data/session_history.db`.
+
+```
+1. Run JARVIS. Issue any command (e.g. "What time is it?").
+2. Close JARVIS normally (X button or "Close JARVIS").
+3. Re-launch with `uv run python main.py`.
+4. Open the History view (sidebar → HISTORY).
+5. Your previous command should appear in the list.
+```
+
+Expected: history survives across restarts. The DB file `data/session_history.db` will be created on first run (gitignored).
+
+---
+
+### 2 — Auto-confirm banner (amber warning)
+
+**What it tests:** persistent visual warning when auto-confirm is active.
+
+```
+1. Click the sliders icon in the TopBar (Quick Settings popover).
+2. Toggle AUTO-CONFIRM on.
+3. An amber banner should appear between the TopBar and the content area:
+   "⚠  AUTO-CONFIRM ACTIVE — DESTRUCTIVE ACTIONS WILL EXECUTE WITHOUT PROMPT"
+4. Toggle AUTO-CONFIRM off → banner disappears.
+```
+
+---
+
+### 3 — Background workflow execution (UI stays responsive)
+
+**What it tests:** `_execute_result` forks `automation_task`+`run_workflow`+`steps` to a daemon thread.
+
+```
+1. Type a multi-step command, e.g.:
+   "Open Notepad and take a screenshot"
+   — or —
+   "Search YouTube for Iron Man and search Google for Python"
+2. While JARVIS processes:
+   - The status label should read "Running workflow — please wait…"
+   - The window should NOT freeze — you can still click the sidebar, scroll, etc.
+3. After execution, the HUD, transcript, and history should update normally.
+```
+
+If you had the old code, multi-step workflows would lock the Qt event loop (the window would be unresponsive until done). With this change, everything stays live.
+
+---
+
+### 4 — UPLINK real TX/RX throughput
+
+**What it tests:** `_UplinkCard._tick_net()` via `psutil.net_io_counters()`.
+
+```
+1. On the Dashboard (default view), look at the bottom-right panel: UPLINK_STATUS.
+2. TX (Mb/s) and RX (Mb/s) should show real numbers (initially near 0 if idle).
+3. To see them change: say "Open YouTube" or start a download in any app.
+4. Within 2 seconds, the RX number should spike and the sparkline should update.
+```
+
+Old value: hardcoded "452.1" / "1208.4" — frozen decorative. New value: real sampled throughput.
+
+---
+
+### 5 — Win+J global summon hotkey
+
+**What it tests:** `Meta+J` QShortcut → `_summon_window()`.
+
+```
+1. Launch JARVIS.
+2. Click on any other window (e.g. a browser, Notepad) so JARVIS loses focus.
+3. Press Windows key + J.
+4. JARVIS should come to the foreground and be activated.
+```
+
+Note: `Meta` = Windows key in Qt on Windows. This only works while JARVIS is running (it's an in-app shortcut, not a system-level hotkey daemon).
+
+---
+
+### 6 — Create Workflow UI
+
+**What it tests:** `_NewWorkflowDialog` + `+ NEW` button in Automation view.
+
+```
+1. Navigate to Automation (sidebar → AUTOMATION).
+2. In the WORKFLOW LIBRARY panel header, click "+ NEW".
+3. A dialog appears with two fields:
+   - WORKFLOW NAME  (e.g. "Morning Routine")
+   - TRIGGER PHRASE (e.g. "run morning routine")
+4. Fill them in and click OK.
+5. The new workflow should appear immediately in the library list.
+6. The execution log should show: "[SYSTEM] Workflow 'Morning Routine' created."
+7. The workflow starts with 0 steps (skeleton). Run it via voice: "Run morning routine"
+   — it will complete instantly with nothing to do (add steps via CLAUDE.md / voice later).
+```
+
+---
+
+### 7 — History clear syncs to DB
+
+**What it tests:** `history_cleared` signal + `main._on_history_cleared()`.
+
+```
+1. Run JARVIS and issue a few commands.
+2. Navigate to History view → click "CLEAR HISTORY".
+3. The list should empty.
+4. Restart JARVIS — the history should still be empty (DB was cleared too).
+```
+
+---
+
+### 8 — TTS truncation guard
+
+**What it tests:** `_TTS_MAX_CHARS = 800` in main.py.
+
+```
+1. Say: "Read what's on this page" (while browser is open on a content-heavy page).
+2. JARVIS should speak a truncated version of the page (ending with "…") rather than
+   reading thousands of characters (which would timeout or burn ElevenLabs quota).
+3. The transcript panel shows the FULL text; only the TTS clip is truncated.
+```
+
+---
+
+### 9 — Claude token guard
+
+**What it tests:** `_infer_max_output_tokens` in `brain.py` — only uses 16k when creating a file.
+
+```
+- "Create a Python file called utils.py" → uses 16k output tokens (content needed)
+- "What is my utils.py file doing?" → uses standard 1024 tokens (read question, no content)
+- "What file should I create?" → standard tokens (no creation verb + extension)
+```
+
+No UI indicator for this — just cost/speed. Verify in `core/brain.py` logs if needed.
+
+---
+
+### Session 2026-04-26 — Post-action follow-up (normal commands, not only timers)
+
+- **Goal:** For **immediate** commands, the user hears **Claude’s `response` first** (primary line), then a **short JARVIS-style “done” line** after the first audio clip **finishes** — same *tone/pools* as timer completions (`ack_scheduled_action`), e.g. *“There you go — it’s open, sir.”* / *“…results are up, sir.”* **Multi-clause** workflows (e.g. *open Chrome and search X*) get the follow-up phrased for the **last successful step** when possible.
+- **`core/personality.py`:** **`action_speech_pair(..., last_step=None)`** returns **`(primary: str, follow: str | None)`**. **Full listings / OCR / `read_page` / code output** use **`_NO_TRIM`** and stay **one TTS** (no chaser, so the body isn’t trailed by a redundant *“all set”*). **`build_response(...)`** joins **`primary` + `follow`** for display strings where a single field is still useful.
+- **`core/executor.py`:** On successful **`automation_task` + `run_workflow`**, the result dict may include **`last_step_intent`** and **`last_step_action`** (from the last **successful** step) so the follow-up line matches that intent/action, not the generic automation label.
+- **`core/voice.py`:** **`say(text, on_ready=…, on_done=…)`** — **`on_done`** after playback **ends** (stream + non-stream MCI paths, **pyttsx3** fallback). If **TTS is muted**, **`on_ready`** and **`on_done`** still fire in order so the UI does not hang.
+- **`main.py`:** First clip: **`on_ready` → `_tts_ready` → `update_last_jarvis(primary)`** (unchanged). If **`follow`**: **`on_done`** (worker thread) **`emit`s `_action_followup_tts` → `Qt.QueuedConnection` → `_on_action_followup_tts`**, which **`append_jarvis_scheduled`**, merges **`jarvis` in `_history`**, refreshes the History card, and **`voice_engine.say(follow)`**. **`_transcript_update_token`** invalidates a pending follow-up if a **new** command runs first. **Action reminders** (`_on_reminder_action`) still call **`ack_scheduled_action`** for their **single** completion line.
+- **`ui/voice.py`:** **`append_jarvis_continuation(...)`** appends a second JARVIS row on the Voice timeline without duplicating the user line.
+- **Removed (superseded):** speaking **`run_workflow`** step text via **`_flatten_workflow_output_for_tts`** as the *only* TTS — the primary is again Claude’s short **`response`**; facts remain in executor **`output` / UI**, not a long flatten read aloud.
+
 ---
 
 ## What Was Built
 
 JARVIS (Just A Rather Very Intelligent System) — an Iron Man-style voice AI desktop assistant with a full PyQt5 HUD, Claude API brain, ElevenLabs voice, and real OS/browser control.
+
+### Session 2026-04-26 — Top bar battery + Wi‑Fi
+
+- **File:** `ui/bars.py`
+- **Battery:** Mobile-style **glyph** (rounded body, right terminal, fill level) plus **`NN%`** text immediately to the right, placed after **UPTIME** in the center stat strip. **Fill colour:** low (<20%) **amber/orange**; on **AC** **emerald**; otherwise **HUD cyan** (`CYAN` from `ui/theme.py`). When **AC / charging** (`power_plugged`), a small **white lightning bolt** is drawn **on top**, centered on the upper edge of the battery (overlaps the outline slightly), like phone status bars. **Source:** `psutil.sensors_battery()`. The whole block is **hidden** when the OS reports no battery (typical **desktop** tower).
+- **Wi‑Fi:** Custom **3-arc + dot** icon in the same strip; **shown only** when a **data-capable** Wi‑Fi path is detected: **(1)** a wireless-like interface (name matches `wi-fi` / `wlan` / `wireless` / `wlp` / etc.) is **up** and has a **non–link-local IPv4**, or **(2)** on **Windows** `netsh wlan show interfaces` matches `State : connected` (covers naming quirks). **Hidden** on Ethernet-only or offline.
+- **Update cadence:** same **1s** `QTimer` as MEM/UPTIME (`TopBar._tick`).
+
+### Session 2026-04-26 — Dashboard directive field (height cap + scroll) + `press_key` aliases
+
+- **`ui/widgets.py` (`_TagLineEdit`):** Multi-line directive field **stops growing** after a small cap (**`_H_MAX` = 108px**), then **overflow scrolls** (`ScrollBarAsNeeded` when content exceeds the cap). **`QTextEdit.WidgetWidth`** line wrap (was `NoWrap`). **`resizeEvent`** calls `_reflow_height` so wrapped line count updates when the field is resized. **`contentHeightChanged`** emits **`self.height()`** after layout.
+- **`ui/dashboard.py` (`_InputBlock`):** Input card height **capped** (`min(..., 160)` for `INPUT_H`, down from 220) to match the editor behaviour. **Bug fix:** **`_CommandStrip`** only called `setFixedHeight` once in `__init__`; when the block grew, the strip stayed short and layout broke. **`_on_input_editor_height`** now sets **`parent().setFixedHeight(self.height())`** so the strip tracks the block whenever the editor height changes.
+- **`core/computer_control.py`:** **`_normalize_key_token()`** maps natural names (e.g. **`windows` → `win`**, **`winkey` → `win`**, **`lwin`/`rwin` → `winleft`/`winright`**) before **`press_key`** calls PyAutoGUI **`hotkey`** / **`press`**, so STT/brain output like `windows+m` works. **Win+M** (minimise all) needs the brain to route **`type_text` + `press_key`** with a combo such as `win+m`, not **`control_mouse`**; phrasing *“click Win+M”* can mis-route to mouse — prefer *press* / *send* or **`@type`**.
+
+### Session 2026-04-26 — Tooltips (readability) + bottom bar PING + NET speed
+
+- **`ui/theme.py`:** **`tooltip_qss()`** — global **`QToolTip`** QSS: readable **`on_surface`** text on **`surface_container`** background, cyan border, 11px, padding. **`main.py`:** set **`QPalette.ToolTipBase` / `ToolTipText`**, then **`app.setStyleSheet(tooltip_qss())`** (Fusion’s defaults were nearly **black-on-black** for tooltips).
+- **`ui/dashboard.py`:** Directive field tooltip shortened to **two lines** (`\n`): *Enter — send* / *Shift+Enter — new line* (narrower bubble).
+- **`core/net_telemetry.py` (new):** **`icmp_ping_ms`**, **`tcp_connect_rtt_ms`**, **`probe_internet_rtt()`** (rotating ICMP hosts `1.1.1.1` / `8.8.8.8` / `1.0.0.1` / `9.9.9.9`, then **TCP `1.1.1.1:443`** if ICMP fails); **`smooth_rtt_ema`**, **`format_rate_bps`**, **`ThroughputSampler`** ( **`psutil.net_io_counters()`** delta → bytes/s up+down, all interfaces).
+- **`ui/bars.py` (`BottomBar`):** **`PING NNms`** (EMA-smoothed; **`—`** after two consecutive failed probes to avoid flicker) via **`_RttWorkerThread`** ( **`QThread`**, does not block UI); refresh loop ~**2.5s**. **`NET ↑… ↓…`** (K/s or M/s) via **`QTimer` (1s)**. Tooltips describe ICMP/TCP and total interface throughput. **`_stop_rtt_thread()`** idempotent — **`QApplication.aboutToQuit`** + **`main.JarvisWindow.closeEvent`**.
+- **`ui/theme.py`:** **`BOTBAR_H` 38 → 40** to fit the new labels.
+- **`main.py`:** Calls **`_botbar._stop_rtt_thread()`** in **`closeEvent`** before **`browser.stop()`**.
+- **`tests/test_net_telemetry.py`:** Non-network unit tests for **`format_rate_bps`**, **`smooth_rtt_ema`**, **`_parse_icmp_time_ms`**, **`ThroughputSampler`**.
+
+### Session 2026-04-26 — Action reminders (`set_reminder` + `run`)
+
+- **Goal:** Reminders are not only **notify** (toast / `REMINDER: …`); the model can attach **`parameters.run`** = one **`{ intent, action, parameters }`** step that **`dispatch()`** runs when the timer fires (Qt main thread via **`signals.reminder_action`**).
+- **`core/executor.py`:** **`_is_schedulable_reminder_action`**, **`_validate_reminder_run`**, **`_format_run_summary`**. Registry **`_reminder_meta`** (message, run, schedule_confidence) + **`_active_reminders[id]`** timers; cancel by **message** (all matches); list shows IDs. **Blocked** from scheduling: `file_operation`, `code_execution`, `automation_task`, nested `reminder_task`, `close_app`, `type_text`, `control_mouse`, power/sleep/force-kill, etc. **Allowed** example families: `open_app`, `search_web`, safe `system_control`, `browser_automation` (navigate, read_page, …), `read_screen`, read-only `jarvis_meta`.
+- **`core/signals.py`:** **`reminder_action.emit(dict)`** — **`main._on_reminder_action`** → **`dispatch(..., confirmed=True)`**, transcript **`append_jarvis_scheduled`**, TTS, history, toasts.
+- **`ui/components/transcript.py`:** **`append_jarvis_scheduled`**, **`_render`** skips empty **`YOU:`** line.
+- **`tests/test_reminder_scheduled.py`:** Unit tests for **`_validate_reminder_run`** (no network).
+- **`CLAUDE.md`:** `set_reminder` + **`run`** + **`schedule_confidence`** documented in **`reminder_task`** section.
 
 ---
 
@@ -21,14 +227,17 @@ This is the **authoritative “what it does now”** summary (executor + brain +
 
 ### Brain, memory, and routing
 - **Claude** returns a **single JSON** command per user utterance: `intent`, `action`, `parameters`, `confidence`, `response`, `hud_status`, `requires_confirmation`.
+- **“I'm unable to process that request.” (unknown, ~0%)** comes from **`core/brain._fallback`**, not from normal **`intent: "unknown"`** routing. Typical causes: **invalid JSON** from the model (e.g. **unescaped newlines** or quotes inside `create_file`’s `content` string), **JSON truncated** (former **`max_tokens=1024`** was too small for long `content`), prose before/without a parseable object, or **API errors** (auth, rate limit). **Fixes in code:** `brain.py` uses higher **`max_tokens`** for file-like prompts, **extracts the first balanced `{...}`** if the model prefaces with text, and **`CLAUDE.md`** instructs strict JSON escaping for **`create_file`**. **Restart the app** after changing **`CLAUDE.md`** (system prompt is cached in-process).
 - **`@tags`** in the command bar (e.g. `@browser`, `@files`, `@system`) override intent; see `CLAUDE.md` for the full map.
 - **Conversation memory** (`core/memory.py`) — rolling window (~8k tokens est.), pairs trimmed together.
 - **STT** normalisation (whitespace / punctuation) before routing.
 
 ### Voice and UI shell
 - **Voice:** Google STT (mic) → command; **ElevenLabs TTS** (with **pyttsx3** fallback), streaming + transcript **typewriter** sync; mic/TTS **mute** toggles; **`Thinking...`** state while work is in progress.
-- **HUD:** Dashboard (transcript, arc reactor, telemetry, gauge), **Voice**, **Automation**, **History**, **Settings**; **TopBar** (Quick Settings, **Command palette** / **Ctrl+K**, System Status); **toasts**; **inline confirm card** (cyan CONFIRM / red CANCEL).
+- **HUD:** Dashboard (transcript, arc reactor, telemetry, gauge), **Voice**, **Automation**, **History**, **Settings**; **TopBar** (CPU / MEM / UPTIME, **battery** + **Wi‑Fi** when available, Quick Settings, **Command palette** / **Ctrl+K**, System Status); **toasts**; **inline confirm card** (cyan CONFIRM / red CANCEL).
 - **Command palette** — text commands + `@` tags, recent history.
+- **Main directive field (bottom bar):** **Enter** sends the command (same as the ↵ control); **Shift+Enter** inserts a **newline** for multi-line text. The editor is `QTextEdit` subclass `_TagLineEdit` in `ui/widgets.py` (emits `contentHeightChanged` for layout); the dashboard input card resizes with line count in `_InputBlock` (`ui/dashboard.py`). **Tooltip (two lines):** *Enter — send* / *Shift+Enter — new line*; app-wide **QToolTip** contrast via `tooltip_qss()` + palette in `main.py`.
+- **Bottom status bar `BottomBar`:** **`SYSTEM ONLINE`**, **`PING …ms`**, **`NET ↑… ↓…`** (live throughput), command count, current view. See `core/net_telemetry.py` + `ui/bars.py`.
 - **Quick Settings** — mic mute, TTS mute, **auto-confirm** (session-only: skips the *UI* hold; executor registries still apply for dangerous pairs).
 
 ### Confirmation model (two layers)
@@ -44,10 +253,10 @@ This is the **authoritative “what it does now”** summary (executor + brain +
 - **Close** an app; **force quit** a process (with confirmation). Windows uses `taskkill` with correct flags when applicable.
 
 ### Web search (`search_web`)
-- **Google**, **YouTube**, **GitHub**, **Stack Overflow**, **Wikipedia**, or generic **web search** — opens the default browser with the right query URL.
+- **Google**, **YouTube**, **GitHub**, **Stack Overflow**, **Wikipedia**, or generic **web search** — builds the right query URL; if the **Playwright** session is up, uses **`browser.navigate(url)`** (same Chrome JARVIS controls), otherwise falls back to **`webbrowser.open(url)`** (default browser). *Note: Google may show the `google.com/sorry` interstitial on automated Chrome; use `search_web` vs workflows that only `navigate` the Playwright window accordingly.*
 
 ### Input automation (`type_text`, `control_mouse`)
-- **Type** text, **paste**-style, or **press keys** (including combos, e.g. `ctrl+c`).
+- **Type** text, **paste**-style, or **press keys** (including combos, e.g. `ctrl+c`). Implementation: `executor` → `_handle_type_text` → **`press_key`** in `core/computer_control.py` (PyAutoGUI). Natural language like *press Enter*, *Ctrl+V*, *tab* should route to `type_text` with **`action`: `press_key`** and **`parameters.key`** (see `CLAUDE.md` for allowed key names). **Clicks** on screen pixels or UI are **`control_mouse`** (e.g. `click`); that path does **not** replace keyboard input — ask the brain to use the right intent so STT/NL does not conflate *click* (mouse) with *press a key* (keyboard).
 - **Mouse:** move, click, double-click, right-click, **scroll**, **drag** (coordinates per `computer_control` / PyAutoGUI).
 
 ### System control (`system_control`)
@@ -58,6 +267,7 @@ This is the **authoritative “what it does now”** summary (executor + brain +
 - *Planned/extended in schema:* brightness, WiFi/BT toggles — only if implemented in `executor` / `computer_control` (check code before advertising beyond volume/lock/screenshot/sleep/restart/shutdown).
 
 ### File operations (`file_operation`)
+- **Relative path resolution:** first segment is resolved as a **folder name** under **`Path.home()`**: fast checks (Documents, Desktop, etc.), then a **bounded `os.walk`** of the user profile (depth cap, prunes e.g. `node_modules`, `.git`, large AppData paths). If no folder matches, new paths are rooted under **`JARVIS_DEFAULT_CREATE_PARENT`** in `.env` (`documents` \| `desktop` \| `downloads` \| `home`; default **Documents**), **not** the JARVIS process CWD. Implementation: **`core/executor.py`** (`_find_folder`, `_resolve_file_operation_path`, etc.).
 - **create_file** — **path confirmation** in UI (file + folder + note if folder will be created), then write.
 - **read_file** — read text (with optional fuzzy locate by filename).
 - **delete_file** — **requires_confirmation** (brain or registry).
@@ -72,19 +282,22 @@ This is the **authoritative “what it does now”** summary (executor + brain +
 - **git_command** / **npm_command** — same execution path as shell, parsed with `shlex`.
 
 ### Browser automation — Playwright (`browser_automation`)
-- Persistent **Chrome** session: **navigate**, **click** (selector / text / x,y), **fill_form**, **read_page**, **extract** by selector, **screenshot** (page or element), **new_tab**, **close_tab**.
+- Persistent **Chrome** session: **navigate**, **click** (selector / text / x,y, with **search** fallbacks including **Enter** on the search field when the submit button is stale), **fill_form**, **read_page** (see below), **extract** by selector, **screenshot** (page or element), **new_tab**, **close_tab** (optional **`url_contains` / `title_contains` / `match`** to close a **specific** tab, not only the active one).
+- **`read_page`:** returns a **tab header** (document **title** + **URL**) and then **visible body text** (up to 4k chars of content). If no text is extractable (e.g. empty / blocked page), the header is still returned with a short note. **`personality._NO_TRIM`** includes **`read_page`** so the HUD/TTS is not hard-truncated to ~100 characters.
 
 ### Read screen / OCR (`read_screen`)
 - **OCR** full screen, **region**, or as wired in `computer_control` (Tesseract must be on **PATH**).
 
 ### Reminders (`reminder_task`)
-- **set_reminder** (delay floor enforced in executor), **cancel_reminder**, **list_reminders** (threading timer / background).
+- **set_reminder** (delay floor **5s** in executor), **cancel_reminder**, **list_reminders** (threading **Timer** + metadata).
+- **Action reminders:** optional **`parameters.run`** = one schedulable step; when the timer fires, **`reminder_action`** → **`main._on_reminder_action`** runs **`dispatch`** (see **`CLAUDE.md`** allowlist). Message-only timers still emit **`status_changed`**: `REMINDER: …`.
 
 ### JARVIS meta (`jarvis_meta`)
-- **tell_time**, **tell_date**, **status_report** (CPU/memory via psutil), **conversational** (can use page cache); other actions (theme, help, etc.) are defined in **`CLAUDE.md`** for the model — wire-up in `executor` may be partial; trust **`CLAUDE.md`** + `personality.say` for what is spoken.
+- **tell_time**, **tell_date**, **status_report** (CPU, memory, **battery** when `sensors_battery()` is available), **conversational** (can use page cache); other actions (theme, help, etc.) are defined in **`CLAUDE.md`** for the model — wire-up in `executor` may be partial; trust **`CLAUDE.md`** + `personality.say` for what is spoken.
 
 ### Automation (`automation_task`)
 - **list_workflows**, **create_workflow**, **remove_workflow** (with confirmation), **rename_workflow**, **run_workflow** from JSON `data/workflows.json` via `WorkflowLibrary`. Dangerous step types are **blocked** in library validation (see `_DANGEROUS_STEPS` / `_BLOCKED_INTENTS`).
+- **UI `+ NEW` button** in the Automation page WORKFLOW LIBRARY panel — opens a minimal dialog (name + trigger phrase) to create a skeleton workflow directly from the UI without a voice command.
 
 ### Unknown
 - **unknown** — safe fallback; no action.
@@ -102,6 +315,50 @@ This is the **authoritative “what it does now”** summary (executor + brain +
 
 ---
 
+## Session work — 2026-04-26 (path resolution, browser read, UI mocks, skills, product notes)
+
+Handoff of **what was implemented and decided** in that session (may span multiple local commits). Use this when onboarding or avoiding repeated mistakes.
+
+### File paths (`core/executor.py`)
+
+- **`_find_folder(name)`** — Resolves a folder **by name** for the first segment of relative paths: shortcuts (`documents`, `desktop`, …), then one-level scan under common roots, then **profile-wide** exact directory-name match via **`_find_all_exact_name_in_profile`** (depth cap **`_HOME_WALK_MAX_DEPTH`**, prunes dir names and path fragments to skip huge trees).
+- **Disambiguation:** **`_pick_best_of_matches`** — shallowest path wins; paths under **Documents** preferred among ties.
+- **`_resolve_file_operation_path`** — If the first segment is not found, builds under **`_default_create_parent()`** from **`JARVIS_DEFAULT_CREATE_PARENT`** (see **`.env.example`**) instead of the project CWD.
+- **Lint fix:** `_HOME_PRUNE_PATH_FRAGMENTS` — avoid invalid **raw** strings ending in `\` (use escaped normal strings).
+- **Docs:** **`CLAUDE.md` / `Claude.md`** — path resolution and env var; **`search_web` execution** note was discussed (user may have **reverted** default-browser-only search; **verify `executor._handle_search_web`** in tree).
+
+### Browser (`core/browser.py`)
+
+- **`read_page`:** prepends **document title** and **URL** of the **Playwright** tab, then **page content**; succeeds with tab info even when body text is empty (instead of a hard error that triggered “couldn’t extract anything useful” for questions like *which page are you on?*).
+- No separate `page_info` action in the **current** design — **check `executor` + `personality.py`** if that was added then removed.
+
+### Personality (`core/personality.py`)
+
+- **`_NO_TRIM`** extended with **`("browser_automation", "read_page")`** so long `read_page` output is not collapsed to a tiny snippet for TTS/HUD.
+
+### UI — no mock seed (`main.py`, `ui/dashboard.py`, `ui/history.py`, `data/mock.py`)
+
+- **SYS_LOG_BUFFER** starts **empty** (no fake boot log JSON / kernel lines in **`dashboard._SysLogPanel`**).
+- **Session history** no longer pre-filled from **`MOCK_HISTORY`**; **History** view initial load uses **empty** list, not **`MOCK_HISTORY_FULL`**.
+- **`data/mock.py`:** `MOCK_HISTORY` / `MOCK_HISTORY_FULL` as **empty** lists; optional **`MOCK_AUTOMATIONS`** kept as sample data only.
+
+### Cursor: `/learn` skill (optional)
+
+- **Path:** **`.cursor/skills/learn/SKILL.md`** (project). **Default `.gitignore` ignores `.cursor/`** — to version the skill, use **`git add -f .cursor/skills/learn/SKILL.md`** or a gitignore exception.
+- **Intent:** user **`/learn <topic>`** → **deep research** (sources) → **write** `context/learnings/<slug>.md` for durable project memory.
+
+### Architecture notes (conversation, not all code)
+
+- **Claude API key** is used in **`core/brain.py`** only; **`core/executor.py`** and **`core/computer_control.py`** do **not** call Anthropic — they consume the **JSON** from the brain. **Strong JSON** = prompt + validation + allowlists, not “wire the API into every module.”
+- **File / search in executor** uses **Python** (`pathlib`, `os.walk`, etc.); **shell** is only where **`code_execution` → `run_shell`** (or similar) is intentional.
+- **Google `google.com/sorry`:** Playwright-driven **Google search** can hit “unusual traffic” — product fix discussed was **`webbrowser.open` + `google.com/search` for `search_web`**; confirm **`_handle_search_web`** in repo if that stuck after user revert.
+
+### Git
+
+- Example commit groupings for this batch were suggested in chat (core vs UI, optional `git add -f` for the learn skill). **Use `git status`** before committing.
+
+---
+
 ## Project Structure
 
 ```
@@ -116,6 +373,7 @@ jarvis-project/
 │   ├── automation.py        # WorkflowLibrary (JSON) — load/save workflows, step validation
 │   ├── executor.py          # Intent dispatch — handlers, dispatch() + confirmation registry
 │   ├── computer_control.py  # OS control — mouse, keyboard, OCR, clipboard, volume
+│   ├── net_telemetry.py     # HUD: ICMP/TCP RTT, psutil throughput helpers
 │   ├── browser.py           # Playwright Chrome session — navigate, click, fill, read, tabs
 │   ├── voice.py             # ElevenLabs TTS (streaming) + Google STT
 │   ├── signals.py           # Qt signal hub
@@ -136,13 +394,15 @@ jarvis-project/
 ├── config/
 │   └── settings.py          # AppConfig — loads .env, never writes API keys to disk
 ├── data/
-│   ├── mock.py              # Mock history for startup
+│   ├── mock.py              # Empty `MOCK_HISTORY` stubs; optional `MOCK_AUTOMATIONS` samples (not used by main)
 │   ├── intents.py           # Intent definitions
 │   └── workflows.json      # Named workflow library (user-editable / UI-backed)
 └── tests/
     ├── test_computer_control.py   # 6 tests: clipboard, keyboard, screenshot, OCR, mouse, volume
     ├── test_executor.py           # 15 tests: open/close app, web search, file ops, mouse, meta, reminders
-    └── test_browser.py            # 15 tests: navigate, click, fill, read, screenshot, tabs
+    ├── test_browser.py            # 15 tests: navigate, click, fill, read, screenshot, tabs
+    ├── test_net_telemetry.py      # Unit: format_rate, EMA, ICMP parse, throughput sampler
+    └── test_reminder_scheduled.py # Unit: _validate_reminder_run for action reminders
 ```
 
 ### Intent quick reference (14 categories)
@@ -151,7 +411,7 @@ jarvis-project/
 |---|---|---|
 | `open_app` | `@app` | Launch apps, open URLs (browser or Playwright) |
 | `close_app` | — | Close app; force quit (with confirm) |
-| `search_web` | `@search` | Google, YouTube, GitHub, Stack Overflow, Wikipedia |
+| `search_web` | `@search` | Query URLs — Playwright **navigate** if session up, else default browser (see capability text) |
 | `type_text` | `@type` | Type text, paste, key combos |
 | `control_mouse` | `@mouse` | Move, click, scroll, drag |
 | `system_control` | `@system` | Screenshot, volume, lock, **sleep** / **shutdown** / **restart** (with confirm) |
@@ -160,7 +420,7 @@ jarvis-project/
 | `browser_automation` | `@browser` | Playwright: navigate, click, fill, read, tabs, screenshots |
 | `read_screen` | `@screen` | OCR (Tesseract) |
 | `automation_task` | `@automate` | Workflows: list, run, create, remove, rename |
-| `reminder_task` | `@remind` | Set, cancel, list timed reminders |
+| `reminder_task` | `@remind` | Set / cancel / list reminders; optional **scheduled action** via `run` |
 | `jarvis_meta` | `@jarvis` | Time, date, status, **conversational**; other meta in `CLAUDE.md` |
 | `unknown` | — | No action; graceful fallback |
 
@@ -171,11 +431,20 @@ jarvis-project/
 ### Signal Flow
 ```
 User input → _process_cmd() → ask_claude_async() → _brain_result_ready signal
-→ _on_brain_result() → _execute_result() → dispatch(result)
-→ voice_engine.say(text, on_ready=λ: _tts_ready.emit())
-→ ElevenLabs streams → on_ready() → _tts_ready signal → Qt main thread
-→ transcript.update_last_jarvis() → typewriter animation starts
+→ _on_brain_result() → _execute_result()
+    ├─ (single-intent or non-workflow) → dispatch(result) → _finish_execute(...)
+    └─ (automation_task + run_workflow + steps) → daemon Thread → dispatch(result)
+                                                   → _exec_done.emit(payload)
+                                                   → _on_exec_done() → _finish_execute(...)
+
+_finish_execute():
+→ voice_engine.say(primary, on_ready=λ: _tts_ready.emit(), on_done=λ: _action_followup_tts.emit when follow)
+→ ElevenLabs streams → on_ready() → _tts_ready → transcript.update_last_jarvis(primary)
+→ (after first clip ends) on_done() → _action_followup_tts → append_jarvis_scheduled + say(follow)
 ```
+When there is **no** follow-up line, behaviour matches the old single-clip path (`on_done` omitted).
+For **multi-step workflows**, `dispatch()` runs in a daemon thread so the Qt event loop stays live.
+The `_exec_done` signal (Qt signal, thread-safe) bridges the result back to the main thread.
 
 ### Thread Safety
 - All worker→UI updates go through `pyqtSignal` — never direct widget access from threads
@@ -183,9 +452,9 @@ User input → _process_cmd() → ask_claude_async() → _brain_result_ready sig
 - `ConversationMemory` uses `threading.Lock` on all mutations
 
 ### TTS/Transcript Sync
-- `voice_engine.say(text, on_ready=callback)` — event-driven, not timer-based
+- `voice_engine.say(text, on_ready=…, on_done=…)` — event-driven; `on_done` when playback **finishes** (for chaining a **second** line)
 - `on_ready()` fires when ElevenLabs first audio chunk is ready to play
-- Transcript typewriter animation starts exactly when audio begins — zero guesswork
+- Transcript typewriter for **primary** still starts on `on_ready` — the **follow-up** is appended (scheduled-style row) when `on_done` runs, then spoken in a second clip
 
 ### Conversation Memory
 - `core/memory.py` — `ConversationMemory` class
@@ -216,7 +485,7 @@ User input → _process_cmd() → ask_claude_async() → _brain_result_ready sig
 
 ### HUD Telemetry
 - CPU — live chart + segmented bar (1s poll, psutil)
-- MEM — percentage + GB readout (2s poll, psutil)
+- **MEM_ALLOC** (`ui/dashboard.py` — class **`_MemCard`**) — label is HUD shorthand for **system RAM in use**, not a per-process malloc debug view. **Data:** `psutil.virtual_memory()` every **2s** — **used GB** (header), **%** of total, **used / total GB** (detail line), **8-segment bar** = `mem.percent`. Same thing you see in Task Manager “Memory” as overall utilisation: how much physical RAM is currently **used** by the OS and programs (vs sitting free or cached).
 - UPLINK — TX/RX display + sparkline
 - Session uptime — fills over 4-hour session
 
@@ -366,8 +635,17 @@ uv add anthropic elevenlabs playwright pyautogui pytesseract pyperclip pyttsx3 \
 | `core/automation.py` + `data/workflows.json` | ✅ Workflow library, executor + Automation UI |
 | End-to-end voice test | ⏳ Pending API key (when keys missing) |
 | GitHub push | ⏳ Pending — repo: `github.com/Valentine45-dev/jarvis-ai-assistant` |
-| `core/browser.py` Playwright thread hardening | 🔮 V2 — dedicated browser thread + queue |
-| Phase 1 UX audit fixes (confirm bar, history clear, auto-confirm hardening) | ⏳ See `context.md` — planned, not all implemented here |
+| `core/browser.py` Playwright thread hardening | 🔮 V2 — dedicated browser thread + queue (browser crash auto-restart now handled by `_not_ready()` → `_recover()`) |
+| Phase 1 UX audit — confirm bar, history clear, auto-confirm banner | ✅ Shipped 2026-04-27 |
+| History status field written on every dispatch | ✅ Shipped 2026-04-27 |
+| History persistence (SQLite) | ✅ `core/history_store.py` shipped 2026-04-27 |
+| Phase 2 — background workflow execution | ✅ `_exec_done` + daemon thread shipped 2026-04-27 |
+| Phase 3 — UPLINK real TX/RX | ✅ `_UplinkCard._tick_net()` shipped 2026-04-27 |
+| Phase 3 — Win+J summon hotkey | ✅ `Meta+J` QShortcut shipped 2026-04-27 |
+| Phase 3 — Create Workflow UI | ✅ `+ NEW` button + `_NewWorkflowDialog` shipped 2026-04-27 |
+| Phase 3 — Settings “Test Connection” per-API | ⏳ Not built — single APPLY button; no per-key test |
+| Phase 4 — Voice page stat card (cmd count, avg confidence) | ⏳ Not built |
+| Phase 4 — Keyboard navigation (sidebar, history rows) | ⏳ Accessibility debt |
 | Wake-word / continuous listen loop | ⏳ Not built — System Status popover shows “coming soon” |
 
 ---
@@ -560,6 +838,103 @@ Example message: `feat(ui): topbar popovers, command palette, voice inspector, m
 ### Keyboard shortcut
 
 - **Ctrl+K** — Toggles the command palette on the main window via `QShortcut`.
+
+---
+
+## Session 2026-04-26 (Cursor agent chat) — Windows apps, paths, multi-step, browser
+
+This section records **this chat** so future sessions can rely on it without re-reading the thread.
+
+### Windows app resolution & launch (`core/executor.py`)
+
+- Tighter **stem/alias** rules so product names (e.g. **VS Code** vs **Codex**) are not conflated; **`Get-StartApps`** and **`shell:AppsFolder` (COM/Shell.Application)** are merged in **`_get_all_startapp_rows()`** for broader UWP coverage. **PATH** resolution runs **after** those GUI-oriented sources so a CLI on PATH (e.g. `claude`) does not win over a real desktop entry.
+- **UWP AUMID** via **`_WIN_APPID_PREFIX`** and **`os.startfile` / `explorer`** for `shell:AppsFolder\` + AppUserModelId. **Registered `ms-*` URL protocols** via **`_WIN_PROTO_PREFIX`**: **HKCR** enumeration with **`winreg`**, not PowerShell (unreliable multiline `‑Command`); the **`URL Protocol` string is a value on the progid key**, not a `URL Protocol\` subkey — we use **`QueryValueEx`**. Protocol launch + **fallback to `ms-…:`** if AppId launch fails. **`_score_query_vs_url_protocol`** improved for e.g. **Microsoft Store**; cache TTL for protocol list.
+- Voice alias **`adams` → `male-american`**.
+
+### Path expansion & file ops (`core/executor.py`)
+
+- **`_expand_path_string()`** — **`os.path.expandvars`** then **`Path.expanduser`** so model paths with **`%USERNAME%` / `%USERPROFILE%`** resolve. Used in **`_resolve_screenshot_path`**, **`_safe_path`**, **`_resolve_file_operation_path`**.
+- **`move_file`:** if destination is a **single segment** and **`_find_folder("downloads")`** (etc.) **resolves**, do **not** replace resolved **`dest`** with **`path.parent / "Downloads"`**; only when **`_find_folder` is `None`** treat the string as a **new filename in the same folder** as the source.
+
+### JARVIS meta & automation UX (`core/executor.py`, `core/personality.py`, `CLAUDE.md`)
+
+- **`status_report`:** appends **battery** via **`psutil.sensors_battery()`** when a sensor exists (laptops), alongside **CPU and memory** (see `tests/test_executor.py` help text if updated).
+- **`automation_task` + TTS (updated since this note was written):** see **“Post-action follow-up”** at the top of this file — primary line is **Claude’s `response`**, follow-up is **`ack_scheduled_action`-style** using **`last_step_intent` / `last_step_action`** from the executor. The old **flatten step output into one long spoken line** approach was **removed** in favour of that two-beat flow.
+- **`CLAUDE.md`:** new **absolute rule** and **§7** routing: **two requests in one message** → **`automation_task` + `run_workflow` + `steps`**, not **`unknown`**. **Example** (voice + file search, voice + status). **Addendum v2.2** aligned. **`close_tab` / `url_contains` / `match` params** in browser section.
+
+### Playwright browser (`core/browser.py`)
+
+- **`_SEARCH_INPUT_SELECTORS`** (shared) for search **inputs**; **`_SEARCH_SUBMIT_SELECTORS`**, **`_try_search_role_buttons()`**, **`_try_submit_search_by_enter()`** (focus search field, **Enter**) when CSS selectors (e.g. **`button#search-icon-legacy`**) go stale. **`_click_by_visible_text`**, and if a **selector** fails but **`text`** is also in params, try **text** path.
+- **`close_tab`:** optional **`title_contains`**, **`url_contains`**, **`match`**; **`_find_page_to_close`**, **`_score_page_for_keywords`** (URL +10, title +5). With **no** filter, behaviour unchanged: **active tab** only. **`core/executor.py`** maps **`url_match`**, **`tab`**, **`target`**, etc.
+
+### Files commonly edited in this chat
+
+- `core/executor.py`, `core/browser.py`, `core/personality.py`, `CLAUDE.md`, `tests/test_executor.py` (minor).
+
+### After changing `CLAUDE.md`
+
+- **Restart** the app — the brain **caches** the system prompt for the process lifetime.
+
+---
+
+## Session 2026-04-26 (Cursor) — Onboarding read + directive UX + `press_key` hardening
+
+This section records a single Cursor session: repo orientation (`CLAUDE.md`, `context.md`, core layout), a product question about **Win+M**, and the **code changes** that followed.
+
+### Codebase orientation (no code changes)
+
+- **Flow:** `main.py` → `ask_claude_async` (`core/brain.py`, loads **`CLAUDE.md` / `Claude.md`**) → parsed JSON → `dispatch` (`core/executor.py`) → per-intent handlers, **`core/browser.py`**, **`core/computer_control.py`**, etc.
+- **Handoff doc:** this file; brain contract is **`CLAUDE.md`**.
+
+### Win+M — will JARVIS do it?
+
+- **Execution path:** `type_text` → **`press_key`** → **`core/computer_control.press_key`**, which uses **PyAutoGUI** `hotkey(...)` for `+`-separated combos. The **Windows** key is present in PyAutoGUI as **`win`**.
+- **Caveat:** If the user says *“click the Windows key + M”*, the model may return **`control_mouse` / `click`** instead of **`press_key`**. Chords should be described as *press* / *send* or use **`@type`**, and **`CLAUDE.md`** already steers **keys** to **`type_text`**, **clicks** to **`control_mouse`**.
+
+### Implemented changes (files + behaviour)
+
+| Area | File | What changed |
+|------|------|----------------|
+| Directive field | `ui/widgets.py` | `_TagLineEdit`: cap height ~108px; vertical **scrollbar when needed**; `WidgetWidth` wrap; `resizeEvent` → `_reflow_height`. |
+| Input strip | `ui/dashboard.py` | `_InputBlock._on_input_editor_height`: tighter **INPUT_H** cap; **sync `_CommandStrip` height** to the block. |
+| Keyboard | `core/computer_control.py` | **`_normalize_key_token`**: aliases for Windows-key wording before **`hotkey`/`press`**. |
+
+### UX issue addressed
+
+- **Problem:** **Shift+Enter** added many newlines; the bottom directive area **grew without bound** and could push the UI out of the window; **`_CommandStrip` did not grow** with **`_InputBlock`**, so layout was inconsistent.
+- **Intent:** The field should **grow only a little**, then **scroll**; the **strip** should **always match** the input block height.
+
+### Follow-ups (optional, not done here)
+
+- If **`CLAUDE.md`** should explicitly call out **Win+…** / “do not use click for key chords”, add a one-line **routing** note and restart the app so the cached system prompt reloads.
+
+---
+
+## Session 2026-04-26 (Cursor) — QToolTip contrast + bottom bar PING & network throughput
+
+### Tooltips (earlier in same iteration)
+
+- **Problem:** `QToolTip` text was **very low contrast** (dark on black) and the directive **hint was one long line**.
+- **Changes:** `ui/theme.py` — **`tooltip_qss()`**; **`main.py`** — `QPalette.ToolTipBase` / `ToolTipText` + **`app.setStyleSheet(tooltip_qss())`**. `ui/dashboard.py` — `setToolTip` for `_TagLineEdit` uses a **line break** so the box is not overly wide.
+
+### Bottom bar: PING + NET
+
+- **Where:** `ui/bars.py` — class **`BottomBar`** (between stretch and `N COMMANDS`), styled with shared **`_BOT_TELEM`**.
+- **PING:** **`core/net_telemetry.probe_internet_rtt()`** per background cycle: one **ICMP** attempt to a **rotating** public host (avoids per-host cache bias), then **TCP connect** to **`1.1.1.1:443`** if ICMP fails. **UI thread never blocks** — work runs in **`_RttWorkerThread`** ( **`QThread`** ), result delivered via **`pyqtSignal`**. Display: **`smooth_rtt_ema(..., alpha=0.35)`**; after **2** failed probes in a row, show **`PING —`**. ~**2.5s** between samples (sleep in thread loop).
+- **NET speed:** Not a “speed test” to the internet — it is **aggregate interface throughput**: **`ThroughputSampler`** uses **`psutil.net_io_counters()`** deltas / **1s** `QTimer` for **total bytes sent and received** (all NICs, includes loopback). Shown as **`NET ↑<rate> ↓<rate>`** with **`format_rate_bps`** (B/s, K/s, M/s).
+- **Lifecycle:** `BottomBar` registers **`QApplication.instance().aboutToQuit → _stop_rtt_thread`**, and **`main.JarvisWindow.closeEvent`** also calls **`_botbar._stop_rtt_thread()`** (idempotent with **`_rtt_stopped`**) before **`browser.stop()`**.
+- **Layout:** `ui/theme.BOTBAR_H` increased from **38** to **40** pixels.
+
+### Files
+
+| File | Role |
+|------|------|
+| `core/net_telemetry.py` | ICMP parse + subprocess ping (Windows/macOS/Linux flags), TCP RTT, EMA, throughput, formatting |
+| `ui/bars.py` | `BottomBar` labels, `_RttWorkerThread`, timers, shutdown |
+| `ui/theme.py` | `tooltip_qss()`, `BOTBAR_H` |
+| `main.py` | Tool palette + tooltip QSS; `closeEvent` → stop RTT thread |
+| `ui/dashboard.py` | Two-line directive tooltip text |
+| `tests/test_net_telemetry.py` | Fast unit tests (no live network) |
 
 ---
 

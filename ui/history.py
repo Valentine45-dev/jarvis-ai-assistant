@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -356,6 +356,8 @@ class _FilterBar(QWidget):
 # ── Main view ──────────────────────────────────────────────────────────────
 
 class HistoryView(QWidget):
+    history_cleared = pyqtSignal()   # emitted when user clicks "CLEAR HISTORY"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._start_time = datetime.now()
@@ -522,6 +524,7 @@ class HistoryView(QWidget):
 
     def _on_clear(self):
         self.refresh_history([])
+        self.history_cleared.emit()   # tell main.py to clear _history too
 
     def paintEvent(self, _):
         p = QPainter(self)

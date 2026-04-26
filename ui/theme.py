@@ -11,9 +11,12 @@ This module is the single source of truth for:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, TYPE_CHECKING
 
-from PyQt5.QtGui import QColor, QFont, QFontDatabase
+from PyQt5.QtGui import QColor, QFont, QFontDatabase, QIcon
+
+if TYPE_CHECKING:
+    from PyQt5.QtGui import QPixmap
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +85,7 @@ FM = "Roboto Mono"
 
 SIDEBAR_W = 240
 TOPBAR_H = 52
-BOTBAR_H = 38
+BOTBAR_H = 40
 RIGHT_W = 420
 
 # New design has no rounded corners; keep exported names for compatibility.
@@ -96,8 +99,50 @@ RADIUS_XL = 0
 # Font loading and factory helpers
 # ---------------------------------------------------------------------------
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _fonts_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "fonts"
+    return _project_root() / "fonts"
+
+
+def jarvis_logo_svg_path() -> Path:
+    """`assets/jarvis_logo.svg` (hex reactor mark)."""
+    return _project_root() / "assets" / "jarvis_logo.svg"
+
+
+def jarvis_logo_pixmap(side: int = 32) -> "QPixmap | None":
+    """Rasterise the logo SVG to a square pixmap, or None if unavailable."""
+    path = jarvis_logo_svg_path()
+    if not path.is_file():
+        return None
+    try:
+        from PyQt5.QtCore import Qt, QRectF
+        from PyQt5.QtGui import QPainter, QPixmap
+        from PyQt5.QtSvg import QSvgRenderer
+    except Exception:
+        return None
+    renderer = QSvgRenderer(str(path))
+    if not renderer.isValid():
+        return None
+    pm = QPixmap(side, side)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    renderer.render(p, QRectF(0, 0, float(side), float(side)))
+    p.end()
+    return pm
+
+
+def jarvis_logo_icon() -> QIcon:
+    """Window / taskbar icon; prefers a crisp raster from the SVG."""
+    pm = jarvis_logo_pixmap(64)
+    if pm is not None and not pm.isNull():
+        return QIcon(pm)
+    p = jarvis_logo_svg_path()
+    return QIcon(str(p)) if p.is_file() else QIcon()
 
 
 def load_jarvis_fonts() -> Dict[str, str]:
@@ -156,6 +201,20 @@ def font(role: str, resolved_families: Dict[str, str] | None = None) -> QFont:
 # ---------------------------------------------------------------------------
 # Global QSS
 # ---------------------------------------------------------------------------
+
+def tooltip_qss() -> str:
+    """Readable tooltips on dark Fusion (avoids system near–black on black text)."""
+    return f"""
+QToolTip {{
+    background-color: {COLORS["surface_container"]};
+    color: {COLORS["on_surface"]};
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    padding: 5px 8px;
+    font-size: 11px;
+    border-radius: 2px;
+}}
+""".strip()
+
 
 def app_stylesheet(resolved_families: Dict[str, str] | None = None) -> str:
     fam = resolved_families or {"sans": "Segoe UI", "mono": "Consolas", "headline": "Segoe UI"}

@@ -5,6 +5,7 @@ Launches the HUD window with all views wired up.
 
 import sys
 import ctypes
+import threading
 from datetime import datetime
 
 import psutil
@@ -24,7 +25,17 @@ from PyQt5.QtGui import (
     QFontMetrics, QKeySequence,
 )
 
-from ui.theme import PRIMARY, CYAN, BG, RADIUS_LG, _c, _primary, load_jarvis_fonts
+from ui.theme import (
+    PRIMARY,
+    CYAN,
+    BG,
+    RADIUS_LG,
+    _c,
+    _primary,
+    load_jarvis_fonts,
+    jarvis_logo_icon,
+    tooltip_qss,
+)
 from ui.bars import TopBar, BottomBar
 from ui.sidebar import HudSidebar
 from ui.dashboard import DashboardView
@@ -36,6 +47,7 @@ from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
 from core.brain import ask_claude_async, TAG_INTENT_MAP
 from core.executor import dispatch
+from core.history_store import history_store
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
 from core.browser import browser
@@ -43,6 +55,13 @@ from core.browser import browser
 # Sidebar nav slot for the Settings page — kept as a constant so any future
 # nav reorder only needs to change one line.
 _SETTINGS_NAV_IDX = 4
+
+# Maximum number of history entries kept in memory. Oldest are evicted when exceeded.
+_HISTORY_MAX = 500
+
+# Maximum characters sent to TTS for data-heavy actions (read_page, OCR, code output).
+# ElevenLabs free tier has a monthly character quota — long read_page dumps burn it fast.
+_TTS_MAX_CHARS = 800
 
 
 def _pending_should_yield_to_new_command(cmd: str) -> bool:
@@ -70,10 +89,13 @@ class JarvisWindow(QMainWindow):
     _voice_text_ready   = pyqtSignal(str)      # transcribed speech text
     _voice_error_ready  = pyqtSignal(str)      # STT failure message
     _tts_ready          = pyqtSignal(object)   # transcript payload after TTS is ready
+    _action_followup_tts = pyqtSignal(str, str, str, float, int)  # follow, jTime, intent, conf, token
+    _exec_done           = pyqtSignal(object)                      # background dispatch → main thread
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("J.A.R.V.I.S. \u2014 AI Assistant")
+        self.setWindowIcon(jarvis_logo_icon())
         self.setMinimumSize(1280, 800)
         self.resize(1440, 900)
         self._apply_dark_titlebar()
@@ -102,6 +124,22 @@ class JarvisWindow(QMainWindow):
         self._topbar = TopBar()
         right_lay.addWidget(self._topbar)
 
+        # Persistent amber warning banner — only shown when auto-confirm is active.
+        # Sits between the TopBar and the content stack so it is always visible.
+        from PyQt5.QtWidgets import QLabel as _QLabel
+        self._auto_confirm_banner = _QLabel(
+            "⚠  AUTO-CONFIRM ACTIVE — DESTRUCTIVE ACTIONS WILL EXECUTE WITHOUT PROMPT"
+        )
+        self._auto_confirm_banner.setAlignment(Qt.AlignCenter)
+        self._auto_confirm_banner.setStyleSheet(
+            "background:rgba(255,160,0,0.18);color:#ffb84d;"
+            "border-bottom:1px solid rgba(255,160,0,0.45);"
+            "font-family:'Roboto Mono';font-size:11px;font-weight:700;"
+            "letter-spacing:1.5px;padding:5px 0;"
+        )
+        self._auto_confirm_banner.setVisible(False)
+        right_lay.addWidget(self._auto_confirm_banner)
+
         self._stack = QStackedWidget()
         self._dashboard = DashboardView()
         self._stack.addWidget(self._dashboard)
@@ -115,6 +153,7 @@ class JarvisWindow(QMainWindow):
         self._stack.addWidget(self._automation_view)
 
         self._history_view = HistoryView()
+        self._history_view.history_cleared.connect(self._on_history_cleared)
         self._stack.addWidget(self._history_view)
 
         self._settings_view = SettingsView()
@@ -133,7 +172,8 @@ class JarvisWindow(QMainWindow):
 
         self._state = "idle"
         self._confidence = 95
-        self._history = []  # session log; only real exchanges (no mock seed)
+        # Load last 100 completed entries from SQLite so history survives restarts.
+        self._history: list[dict] = history_store.load_last_n(100)
         self._session_start = datetime.now()
         self._cmd_count = 0
         self._transcript_update_token = 0
@@ -143,9 +183,14 @@ class JarvisWindow(QMainWindow):
         self._voice_text_ready.connect(self._on_voice_heard)
         self._voice_error_ready.connect(self._on_voice_error_ui)
         self._tts_ready.connect(self._on_tts_ready)
+        self._action_followup_tts.connect(
+            self._on_action_followup_tts, Qt.QueuedConnection
+        )
+        self._exec_done.connect(self._on_exec_done)
 
         # Wire backend signals so reminders and errors surface in the HUD
         signals.status_changed.connect(self._on_status_signal)
+        signals.reminder_action.connect(self._on_reminder_action)
         signals.error_occurred.connect(
             lambda msg: self._dashboard.toast.show_toast(msg, "error"))
 
@@ -179,6 +224,11 @@ class JarvisWindow(QMainWindow):
         self._palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
         self._palette_shortcut.setContext(Qt.ApplicationShortcut)
         self._palette_shortcut.activated.connect(self._toggle_palette)
+
+        # Global Win+J (Meta+J) — summon / raise the JARVIS window from anywhere.
+        self._summon_shortcut = QShortcut(QKeySequence("Meta+J"), self)
+        self._summon_shortcut.setContext(Qt.ApplicationShortcut)
+        self._summon_shortcut.activated.connect(self._summon_window)
 
         # ── System status popover (TopBar broadcast icon) ─────────────────────
         # Read-only health view of all subsystems. Refreshed on every open so
@@ -244,6 +294,84 @@ class JarvisWindow(QMainWindow):
         self._dashboard.toast.show_toast(msg, "info")
         self._dashboard.left.status_lbl.setText(msg)
 
+    def _on_reminder_action(self, payload: dict):
+        """Qt main thread — delayed reminder with an executable JARVIS step."""
+        from core.executor import dispatch
+        from core.personality import ack_scheduled_action
+        from core.voice import voice_engine
+
+        run = payload.get("run") or {}
+        msg = str(payload.get("message", "Scheduled task"))
+        sc = float(payload.get("schedule_confidence", 0.92))
+        sc = max(0.0, min(1.0, sc))
+
+        intent = str(run.get("intent", "unknown"))
+        act = str(run.get("action", "none"))
+        parameters = run.get("parameters")
+        if not isinstance(parameters, dict):
+            parameters = {}
+
+        result_dict = {
+            "intent": intent,
+            "action": act,
+            "parameters": parameters,
+            "requires_confirmation": False,
+        }
+        exec_out = dispatch(result_dict, confirmed=True)
+        exec_ok = bool(exec_out.get("success"))
+
+        display_resp = ack_scheduled_action(
+            intent,
+            act,
+            exec_ok,
+            exec_out.get("output", ""),
+            exec_out.get("error", ""),
+        )
+        hud_conf = sc if exec_ok else 0.0
+        j_time = datetime.now().strftime("%H:%M")
+
+        entry = {
+            "time": j_time,
+            "you": "⏱ scheduled",
+            "jarvis": display_resp,
+            "jTime": j_time,
+            "intent": intent,
+            "conf": hud_conf,
+            "status": "success" if exec_ok else "error",
+        }
+        self._history.append(entry)
+        history_store.save_entry(entry)
+        self._dashboard.left.transcript.append_jarvis_scheduled(
+            display_resp, j_time, intent, hud_conf
+        )
+
+        secs = int((datetime.now() - self._session_start).total_seconds())
+        h, m = divmod(secs // 60, 60)
+        self._history_view.refresh_history(self._history, uptime_str=f"{h}h {m:02d}m")
+
+        self._dashboard.left.hud_status.set_status(
+            self._INTENT_HUD.get(intent, "STANDBY"))
+        self._dashboard.left.last_action.set_action(intent, hud_conf)
+        self._voice_view.set_execution(
+            intent, act, hud_conf, exec_ok, exec_out.get("error"))
+
+        self._dashboard.left.status_lbl.setText(display_resp[:120])
+        toast_msg = (
+            exec_out.get("error", "Scheduled action failed")
+            if not exec_ok
+            else f"Scheduled: {msg[:40]}"
+        )
+        self._dashboard.toast.show_toast(toast_msg, "error" if not exec_ok else "info")
+
+        self._set_state("speaking")
+        try:
+            voice_engine.say(
+                display_resp,
+                on_ready=lambda: self._set_state("idle"),
+            )
+        except Exception:
+            self._set_state("idle")
+
     # Maps quick-action labels to input prefixes.
     # Trailing space = user must complete the command.
     # No trailing space = command is ready to send as-is.
@@ -288,9 +416,12 @@ class JarvisWindow(QMainWindow):
             return
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
+        # Cap history to avoid unbounded memory growth
+        if len(self._history) >= _HISTORY_MAX:
+            self._history = self._history[-(  _HISTORY_MAX - 1):]
         self._history.append({
             "time": now, "you": cmd, "jarvis": "", "jTime": "",
-            "intent": "", "conf": 0.0,
+            "intent": "", "conf": 0.0, "status": "pending",
         })
         self._dashboard.left.transcript.add_exchange(cmd, now)
         self._botbar.increment_commands()
@@ -383,7 +514,9 @@ class JarvisWindow(QMainWindow):
         "system_control", "file_operation", "code_execution", "browser_automation",
         "read_screen", "automation_task", "reminder_task",
     })
-    _FACTUAL_ACTIONS: frozenset = frozenset({"tell_time", "tell_date", "status_report"})
+    _FACTUAL_ACTIONS: frozenset = frozenset({
+        "tell_time", "tell_date", "status_report", "list_voices", "change_voice",
+    })
 
     def _on_confirmation_resolved(self, resolved: dict):
         """Called on the Qt main thread after a pending confirmation is resolved."""
@@ -398,6 +531,7 @@ class JarvisWindow(QMainWindow):
             self._history[-1].update({
                 "jarvis": display_resp, "jTime": j_time,
                 "intent": "confirmation", "conf": 1.0,
+                "status": "success" if resolved.get("success") else "error",
             })
 
         self._set_state("processing")
@@ -419,7 +553,31 @@ class JarvisWindow(QMainWindow):
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         confirmed: bool = False):
         """Dispatch to OS + update all HUD surfaces."""
+        # Multi-step workflows can take several seconds per step; run dispatch in a
+        # background thread so the Qt event loop (and UI) stays responsive.
+        if (intent == "automation_task"
+                and result.get("action") == "run_workflow"
+                and (result.get("parameters") or {}).get("steps")):
+            self._dashboard.left.status_lbl.setText("Running workflow — please wait…")
+            self._set_state("processing")
+            def _bg():
+                exec_out = dispatch(result, confirmed=confirmed)
+                self._exec_done.emit((result, intent, conf, resp, hud, exec_out))
+            threading.Thread(target=_bg, daemon=True).start()
+            return
+
         exec_out = dispatch(result, confirmed=confirmed)
+        self._finish_execute(result, intent, conf, resp, hud, exec_out)
+
+    def _on_exec_done(self, payload: object) -> None:
+        """Qt main thread — receives background workflow dispatch result."""
+        result, intent, conf, resp, hud, exec_out = payload
+        self._finish_execute(result, intent, conf, resp, hud, exec_out)
+
+    def _finish_execute(self, result: dict, intent: str, conf: float, resp: str, hud: str,
+                        exec_out: dict) -> None:
+        """Update all HUD surfaces after dispatch completes (must run on main thread)."""
+        exec_ok = bool(exec_out.get("success"))
 
         j_time = datetime.now().strftime("%H:%M")
         self._dashboard.left.typing.hide_typing()
@@ -451,16 +609,28 @@ class JarvisWindow(QMainWindow):
             return
 
         # ── Build spoken response — personality-driven, honest about failure ──
-        from core.personality import say as personality_say
+        from core.personality import say as personality_say, action_speech_pair
+
+        last_step: tuple[str, str] | None = None
+        li = exec_out.get("last_step_intent")
+        la = exec_out.get("last_step_action")
+        if li and la:
+            last_step = (str(li), str(la))
+
+        primary = ""
+        follow: str | None = None
 
         if intent in self._ACTION_INTENTS:
-            status       = "ok" if exec_out["success"] else "err"
-            display_resp = personality_say(
-                intent, result.get("action", ""),
-                status,
+            primary, follow = action_speech_pair(
+                intent,
+                result.get("action", ""),
+                exec_ok,
+                resp,
                 exec_out.get("output", ""),
                 exec_out.get("error", ""),
+                last_step=last_step,
             )
+            display_resp = f"{primary}\n{follow}" if follow else primary
         elif intent == "jarvis_meta":
             action_name = result.get("action", "")
             if (
@@ -482,58 +652,93 @@ class JarvisWindow(QMainWindow):
                 display_resp = exec_out["output"]   # page cache answer
             else:
                 display_resp = resp   # Claude's conversational response
+            primary = display_resp
         else:
             display_resp = resp       # unknown / other — use Claude's response
+            primary = display_resp
+
+        if not primary and display_resp is not None:
+            primary = display_resp
+
+        # One dashboard line for the first TTS; a second line is appended when `follow` is set.
+        hist_jarvis = (
+            primary if (intent in self._ACTION_INTENTS and follow) else display_resp
+        )
+        tts_line = (
+            primary if (intent in self._ACTION_INTENTS and follow) else display_resp
+        )
+        # Guard: data-heavy outputs (read_page, OCR, code) can be thousands of chars.
+        # Truncate only the TTS clip — the full text is still shown in the transcript.
+        if tts_line and len(tts_line) > _TTS_MAX_CHARS:
+            tts_line = tts_line[:_TTS_MAX_CHARS].rstrip() + "…"
+
+        # Gauge + transcript: `conf` is Claude's routing confidence, not run success.
+        # When the executor fails, show 0% / FAIL so the HUD does not read "95% HIGH" for a failed run.
+        hud_conf = 0.0 if not exec_ok else conf
 
         if self._history:
             self._history[-1].update({
-                "jarvis": display_resp, "jTime": j_time,
-                "intent": intent, "conf": conf,
+                "jarvis": hist_jarvis, "jTime": j_time,
+                "intent": intent, "conf": hud_conf,
+                "status": "success" if exec_ok else "error",
             })
+            history_store.save_entry(self._history[-1])
 
-        self._confidence = round(conf * 100)
+        self._confidence = round(hud_conf * 100)
         self._dashboard.right.gauge.set_value(self._confidence)
         v = self._confidence
-        self._dashboard.right.conf_label.setText(
-            "HIGH" if v > 90 else "MED" if v > 70 else "LOW")
+        if not exec_ok:
+            self._dashboard.right.conf_label.setText("FAIL")
+        else:
+            self._dashboard.right.conf_label.setText(
+                "HIGH" if v > 90 else "MED" if v > 70 else "LOW")
 
         self._dashboard.left.hud_status.set_status(hud)
-        self._dashboard.left.last_action.set_action(intent, conf)
+        self._dashboard.left.last_action.set_action(intent, hud_conf)
 
         secs = int((datetime.now() - self._session_start).total_seconds())
         self._dashboard.right.greeting.set_stats(self._cmd_count, secs)
         h, m = divmod(secs // 60, 60)
         self._history_view.refresh_history(self._history, uptime_str=f"{h}h {m:02d}m")
         self._voice_view.update_transcript(
-            self._history[-1]["you"] if self._history else "", display_resp, intent, conf)
+            self._history[-1]["you"] if self._history else "", tts_line, intent, hud_conf)
         # Phase 2: surface the real executor outcome on the Voice page
         self._voice_view.set_execution(
             intent,
             result.get("action", ""),
-            conf,
-            bool(exec_out.get("success")),
+            hud_conf,
+            exec_ok,
             exec_out.get("error"),
         )
 
         self._set_state("processing")
-        self._dashboard.left.status_lbl.setText(display_resp)
+        self._dashboard.left.status_lbl.setText(tts_line)
 
         self._transcript_update_token += 1
         transcript_token = self._transcript_update_token
-        transcript_payload = (transcript_token, display_resp, j_time, intent, conf)
+        transcript_payload = (transcript_token, tts_line, j_time, intent, hud_conf)
+
+        def _queue_followup() -> None:
+            if not follow or intent not in self._ACTION_INTENTS:
+                return
+            follow_intent = str(exec_out.get("last_step_intent") or intent)
+            self._action_followup_tts.emit(
+                follow, j_time, follow_intent, float(hud_conf), transcript_token
+            )
 
         # TTS runs on a worker thread; emit a Qt signal when audio is ready so
         # transcript animation starts on the main thread at the real playback point.
         try:
             from core.voice import voice_engine
             voice_engine.say(
-                display_resp,
+                tts_line,
                 on_ready=lambda: self._tts_ready.emit(transcript_payload),
+                on_done=_queue_followup if (follow and intent in self._ACTION_INTENTS) else None,
             )
             if exec_out.get("quit_application"):
-                # Approximate time for TTS to finish (on_done not wired on MCI path).
+                audio_len = len(tts_line) + (len(follow) if follow else 0)
                 delay_ms = 400 if voice_engine.tts_muted else min(
-                    30000, 1800 + len(display_resp) * 72
+                    30000, 1800 + audio_len * 72
                 )
                 QTimer.singleShot(delay_ms, QApplication.instance().quit)
         except Exception:
@@ -565,6 +770,38 @@ class JarvisWindow(QMainWindow):
                 self._set_state("idle")
 
         QTimer.singleShot(2000, _post_speaking)
+
+    def _on_action_followup_tts(
+        self,
+        follow: str,
+        j_time: str,
+        follow_intent: str,
+        conf: float,
+        token: int,
+    ) -> None:
+        """After the primary line finishes, append the compact done line + speak it."""
+        if token != self._transcript_update_token:
+            return
+        if self._history:
+            prev = (self._history[-1].get("jarvis") or "").strip()
+            self._history[-1]["jarvis"] = f"{prev}\n{follow}" if prev else follow
+        self._dashboard.left.transcript.append_jarvis_scheduled(
+            follow, j_time, follow_intent, conf
+        )
+        self._dashboard.left.status_lbl.setText(follow[:200])
+        secs = int((datetime.now() - self._session_start).total_seconds())
+        h, m = divmod(secs // 60, 60)
+        self._history_view.refresh_history(self._history, uptime_str=f"{h}h {m:02d}m")
+        try:
+            self._voice_view.append_jarvis_continuation(follow, follow_intent, conf)
+        except Exception:
+            pass
+        from core.voice import voice_engine
+        try:
+            self._set_state("speaking")
+            voice_engine.say(follow)
+        except Exception:
+            pass
 
     def _update_transcript_if_current(
         self, token: int, text: str, j_time: str, intent: str, conf: float
@@ -616,6 +853,7 @@ class JarvisWindow(QMainWindow):
             self._history[-1].update({
                 "jarvis": msg, "jTime": j_time,
                 "intent": "confirmation", "conf": 1.0,
+                "status": "warning",
             })
 
         self._set_state("processing")
@@ -645,6 +883,12 @@ class JarvisWindow(QMainWindow):
 
     def _hide_confirm_card(self) -> None:
         self._dashboard.left.transcript.hide_confirm()
+
+    def _on_history_cleared(self) -> None:
+        """Sync main._history and SQLite DB when the user clicks CLEAR HISTORY."""
+        self._history.clear()
+        self._cmd_count = 0
+        history_store.clear()
 
     # ── Quick settings popover handlers ───────────────────────────────────────
 
@@ -690,6 +934,7 @@ class JarvisWindow(QMainWindow):
 
     def _on_auto_confirm_toggled(self, on: bool):
         self._auto_confirm = bool(on)
+        self._auto_confirm_banner.setVisible(on)
         self._dashboard.toast.show_toast(
             "Auto-confirm ON — destructive actions run instantly."
             if on else "Auto-confirm OFF — confirmation prompts restored.",
@@ -706,6 +951,12 @@ class JarvisWindow(QMainWindow):
             self._dim_overlay.hide()
 
     # ── Command palette handlers ──────────────────────────────────────────────
+
+    def _summon_window(self) -> None:
+        """Raise and activate the JARVIS window (Win+J from any app)."""
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def _toggle_palette(self):
         # Refresh recents from history before showing so the chips reflect the
@@ -839,8 +1090,10 @@ class JarvisWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
-        """Shut down the browser session cleanly before the window closes."""
+        """Shut down all subsystems cleanly before the window closes."""
+        self._botbar._stop_rtt_thread()
         browser.stop()
+        history_store.close()
         super().closeEvent(event)
 
     def paintEvent(self, _):
@@ -868,6 +1121,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setWindowIcon(jarvis_logo_icon())
 
     # Register bundled .ttf files (Roboto Mono, etc.) into Qt's font database
     # so QSS `font-family:'Roboto Mono'` declarations actually resolve
@@ -884,7 +1138,11 @@ def main():
     pal.setColor(QPalette.Highlight, QColor(PRIMARY))
     pal.setColor(QPalette.HighlightedText, QColor(BG))
     pal.setColor(QPalette.PlaceholderText, _primary(46))
+    # Fusion defaults can make QToolTip text nearly invisible; QSS + palette for ToolTip roles
+    pal.setColor(QPalette.ToolTipBase, _c(25, 33, 34))
+    pal.setColor(QPalette.ToolTipText, _c(220, 232, 235))
     app.setPalette(pal)
+    app.setStyleSheet(tooltip_qss())
 
     w = JarvisWindow()
     w.setMinimumSize(1280, 800)

@@ -626,6 +626,12 @@ class VoiceView(QWidget):
         self._inspector.set_last_result(intent, conf)
         self._status_strip.set_conf(conf)
 
+    def append_jarvis_continuation(self, resp: str, intent: str, conf: float):
+        """Second JARVIS line in the same exchange (post-action follow-up)."""
+        now = datetime.now().strftime("%H:%M:%S")
+        self._timeline.add_jarvis(now, resp, intent, conf)
+        self._exec_log.append_line(f"[{now}] Follow-up: {intent}  {int(conf * 100)}%")
+
     # ── Phase 2: live executor wiring ─────────────────────────────────────────
 
     def set_execution(self, intent: str, action: str, conf: float,

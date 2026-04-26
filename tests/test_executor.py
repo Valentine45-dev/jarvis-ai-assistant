@@ -177,7 +177,7 @@ def test_tell_date():
 
 def test_status_report():
     print("\n─── JARVIS META: STATUS ─────────────────────────────────────")
-    print("  Returns CPU and RAM usage.")
+    print("  Returns CPU, RAM, and battery (when a sensor is available).")
     _pause()
 
     r = _call("jarvis_meta", "status_report")

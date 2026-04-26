@@ -34,9 +34,21 @@ from config.settings import config
 # ── ElevenLabs voice profile map ────────────────────────────────────────────
 # Voice IDs from ElevenLabs' pre-made voice library (stable across accounts).
 _EL_VOICES: dict[str, str] = {
-    "male-british":   "JBFqnCBsd6RMkjVDRZzb",  # George — deep, British
-    "male-american":  "pNInz6obpgDQGcFmaJgB",  # Adam   — neutral American
-    "female-british": "21m00Tcm4TlvDq8ikWAM",  # Rachel — warm, neutral
+    # ── Original three ────────────────────────────────────────────────
+    "male-british":         "JBFqnCBsd6RMkjVDRZzb",  # George  — deep, warm British
+    "male-american":        "pNInz6obpgDQGcFmaJgB",  # Adam    — neutral American
+    "female-british":       "21m00Tcm4TlvDq8ikWAM",  # Rachel  — warm, neutral
+    # ── Additional natural voices ─────────────────────────────────────
+    "male-broadcast":       "onwK4e9ZLuTAKqWW03F9",  # Daniel  — professional broadcast, strong
+    "male-resonant":        "nPczCjzI2devNBz1zQrb",  # Brian   — resonant, narration
+    "male-smooth":          "cjVigY5qzO86Huf0OWal",  # Eric    — smooth, conversational 40s
+    "male-gravelly":        "N2lVS1w4EtoT3dr4eOWO",  # Callum  — gravelly, distinctive
+    "male-casual":          "iP95p4xoKVk53GoZ742B",  # Chris   — natural, down-to-earth
+    "male-australian":      "IKne3meq5aSn9XLyUdCD",  # Charlie — energetic Australian
+    "female-professional":  "EXAVITQu4vr4xnSDxMaL",  # Sarah   — young professional, warm
+    "female-british-clear": "Xb7hH8MSUJpSbSDYk0k2",  # Alice   — British, clear educator
+    "female-british-warm":  "pFZP5JQG7iQjIQuC4Bku",  # Lily    — British, warm and clear
+    "female-american":      "XrExE9yKIg1WjnnlVkGX",  # Matilda — professional American
 }
 
 _DEFAULT_VOICE_ID = _EL_VOICES["male-british"]
@@ -126,18 +138,35 @@ class VoiceEngine:
 
     # ── TTS ──────────────────────────────────────────────────────────────────
 
-    def say(self, text: str, on_ready: Callable[[], None] | None = None) -> None:
-        """Speak *text* using ElevenLabs TTS. Non-blocking."""
+    def say(
+        self,
+        text: str,
+        on_ready: Callable[[], None] | None = None,
+        on_done: Callable[[], None] | None = None,
+    ) -> None:
+        """Speak *text* using ElevenLabs TTS. Non-blocking.
+
+        *on_ready* — first audio ready (UI can start the typewriter).
+        *on_done*  — playback finished (queue a second line, log, etc.).
+        """
         if not text.strip():
             return
         if self._tts_muted:
             # Still fire on_ready so any UI animation chained to playback start
             # (e.g. transcript reveal) doesn't stall waiting for muted audio.
             self._notify_ready(on_ready)
+            self._notify_done(on_done)
             return
-        threading.Thread(target=self._say_thread, args=(text, on_ready), daemon=True).start()
+        threading.Thread(
+            target=self._say_thread, args=(text, on_ready, on_done), daemon=True
+        ).start()
 
-    def _say_thread(self, text: str, on_ready: Callable[[], None] | None = None) -> None:
+    def _say_thread(
+        self,
+        text: str,
+        on_ready: Callable[[], None] | None = None,
+        on_done: Callable[[], None] | None = None,
+    ) -> None:
         ready_called = threading.Event()
 
         def _on_ready_once() -> None:
@@ -149,14 +178,24 @@ class VoiceEngine:
         with self._tts_lock:
             if config.elevenlabs_api_key:
                 try:
-                    self._say_elevenlabs(text, _on_ready_once)
+                    self._say_elevenlabs(text, _on_ready_once, on_done)
                     return
                 except Exception as exc:
                     if config.debug_mode:
                         print(f"[voice/tts] ElevenLabs error, falling back: {exc}")
                     if ready_called.is_set():
+                        self._notify_done(on_done)
                         return
-            self._say_local(text, _on_ready_once)
+            self._say_local(text, _on_ready_once, on_done)
+
+    def _notify_done(self, on_done: Callable[[], None] | None) -> None:
+        if on_done is None:
+            return
+        try:
+            on_done()
+        except Exception as exc:
+            if config.debug_mode:
+                print(f"[voice/tts] on_done callback failed: {exc}")
 
     def _notify_ready(self, on_ready: Callable[[], None] | None) -> None:
         """Notify UI code that audio is ready without letting UI errors break TTS."""
@@ -172,6 +211,7 @@ class VoiceEngine:
         self,
         text: str,
         on_ready: Callable[[], None] | None = None,
+        on_done: Callable[[], None] | None = None,
     ) -> None:
         """Stream ElevenLabs MP3 chunks and start playback as soon as MCI can open them."""
         el = _el()
@@ -189,7 +229,7 @@ class VoiceEngine:
                 model_id="eleven_multilingual_v2",
                 output_format="mp3_44100_128",
             )
-            self._play_mp3_stream(chunks, on_ready)
+            self._play_mp3_stream(chunks, on_ready, on_done)
             return
 
         mp3_bytes = b"".join(
@@ -201,12 +241,13 @@ class VoiceEngine:
             )
         )
         self._notify_ready(on_ready)
-        self._play_mp3_bytes(mp3_bytes)
+        self._play_mp3_bytes(mp3_bytes, on_done)
 
     def _play_mp3_stream(
         self,
         chunks,
         on_ready: Callable[[], None] | None = None,
+        on_done: Callable[[], None] | None = None,
     ) -> None:
         """Write MP3 chunks to disk and ask MCI to begin playback once readable."""
         import ctypes
@@ -277,8 +318,13 @@ class VoiceEngine:
                 _os.unlink(tmp_path)
             except OSError:
                 pass
+        self._notify_done(on_done)
 
-    def _play_mp3_bytes(self, mp3_bytes: bytes) -> None:
+    def _play_mp3_bytes(
+        self,
+        mp3_bytes: bytes,
+        on_done: Callable[[], None] | None = None,
+    ) -> None:
         """Play MP3 bytes synchronously via Windows MCI (no extra deps required)."""
         import ctypes
         import tempfile
@@ -300,11 +346,13 @@ class VoiceEngine:
                 _os.unlink(tmp_path)
             except OSError:
                 pass
+        self._notify_done(on_done)
 
     def _say_local(
         self,
         text: str,
         on_ready: Callable[[], None] | None = None,
+        on_done: Callable[[], None] | None = None,
     ) -> None:
         """Fallback TTS via pyttsx3 (Windows SAPI)."""
         try:
@@ -328,6 +376,7 @@ class VoiceEngine:
             # Ultimate fallback: print to console (no audio)
             self._notify_ready(on_ready)
             print(f"[JARVIS] {text}")
+        self._notify_done(on_done)
 
     # ── STT ──────────────────────────────────────────────────────────────────
 

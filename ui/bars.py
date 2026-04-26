@@ -10,11 +10,25 @@ from datetime import datetime
 
 import psutil
 import qtawesome as qta
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QStyle, QStyleOption, QWidget
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QStyle,
+    QStyleOption,
+    QWidget,
+)
 
-from ui.theme import CYAN, FM, TOPBAR_H, BOTBAR_H
+from core.net_telemetry import (
+    format_rate_bps,
+    probe_internet_rtt,
+    smooth_rtt_ema,
+    ThroughputSampler,
+)
+from ui.theme import CYAN, FM, TOPBAR_H, BOTBAR_H, jarvis_logo_pixmap
 
 
 # Topbar height matches the sidebar's brand zone so the two horizontal
@@ -278,6 +292,23 @@ class TopBar(QWidget):
         lay.setContentsMargins(24, 0, 18, 0)
         lay.setSpacing(0)
 
+        self._logo = QLabel()
+        self._logo.setFixedSize(40, 40)
+        self._logo.setScaledContents(False)
+        self._logo.setStyleSheet("background:transparent; border:none;")
+        _pm = jarvis_logo_pixmap(80)
+        if _pm is not None and not _pm.isNull():
+            self._logo.setPixmap(
+                _pm.scaled(
+                    40,
+                    40,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
+        lay.addWidget(self._logo, 0, Qt.AlignVCenter)
+        lay.addSpacing(10)
+
         # ── Brand: HUD_STATUS_V4.2 (transparent — header background reads through) ──
         self._brand = QLabel("HUD_STATUS_V4.2")
         self._brand.setStyleSheet(
@@ -421,12 +452,57 @@ class TopBar(QWidget):
         draw_glow_underline(self, p)
 
 
+class _RttWorkerThread(QThread):
+    """Background ICMP / TCP RTT so the UI never blocks on `ping` (1–3s)."""
+
+    measured = pyqtSignal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._go = True
+
+    def run(self) -> None:
+        while self._go:
+            v = None
+            try:
+                v = probe_internet_rtt()
+            except Exception:
+                v = None
+            self.measured.emit(v)
+            for _ in range(25):
+                if not self._go:
+                    return
+                self.msleep(100)
+
+    def stop(self) -> None:
+        self._go = False
+
+
+# Shared label style for bottom-bar telemetry
+_BOT_TELEM = (
+    "QLabel{"
+    "color:rgba(195,245,255,0.9);"
+    f"font-family:'{FM}';"
+    "font-size:10px;"
+    "font-weight:700;"
+    "letter-spacing:0.5px;"
+    "background:transparent;"
+    "}"
+)
+
+
 class BottomBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(BOTBAR_H)
         self._view = "DASHBOARD"
         self._cmd_count = 0
+        self._ping_ema: float | None = None
+        self._rtt_fail_streak = 0
+        self._rtt_stopped = False
+        self._thru = ThroughputSampler()
+        self._rtt = _RttWorkerThread(self)
+        self._rtt.measured.connect(self._on_rtt_sample)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 0, 16, 0)
@@ -445,6 +521,21 @@ class BottomBar(QWidget):
         )
         lay.addWidget(self._status)
         lay.addStretch(1)
+
+        self._ping_lbl = QLabel("PING —")
+        self._ping_lbl.setStyleSheet(_BOT_TELEM)
+        self._ping_lbl.setToolTip(
+            "Round-trip to the internet: ICMP to rotating resolvers, "
+            "then TCP :443 if ping is blocked. Smoothed (EMA)."
+        )
+        lay.addWidget(self._ping_lbl)
+
+        self._net_lbl = QLabel("NET ↑0B/s ↓0B/s")
+        self._net_lbl.setStyleSheet(_BOT_TELEM)
+        self._net_lbl.setToolTip(
+            "All interfaces: bytes sent/received per second (system total)."
+        )
+        lay.addWidget(self._net_lbl)
 
         self._cmd_lbl = QLabel("0 COMMANDS")
         self._cmd_lbl.setStyleSheet(
@@ -472,6 +563,43 @@ class BottomBar(QWidget):
             "}"
         )
         lay.addWidget(self._view_lbl)
+
+        self._net_timer = QTimer(self)
+        self._net_timer.setInterval(1000)
+        self._net_timer.timeout.connect(self._on_net_sample)
+        self._net_timer.start()
+
+        self._rtt.start()
+
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_rtt_thread)
+
+    def _on_rtt_sample(self, v) -> None:
+        if v is None:
+            self._rtt_fail_streak += 1
+            if self._rtt_fail_streak >= 2:
+                self._ping_ema = None
+                self._ping_lbl.setText("PING —")
+            return
+        self._rtt_fail_streak = 0
+        self._ping_ema = smooth_rtt_ema(int(v), self._ping_ema)
+        if self._ping_ema is not None:
+            self._ping_lbl.setText(f"PING {int(round(self._ping_ema))}ms")
+
+    def _on_net_sample(self) -> None:
+        up, down = self._thru.sample()
+        su = format_rate_bps(up)
+        sd = format_rate_bps(down)
+        self._net_lbl.setText(f"NET ↑{su} ↓{sd}")
+
+    def _stop_rtt_thread(self) -> None:
+        if self._rtt_stopped:
+            return
+        self._rtt_stopped = True
+        self._rtt.stop()
+        self._rtt.wait(5000)
+        self._net_timer.stop()
 
     def set_view(self, v):
         self._view = str(v).upper()

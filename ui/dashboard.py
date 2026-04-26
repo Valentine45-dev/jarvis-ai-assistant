@@ -410,7 +410,6 @@ class _MemCard(_TelemetryCard):
 class _UplinkCard(_TelemetryCard):
     def __init__(self, parent=None):
         super().__init__("UPLINK_STATUS", "", CYAN, parent)
-        # Remove the (empty) right-side value from the header to keep spacing clean.
         self.val.setText("")
         self.val.setMaximumWidth(0)
 
@@ -425,7 +424,7 @@ class _UplinkCard(_TelemetryCard):
         tx_lbl.setStyleSheet(
             f"color:{OUTLINE};background:transparent;border:none;letter-spacing:1px;"
         )
-        self._tx = QLabel("452.1")
+        self._tx = QLabel("0.00")
         self._tx.setFont(_mono(14))
         self._tx.setStyleSheet(
             f"color:{EMERALD_DIM};letter-spacing:1px;background:transparent;border:none;"
@@ -446,7 +445,7 @@ class _UplinkCard(_TelemetryCard):
         rx_lbl.setStyleSheet(
             f"color:{OUTLINE};background:transparent;border:none;letter-spacing:1px;"
         )
-        self._rx = QLabel("1208.4")
+        self._rx = QLabel("0.00")
         self._rx.setFont(_mono(14))
         self._rx.setStyleSheet(
             f"color:{EMERALD_DIM};letter-spacing:1px;background:transparent;border:none;"
@@ -464,11 +463,43 @@ class _UplinkCard(_TelemetryCard):
 
         self._chart = LineChartWidget()
         self._chart.setFixedHeight(32)
-        self._chart.set_data([60, 50, 70, 40, 80, 30, 90, 50, 60, 40])
+        self._chart.set_data([0] * 10)
         self.add_widget(self._chart)
 
         # Expose the primary uplink value so main.py .val.setText still works.
         self.val = self._tx
+
+        # Real throughput sampling via psutil
+        self._net_history: list[float] = [0.0] * 10
+        try:
+            _c = psutil.net_io_counters()
+            self._last_sent = _c.bytes_sent
+            self._last_recv = _c.bytes_recv
+        except Exception:
+            self._last_sent = 0
+            self._last_recv = 0
+
+        self._net_timer = QTimer(self)
+        self._net_timer.timeout.connect(self._tick_net)
+        self._net_timer.start(2000)
+
+    def _tick_net(self) -> None:
+        try:
+            c = psutil.net_io_counters()
+            sent = c.bytes_sent
+            recv = c.bytes_recv
+        except Exception:
+            return
+        tx_mb = (sent - self._last_sent) / 2 / 1_000_000 * 8  # Mb/s over 2 s
+        rx_mb = (recv - self._last_recv) / 2 / 1_000_000 * 8
+        self._last_sent = sent
+        self._last_recv = recv
+
+        self._tx.setText(f"{tx_mb:.2f}")
+        self._rx.setText(f"{rx_mb:.2f}")
+
+        self._net_history = self._net_history[1:] + [tx_mb]
+        self._chart.set_data(self._net_history)
 
     def set_bar(self, _pct: float):
         pass
@@ -603,6 +634,24 @@ class _InputBlock(QWidget):
         )
         self.cmd_bar.command_sent.connect(self.command_sent.emit)
         il.addWidget(self.cmd_bar, 1)
+        self.cmd_bar._input.setToolTip("Enter — send\nShift+Enter — new line")
+        self.cmd_bar._input.contentHeightChanged.connect(self._on_input_editor_height)
+
+    def _on_input_editor_height(self, editor_h: int):
+        """Expand or shrink the input card when the directive field line count changes."""
+        # Match _TagLineEdit._H_MAX (~108) + row padding; do not let the card exceed ~160px
+        # before the editor itself scrolls (see widgets._TagLineEdit).
+        need = max(50, min(int(editor_h) + 14, 160))
+        if need == self.INPUT_H:
+            return
+        self.INPUT_H = need
+        self.setFixedHeight(self.INPUT_H + self.GLOW_H)
+        self.input_card.setGeometry(0, 0, self.width(), self.INPUT_H)
+        self.update()
+        # _CommandStrip was only sized once in __init__; keep strip height in sync
+        p = self.parent()
+        if p is not None:
+            p.setFixedHeight(self.height())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

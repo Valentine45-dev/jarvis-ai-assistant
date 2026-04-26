@@ -104,6 +104,73 @@ def extract_tag(text: str) -> tuple[str | None, str]:
     return None, text
 
 
+def _extract_first_json_object(text: str) -> str | None:
+    """When the model prefaces JSON with prose, take the first balanced `{...}`.
+
+    Respects string literals so braces inside ``"content": "{"`` do not end early.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    i = start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        i += 1
+    return None
+
+
+def _infer_max_output_tokens(user_msg: str) -> int:
+    """Grant 16 k only when creating/writing file content; bare file queries get 2 k."""
+    u = user_msg.lower()
+    # Only large budget when both a content-creation verb AND a file extension are present.
+    # "list files" or "search my downloads" must NOT trigger 16k — that burns API quota for nothing.
+    _create_verbs = ("create ", "write ", "generate ", "make a file", "new file")
+    _file_exts    = (".py", ".js", ".ts", ".md", ".json", ".txt", ".html", ".css", ".yml", ".yaml")
+    needs_content = any(v in u for v in _create_verbs) and any(e in u for e in _file_exts)
+    if needs_content and len(user_msg) > 60:
+        return 16384
+    if len(user_msg) > 1200:
+        return 8192
+    return 2048
+
+
+def _parse_claude_json_raw(raw: str) -> dict[str, Any]:
+    """Parse JSON from Claude; try whole string, then first object substring."""
+    raw = raw.strip()
+    if not raw:
+        raise json.JSONDecodeError("empty", "", 0)
+    try:
+        out = json.loads(raw)
+    except json.JSONDecodeError:
+        block = _extract_first_json_object(raw)
+        if not block:
+            raise
+        out = json.loads(block)
+    if not isinstance(out, dict):
+        raise json.JSONDecodeError("not an object", raw, 0)
+    return out
+
+
 # ── Context builder ───────────────────────────────────────────────────────────
 
 def build_context(
@@ -111,7 +178,10 @@ def build_context(
     active_window: str | None = None,
     clipboard: str | None = None,
 ) -> dict[str, Any]:
-    ctx: dict[str, Any] = {"os": platform.system().lower()}
+    ctx: dict[str, Any] = {
+        "os": platform.system().lower(),
+        "user_name": (getattr(config, "user_name", None) or "Valentine").strip(),
+    }
     if tag_override:
         ctx["tag_override"] = tag_override
     if active_window:
@@ -193,11 +263,14 @@ def ask_claude(
     # 5. Call Claude — prepend conversation history for multi-turn context.
     #    The system prompt is large (~1 500 tokens); cache_control keeps it
     #    cached for 5 minutes so repeated commands pay ~0.1× input cost.
+    #    ``max_tokens`` must be large for ``file_operation`` / ``create_file``:
+    #    a full JSON with escaped multiline ``content`` easily exceeds 1024 tokens.
+    max_out = _infer_max_output_tokens(user_msg)
     raw = ""
     try:
         msg = _get_client().messages.create(
             model=config.claude_model,
-            max_tokens=1024,
+            max_tokens=max_out,
             system=[
                 {
                     "type": "text",
@@ -207,6 +280,8 @@ def ask_claude(
             ],
             messages=memory.get_messages() + [{"role": "user", "content": user_msg}],
         )
+        if not msg.content:
+            raise ValueError("empty_model_content")
         raw = msg.content[0].text.strip()
 
         # Strip accidental markdown fences that slip through
@@ -214,7 +289,7 @@ def ask_claude(
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
 
-        result: dict[str, Any] = json.loads(raw)
+        result: dict[str, Any] = _parse_claude_json_raw(raw)
         memory.add_exchange(cmd_text, raw)
 
     except json.JSONDecodeError as exc:

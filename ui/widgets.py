@@ -574,22 +574,28 @@ class _TagHighlighter(QSyntaxHighlighter):
 
 
 class _TagLineEdit(QTextEdit):
-    """Single-line QTextEdit with live @tag syntax highlighting.
+    """Directive field: @tag highlighting; **Enter** submits, **Shift+Enter** inserts newline.
 
     Exposes the same surface as QLineEdit so CommandBar callers need
     no changes: text(), setText(), setCursorPosition(), setFocus(), clear().
     """
     returnPressed = pyqtSignal()
+    contentHeightChanged = pyqtSignal(int)  # desired editor height in px (for parent layout)
+
+    # Grow a few lines, then cap — overflow scrolls (avoids driving the bar off-screen).
+    _H_MIN = 28
+    _H_MAX = 108
 
     def __init__(self, valid_tags: frozenset = frozenset(), parent=None):
         super().__init__(parent)
-        self.setLineWrapMode(QTextEdit.NoWrap)
+        self.setLineWrapMode(QTextEdit.WidgetWidth)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.document().setDocumentMargin(0)
         self.setFixedHeight(36)
         self.setPlaceholderText("Awaiting directive...")
         self._highlighter = _TagHighlighter(self.document(), valid_tags)
+        self.document().contentsChanged.connect(self._reflow_height)
 
     # ── QLineEdit-compatible API ──────────────────────────────────────────
 
@@ -601,25 +607,50 @@ class _TagLineEdit(QTextEdit):
         c = self.textCursor()
         c.movePosition(QTextCursor.End)
         self.setTextCursor(c)
+        self._reflow_height()
 
     def setCursorPosition(self, pos: int):
         c = self.textCursor()
         c.setPosition(min(pos, len(self.toPlainText())))
         self.setTextCursor(c)
 
+    def _reflow_height(self):
+        """Grow/shrink with line count; cap height then scroll. Notify parent card."""
+        doc_h = int(self.document().size().height())
+        pad = 12
+        content_h = doc_h + pad
+        h = max(self._H_MIN, min(content_h, self._H_MAX))
+        if h != self.height():
+            self.setFixedHeight(h)
+        # Show vertical scroll only when content exceeds the fixed viewport
+        if content_h > self._H_MAX - 1:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.contentHeightChanged.emit(self.height())
+
     # ── Behaviour overrides ───────────────────────────────────────────────
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                super().keyPressEvent(event)
+                return
             self.returnPressed.emit()
             return
         super().keyPressEvent(event)
 
     def insertFromMimeData(self, source):
-        """Strip newlines from pasted content to enforce single-line."""
-        self.insertPlainText(
-            source.text().replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
-        )
+        """Allow pasting multiple lines (Shift+Enter / paste); normalise CR only."""
+        t = source.text()
+        if not t:
+            return
+        self.insertPlainText(t.replace("\r\n", "\n").replace("\r", "\n"))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Word wrap reflows line count when width changes
+        self._reflow_height()
 
 
 class CommandBar(QWidget):

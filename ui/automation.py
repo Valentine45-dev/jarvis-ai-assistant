@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QDialog, QDialogButtonBox,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from core.automation import workflow_library
@@ -313,6 +317,59 @@ def _step_label(step) -> str:
     return action.replace("_", " ").title()
 
 
+class _NewWorkflowDialog(QDialog):
+    """Minimal create-workflow dialog: name + trigger phrase."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("New Workflow")
+        self.setMinimumWidth(400)
+        self.setStyleSheet(
+            f"background:#151d1e;color:#dce4e5;"
+            "font-family:'Roboto Mono';font-size:12px;"
+        )
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(14)
+        lay.setContentsMargins(20, 20, 20, 20)
+
+        def _field(label: str) -> QLineEdit:
+            lbl = QLabel(label)
+            lbl.setStyleSheet(
+                f"color:{CYAN};font-size:10px;letter-spacing:1.5px;"
+                "background:transparent;border:none;"
+            )
+            inp = QLineEdit()
+            inp.setStyleSheet(
+                "background:#192122;color:#dce4e5;border:1px solid rgba(0,229,255,0.25);"
+                "border-radius:4px;padding:6px 10px;font-family:'Roboto Mono';font-size:12px;"
+            )
+            lay.addWidget(lbl)
+            lay.addWidget(inp)
+            return inp
+
+        self._name_inp = _field("WORKFLOW NAME")
+        self._name_inp.setPlaceholderText("Morning Routine")
+        self._trigger_inp = _field("TRIGGER PHRASE")
+        self._trigger_inp.setPlaceholderText("run morning routine")
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.setStyleSheet(
+            "QPushButton{"
+            f"color:{CYAN};background:rgba(0,229,255,0.08);"
+            "border:1px solid rgba(0,229,255,0.30);border-radius:4px;"
+            "padding:5px 18px;font-family:'Roboto Mono';font-size:11px;"
+            "}"
+            "QPushButton:hover{background:rgba(0,229,255,0.20);}"
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+    def get_values(self) -> tuple[str, str]:
+        return self._name_inp.text().strip(), self._trigger_inp.text().strip()
+
+
 class AutomationView(QWidget):
     run_command = pyqtSignal(str)
 
@@ -368,8 +425,24 @@ class AutomationView(QWidget):
             "color:rgba(132,147,150,0.7);font-family:'Roboto Mono';"
             "font-size:10px;background:transparent;border:none;"
         )
+        new_btn = QPushButton("+ NEW")
+        new_btn.setFixedHeight(22)
+        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.setToolTip("Create a new workflow")
+        new_btn.setStyleSheet(
+            "QPushButton{"
+            f"color:{CYAN};background:rgba(0,229,255,0.08);"
+            "border:1px solid rgba(0,229,255,0.30);border-radius:3px;"
+            "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
+            "padding:0 8px;letter-spacing:1px;"
+            "}"
+            "QPushButton:hover{background:rgba(0,229,255,0.20);}"
+        )
+        new_btn.clicked.connect(self._create_workflow)
+
         lib_hdr_lay.addWidget(lib_title, 1)
         lib_hdr_lay.addWidget(self._wf_count_lbl)
+        lib_hdr_lay.addWidget(new_btn)
 
         lib_sep = QFrame()
         lib_sep.setFrameShape(QFrame.HLine)
@@ -450,6 +523,35 @@ class AutomationView(QWidget):
                 item.widget().deleteLater()
         self._rows.clear()
         self._build_rows(log_init=False)
+
+    def _create_workflow(self):
+        dlg = _NewWorkflowDialog(self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        name, trigger = dlg.get_values()
+        if not name:
+            return
+        if not trigger:
+            trigger = f"run {name.lower()}"
+        wf_id = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
+        if not wf_id:
+            return
+        # Avoid id collisions — append a counter suffix if needed
+        base_id = wf_id
+        existing = {w["id"] for w in workflow_library.list_all()}
+        n = 1
+        while wf_id in existing:
+            wf_id = f"{base_id}_{n}"
+            n += 1
+        workflow_library.add({
+            "id": wf_id,
+            "name": name,
+            "trigger": trigger,
+            "steps": [],
+            "enabled": True,
+            "last_run": None,
+        })
+        self._exec_log.append_line(f"[SYSTEM] Workflow '{name}' created.")
 
     def _delete_workflow(self, wf_id: str, display_name: str):
         reply = QMessageBox.question(

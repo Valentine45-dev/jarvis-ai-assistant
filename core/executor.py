@@ -13,13 +13,17 @@ Special key in return dict:
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import threading
+import time
+import uuid
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -90,23 +94,45 @@ def _set_page_cache(text: str) -> None:
 
 # ── Confirmation loop ─────────────────────────────────────────────────────────
 
-_PENDING: dict[str, Any] = {}   # {"fn": callable, "prompt": str}
+class _PendingConfirmation:
+    """Typed container for a single in-flight confirmation request.
+
+    Only one can exist at a time. `confirm_id` lets callers detect stale
+    resolves (e.g. a reminder fires mid-confirm and changes state).
+    """
+    __slots__ = ("confirm_id", "fn", "prompt")
+
+    def __init__(self, confirm_id: str, fn, prompt: str) -> None:
+        self.confirm_id = confirm_id
+        self.fn         = fn
+        self.prompt     = prompt
+
+
+_pending_confirmation: _PendingConfirmation | None = None
 
 
 def get_pending_confirmation() -> dict | None:
-    return dict(_PENDING) if _PENDING else None
+    if _pending_confirmation is None:
+        return None
+    return {"fn": _pending_confirmation.fn, "prompt": _pending_confirmation.prompt,
+            "confirm_id": _pending_confirmation.confirm_id}
 
 
 def abandon_pending_confirmation() -> None:
     """Drop a deferred action without running it (e.g. user sent a new full command)."""
-    _PENDING.clear()
+    global _pending_confirmation
+    _pending_confirmation = None
 
 
 def request_confirmation(prompt: str, fn) -> dict:
-    """Store a deferred action and return a confirmation-needed sentinel."""
-    _PENDING.clear()
-    _PENDING["fn"]     = fn
-    _PENDING["prompt"] = prompt
+    """Store a deferred action and return a confirmation-needed sentinel.
+
+    Replaces any previous pending action — only one can be in flight at a time.
+    The returned sentinel carries the `confirm_id` so callers can detect stale resolves.
+    """
+    global _pending_confirmation
+    cid = str(uuid.uuid4())
+    _pending_confirmation = _PendingConfirmation(cid, fn, prompt)
     return _confirm(prompt)
 
 
@@ -132,14 +158,15 @@ def _is_affirmative_reply(user_response: str) -> bool:
 
 def resolve_confirmation(user_response: str) -> dict:
     """Call with the user's yes/no reply. Executes or cancels the pending action."""
-    if not _PENDING:
+    global _pending_confirmation
+    if _pending_confirmation is None:
         return _err("No pending action to confirm.")
-    fn = _PENDING.pop("fn", None)
-    _PENDING.clear()
+    pc = _pending_confirmation
+    _pending_confirmation = None
     if _is_affirmative_reply(user_response):
-        if fn:
+        if pc.fn:
             try:
-                return fn()
+                return pc.fn()
             except Exception as exc:
                 return _err(str(exc))
         return _err("Action missing.")
@@ -240,12 +267,21 @@ def _pick_best_of_matches(cands: list[Path], home: Path) -> Path:
     return sorted(cands, key=_key)[0]
 
 
+def _expand_path_string(s: str) -> str:
+    """Expand Windows ``%VAR%`` (and simple ``$VAR`` on some shells), then ``~`` for Path."""
+    t = (s or "").strip()
+    if not t:
+        return t
+    t = os.path.expandvars(t)
+    return str(Path(t).expanduser())
+
+
 def _safe_path(path_str: str) -> Path:
     """Resolve path, correcting wrong C:\\Users\\<bad_name> guesses and relative user-folder refs."""
     if not path_str:
         return Path.home() / "jarvis_file.txt"
 
-    p = Path(path_str).expanduser()
+    p = Path(_expand_path_string(path_str))
     home = Path.home()
     parts = p.parts
 
@@ -375,7 +411,7 @@ def _resolve_file_operation_path(raw: str) -> Path:
     *JARVIS_DEFAULT_CREATE_PARENT* (default: Documents), not the JARVIS process CWD."""
     if not raw or not str(raw).strip():
         return Path.home() / "jarvis_file.txt"
-    s = str(raw).strip()
+    s = _expand_path_string(str(raw).strip())
     p = Path(s.replace("\\", "/"))
     if p.is_absolute():
         return _safe_path(s)
@@ -403,7 +439,7 @@ def _resolve_screenshot_path(save_param: str | None) -> tuple[str, str | None]:
     if not save_param:
         return str(Path.home() / "Desktop" / fname), None
 
-    p = Path(save_param).expanduser()
+    p = Path(_expand_path_string(str(save_param)))
 
     # Full path with image extension → use directly
     if p.suffix.lower() in (".png", ".jpg", ".jpeg"):
@@ -476,29 +512,356 @@ _WIN_ALIASES: dict[str, str] = {
     "cursor":     "cursor",
 }
 
+_WIN_APPID_PREFIX = "__WIN_APPID__:"
+_WIN_PROTO_PREFIX = "__WIN_PROTO__:"
+
+# Lazy cache for URL-protocol scan (avoids re-enumerating HKCR every command).
+_proto_cache: list[str] | None = None
+_proto_cache_m: float = 0.0
+_PROTO_CACHE_TTL_S = 120.0
+
+
+def _win_subprocess_flags() -> int:
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return subprocess.CREATE_NO_WINDOW
+    return 0
+
+
+def _norm_query_compact(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").lower().strip())
+
+
+def _exe_stem_matches_query(user_query: str, stem: str) -> bool:
+    """
+    `stem` matches only as a full identifier, never as a short prefix of another
+    product token (e.g. VS Code 'code' must not match the query 'codex').
+    """
+    n_q = _norm_query_compact(user_query)
+    stem = (stem or "").lower().replace(" ", "").replace(".exe", "")
+    if not stem or not n_q:
+        return False
+    if n_q == stem:
+        return True
+    try:
+        return re.search(
+            r"(?<![a-z0-9])" + re.escape(stem) + r"(?![a-z0-9])",
+            n_q,
+            re.IGNORECASE,
+        ) is not None
+    except re.error:
+        return False
+
+
+def _name_similarity(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _query_display_score(n_user: str, display: str) -> float:
+    """Fuzzy + token score for a human app name (StartApps / lnk) vs user phrase."""
+    nq = _norm_query_compact(n_user)
+    dc = _norm_query_compact(display)
+    if not nq or not dc:
+        return 0.0
+    r0 = _name_similarity(nq, dc)
+    tq = set(re.findall(r"[a-z0-9]{2,}", n_user.lower()))
+    td = set(re.findall(r"[a-z0-9]{2,}", display.lower()))
+    if not tq or not td:
+        return r0
+    inter = tq & td
+    un = tq | td
+    j = (len(inter) / len(un)) if un else 0.0
+    # Favour "microsoft store" vs "Microsoft Store" (near-identical) and high token overlap
+    return min(1.0, 0.52 * r0 + 0.48 * j + (0.12 if tq.issubset(td) or td.issubset(tq) else 0.0))
+
+
+def _score_query_vs_url_protocol(n_user: str, proto: str) -> float:
+    """Map user text to a registered `ms-…` / app URL protocol; entirely data-driven."""
+    nq = _norm_query_compact(n_user)
+    pl = (proto or "").lower().strip()
+    if not nq or not pl:
+        return 0.0
+    p_body = re.sub(r"^ms-|^ms\.|^com\.", "", pl)
+    p_body = p_body.replace(".", "").replace("-", "")
+    p_body_spaced = re.sub(
+        r"^ms-|^ms\.", "", (proto or "").lower()
+    ).replace(".", " ").replace("-", " ")
+    r0 = max(
+        _name_similarity(nq, p_body),
+        _name_similarity(
+            nq, _norm_query_compact(p_body_spaced)
+        ),
+    )
+    tq = set(re.findall(r"[a-z0-9]{2,}", n_user.lower()))
+    p_tokens = re.findall(
+        r"[a-z0-9]{2,}", pl.replace(".", " ").replace("-", " ").replace("_", " ")
+    )
+    ps = set(p_tokens)
+    if not tq or not ps:
+        base = 0.55 * r0
+    else:
+        j = len(tq & ps) / len(tq | ps) if (tq | ps) else 0.0
+        j = max(j, _query_display_score(n_user, p_body_spaced))
+        base = min(1.0, 0.45 * r0 + 0.55 * j)
+    pl_flat = re.sub(r"[^a-z0-9]+", "", pl)
+    for t in tq:
+        if len(t) >= 3 and t in pl_flat:
+            base = min(1.0, base + 0.2)
+    return min(1.0, base)
+
+
+def _registry_key_matches(n_compact: str, reg_stem: str, n_user: str) -> bool:
+    r = _name_similarity(n_compact, reg_stem)
+    if r >= 0.91:
+        return True
+    if r >= 0.84 and _exe_stem_matches_query(n_user, reg_stem):
+        return True
+    if r >= 0.80 and _exe_stem_matches_query(n_user, reg_stem):
+        return True
+    return r >= 0.93
+
+
+def _get_windows_startapps() -> list[tuple[str, str]]:
+    """
+    System shell enumeration (Name + AppId). Empty if cmdlet unavailable
+    or any failure — no hardcoded app list.
+    """
+    if _OS != "windows":
+        return []
+    try:
+        ps = (
+            "if (Get-Command Get-StartApps -ErrorAction SilentlyContinue) { "
+            "Get-StartApps | ForEach-Object { [PSCustomObject]@{N=$_.Name;I=$_.AppId} } | ConvertTo-Json -Compress } "
+            "else { '[]' }"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            creationflags=_win_subprocess_flags(),
+        )
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return []
+        data = json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
+        out: list[tuple[str, str]] = []
+        for row in data or []:
+            if not isinstance(row, dict):
+                continue
+            n = (row.get("N") or row.get("Name") or "").strip()
+            i = (row.get("I") or row.get("AppId") or "").strip()
+            if n and i:
+                out.append((n, i))
+        return out
+    except Exception:
+        return []
+
+
+def _get_shell_appsfolder_apps() -> list[tuple[str, str]]:
+    """
+    `shell:AppsFolder` via Shell.Application (often lists more UWP/Store apps
+    than Get-StartApps alone). Returns (display name, AUMID path) pairs.
+    """
+    if _OS != "windows":
+        return []
+    try:
+        ps = r"""
+$a = [System.Collections.Generic.List[object]]::new()
+try {
+  $sh = New-Object -ComObject Shell.Application
+  $f = $sh.NameSpace('shell:AppsFolder')
+  if ($null -ne $f) { foreach ($it in $f.Items()) {
+    if ($it.Name -and $it.Path) { $a.Add([PSCustomObject]@{N=$it.Name;I=$it.Path}) }
+  } }
+} catch { }
+@($a) | ConvertTo-Json -Compress
+"""
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Sta", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=_win_subprocess_flags(),
+        )
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return []
+        data = json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
+        out: list[tuple[str, str]] = []
+        for row in data or []:
+            if not isinstance(row, dict):
+                continue
+            n = (row.get("N") or row.get("Name") or "").strip()
+            i = (row.get("I") or row.get("Path") or "").strip()
+            if n and i:
+                out.append((n, i))
+        return out
+    except Exception:
+        return []
+
+
+def _merge_startapp_rows(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Deduplicate by app id, keep the longer (usually richer) display name."""
+    by_id: dict[str, str] = {}
+    for name, app_id in pairs:
+        k = (app_id or "").strip()
+        if not k:
+            continue
+        nm = (name or "").strip()
+        if k not in by_id or len(nm) > len(by_id[k]):
+            by_id[k] = nm
+    return [(v, k) for k, v in by_id.items()]
+
+
+def _get_all_startapp_rows() -> list[tuple[str, str]]:
+    a = _get_windows_startapps()
+    b = _get_shell_appsfolder_apps()
+    return _merge_startapp_rows(a + b)
+
+
+def _get_ms_url_protocols_cached() -> list[str]:
+    r"""HKCR `ms-*` progid keys that declare a `URL Protocol` subkey — cached; no fixed list."""
+    global _proto_cache, _proto_cache_m
+    now = time.monotonic()
+    if _proto_cache is not None and (now - _proto_cache_m) < _PROTO_CACHE_TTL_S:
+        return _proto_cache
+    _proto_cache_m = now
+    _proto_cache = []
+    if _OS != "windows":
+        return _proto_cache
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "") as h_root:
+            idx = 0
+            while True:
+                try:
+                    name = winreg.EnumKey(h_root, idx)
+                except OSError:
+                    break
+                idx += 1
+                if not name.startswith("ms-"):
+                    continue
+                try:
+                    with winreg.OpenKey(h_root, name) as k:
+                        winreg.QueryValueEx(k, "URL Protocol")
+                    _proto_cache.append(name)
+                except OSError:
+                    pass
+    except (ImportError, OSError):
+        pass
+    return _proto_cache or []
+
+
+def _best_url_protocol(n_user: str) -> str | None:
+    """Best registered `ms-…` URL protocol for the query (e.g. Store via ``ms-windows-store``)."""
+    protos = _get_ms_url_protocols_cached()
+    if not protos:
+        return None
+    best: str | None = None
+    best_s = 0.0
+    for p in protos:
+        s = _score_query_vs_url_protocol(n_user, p)
+        if s > best_s:
+            best_s = s
+            best = p
+    if best is None or best_s < 0.36:
+        return None
+    return best
+
+
+def _best_startapp_id(n_user: str, rows: list[tuple[str, str]]) -> tuple[str, str] | None:
+    """Best (display_name, app_id) using token + string score (no per-app hardcoding)."""
+    if not (n_user or "").strip() or not rows:
+        return None
+    best: tuple[str, str] | None = None
+    best_s = 0.0
+    for display, app_id in rows:
+        s = _query_display_score(n_user, display)
+        toks = re.findall(r"[a-z0-9]{3,}", display.lower())
+        tok_ok = any(_exe_stem_matches_query(n_user, t) for t in toks)
+        if s < 0.52 and not (tok_ok and s >= 0.44):
+            continue
+        if s < 0.42:
+            continue
+        if s > best_s:
+            best_s = s
+            best = (display, app_id)
+    if best is None or best_s < 0.50:
+        return None
+    return best
+
 
 def _find_app_windows(name: str) -> str | None:
-    """Search Windows for an app by name. Returns launch path or None."""
-    n_lower = name.lower().strip()
+    """Resolve an app: aliases → StartApps → Start-Menu lnk → PATH → registry → Program Files.
+
+    StartApps / Start Menu run *before* ``shutil.which`` so a shell-installed GUI app
+    (e.g. Claude Desktop) wins over a same-named CLI on PATH (e.g. ``claude`` / npm shim).
+    """
+    n_user = (name or "").strip()
+    n_lower = n_user.lower()
+    n_compact = _norm_query_compact(n_user)
 
     # 1. Built-in alias table
     alias = _WIN_ALIASES.get(n_lower)
     if alias:
         if shutil.which(alias):
             return alias
-        # Try startfile-friendly name (works for UWP-launched shortcuts)
         return alias
 
-    # 2. Direct PATH lookup (exact + .exe)
-    for candidate in [name, name + ".exe", n_lower, n_lower + ".exe",
-                      n_lower.replace(" ", "") + ".exe"]:
-        if shutil.which(candidate):
-            return candidate
+    # 2. Windows shell: Get-StartApps + shell:AppsFolder COM merge (broader UWP coverage)
+    start_rows = _get_all_startapp_rows()
+    picked = _best_startapp_id(n_user, start_rows)
+    if picked is not None:
+        _disp, app_id = picked
+        return f"{_WIN_APPID_PREFIX}{app_id}"
 
-    # 3. Windows Registry App Paths
+    # 3. Start Menu .lnk (strict scoring; no loose substring of exe stem in query)
+    start_dirs: list[Path] = []
+    appdata = os.environ.get("APPDATA", "")
+    prog_data = os.environ.get("PROGRAMDATA", "C:/ProgramData")
+    if appdata:
+        start_dirs.append(Path(appdata) / "Microsoft/Windows/Start Menu/Programs")
+    start_dirs.append(Path(prog_data) / "Microsoft/Windows/Start Menu/Programs")
+
+    best_lnk: str | None = None
+    best_r_lnk = 0.0
+    for base in start_dirs:
+        if not base.exists():
+            continue
+        try:
+            for lnk in base.rglob("*.lnk"):
+                stem = lnk.stem.lower().replace(" ", "")
+                r = _query_display_score(n_user, lnk.stem)
+                if r < 0.68:
+                    continue
+                # r≈0.89 on 'codex' vs 'code' must not pass without a real word boundary
+                if not ((r >= 0.9) or (r >= 0.72 and _exe_stem_matches_query(n_user, stem))):
+                    continue
+                if r > best_r_lnk:
+                    best_r_lnk = r
+                    best_lnk = str(lnk)
+        except (PermissionError, OSError):
+            pass
+    if best_lnk and best_r_lnk >= 0.72:
+        return best_lnk
+
+    # 4. Direct PATH (after GUI-oriented resolution — see docstring)
+    for candidate in [name, name + ".exe", n_lower, n_lower + ".exe", n_compact + ".exe"]:
+        w = shutil.which(candidate)
+        if w:
+            return w
+
+    # 5. Windows Registry — App Paths (strict similarity; no substring-only matches)
     if _OS == "windows":
         try:
             import winreg
+            reg_best: str | None = None
+            reg_r = 0.0
             for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
                 try:
                     key = winreg.OpenKey(
@@ -509,73 +872,63 @@ def _find_app_windows(name: str) -> str | None:
                     while True:
                         try:
                             subkey_name = winreg.EnumKey(key, i)
-                            stem = subkey_name.lower().replace(".exe", "").replace(" ", "")
-                            ratio = difflib.SequenceMatcher(None, stem, n_lower.replace(" ", "")).ratio()
-                            if ratio > 0.7 or n_lower.replace(" ", "") in stem:
-                                subkey = winreg.OpenKey(key, subkey_name)
-                                try:
-                                    exe_path, _ = winreg.QueryValueEx(subkey, "")
-                                    exe_path = exe_path.strip().strip('"')
-                                    if exe_path and Path(exe_path).exists():
-                                        return exe_path
-                                except Exception:
-                                    pass
-                            i += 1
                         except OSError:
                             break
-                except Exception:
+                        i += 1
+                        stem = subkey_name.lower().replace(".exe", "").replace(" ", "")
+                        if not _registry_key_matches(n_compact, stem, n_user):
+                            continue
+                        r = _name_similarity(n_compact, stem)
+                        if r < 0.78 and not _exe_stem_matches_query(n_user, stem):
+                            continue
+                        try:
+                            subk = winreg.OpenKey(key, subkey_name)
+                            try:
+                                exe_path, _ = winreg.QueryValueEx(subk, "")
+                            finally:
+                                winreg.CloseKey(subk)
+                            exe_path = exe_path.strip().strip('"')
+                            if exe_path and Path(exe_path).exists() and r > reg_r:
+                                reg_r = r
+                                reg_best = exe_path
+                        except OSError:
+                            pass
+                except OSError:
                     pass
+            if reg_best and reg_r >= 0.78:
+                return reg_best
         except ImportError:
             pass
 
-    # 4. Start Menu shortcut search
-    start_dirs = []
-    appdata = os.environ.get("APPDATA", "")
-    prog_data = os.environ.get("PROGRAMDATA", "C:/ProgramData")
-    if appdata:
-        start_dirs.append(Path(appdata) / "Microsoft/Windows/Start Menu/Programs")
-    start_dirs.append(Path(prog_data) / "Microsoft/Windows/Start Menu/Programs")
-
-    best_score = 0.0
-    best_path  = None
-    for base in start_dirs:
-        if not base.exists():
-            continue
-        try:
-            for lnk in base.rglob("*.lnk"):
-                stem = lnk.stem.lower().replace(" ", "")
-                ratio = difflib.SequenceMatcher(None, stem, n_lower.replace(" ", "")).ratio()
-                if ratio > best_score:
-                    best_score = ratio
-                    best_path  = str(lnk)
-        except (PermissionError, OSError):
-            pass
-
-    if best_score > 0.65 and best_path:
-        return best_path
-
-    # 5. Search Program Files for .exe
+    # 6. Program Files and local app dirs (strict; avoid 'code' inside 'codex')
     prog_dirs = [
         Path("C:/Program Files"),
         Path("C:/Program Files (x86)"),
         Path.home() / "AppData/Local/Programs",
         Path.home() / "AppData/Local",
     ]
-    n_words = set(n_lower.split())
+    best_exe: str | None = None
+    best_r_exe = 0.0
     for base in prog_dirs:
         if not base.exists():
             continue
         try:
             for exe in base.rglob("*.exe"):
                 stem = exe.stem.lower()
-                if stem in n_lower or n_lower.replace(" ", "") in stem:
-                    return str(exe)
-                # Word overlap heuristic
-                stem_words = set(stem.replace("-", " ").replace("_", " ").split())
-                if n_words & stem_words and len(n_words & stem_words) / max(len(n_words), 1) > 0.5:
-                    return str(exe)
+                r = _name_similarity(n_compact, stem.replace(" ", ""))
+                if (r >= 0.90) or (r >= 0.84 and _exe_stem_matches_query(n_user, stem)):
+                    if r > best_r_exe:
+                        best_r_exe = r
+                        best_exe = str(exe)
         except (PermissionError, OSError):
             pass
+    if best_exe and best_r_exe >= 0.8:
+        return best_exe
+
+    # 7. Registered ``ms-*`` URL protocol (HKCR scan) — covers Store and other shell protocols
+    proto = _best_url_protocol(n_user)
+    if proto:
+        return _WIN_PROTO_PREFIX + proto
 
     return None
 
@@ -620,11 +973,59 @@ def _handle_open_app(action: str, params: dict) -> dict:
     if _OS == "windows":
         found = _find_app_windows(name)
         if found:
+            if found.startswith(_WIN_APPID_PREFIX):
+                app_uri = "shell:AppsFolder\\" + found[len(_WIN_APPID_PREFIX) :]
+                try:
+                    os.startfile(app_uri)
+                    return _ok(f"Launched {name}")
+                except Exception:
+                    try:
+                        subprocess.Popen(
+                            ["explorer", app_uri],
+                            shell=False,
+                            creationflags=_win_subprocess_flags(),
+                        )
+                        return _ok(f"Launched {name}")
+                    except Exception as exc:
+                        pkey = _best_url_protocol(name)
+                        if pkey:
+                            p_uri = f"{pkey}:"
+                            try:
+                                os.startfile(p_uri)
+                                return _ok(f"Launched {name}")
+                            except Exception:
+                                try:
+                                    subprocess.run(
+                                        ["cmd", "/c", "start", "", p_uri],
+                                        shell=False,
+                                        creationflags=_win_subprocess_flags(),
+                                        check=False,
+                                    )
+                                    return _ok(f"Launched {name}")
+                                except Exception:
+                                    return _err(str(exc))
+                        return _err(str(exc))
+            if found.startswith(_WIN_PROTO_PREFIX):
+                pkey = found[len(_WIN_PROTO_PREFIX) :]
+                p_uri = f"{pkey}:"
+                try:
+                    os.startfile(p_uri)
+                    return _ok(f"Launched {name}")
+                except Exception:
+                    try:
+                        subprocess.run(
+                            ["cmd", "/c", "start", "", p_uri],
+                            shell=False,
+                            creationflags=_win_subprocess_flags(),
+                            check=False,
+                        )
+                        return _ok(f"Launched {name}")
+                    except Exception as exc2:
+                        return _err(str(exc2))
             try:
                 os.startfile(found)
                 return _ok(f"Launched {name}")
             except Exception as exc:
-                # Try subprocess as fallback
                 try:
                     subprocess.Popen([found], shell=False)
                     return _ok(f"Launched {name}")
@@ -967,9 +1368,16 @@ def _handle_file_operation(action: str, params: dict) -> dict:
             found = _find_existing_item(path)
             if found:
                 path = found
-        # Plain filename with no separators → rename in place (same directory)
+        # No path separators: either a well-known profile folder (Downloads, …) or
+        # a new name in the same directory as the source. Do not clobber a resolved
+        # folder (e.g. _find_folder("Downloads") → home/Downloads) with path.parent / "Downloads".
         raw_dest_str = (params.get("destination") or "").strip()
-        if raw_dest_str and "/" not in raw_dest_str and "\\" not in raw_dest_str:
+        if (
+            raw_dest_str
+            and "/" not in raw_dest_str
+            and "\\" not in raw_dest_str
+            and _find_folder(raw_dest_str) is None
+        ):
             dest = path.parent / raw_dest_str
         if dest is None:
             return _err("No destination provided")
@@ -1166,7 +1574,17 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
                 else browser.screenshot_page(path))
 
     if action == "close_tab":
-        return browser.close_tab()
+        return browser.close_tab(
+            title_contains=(
+                (params.get("title_contains") or params.get("title", "") or "")
+            ).strip(),
+            url_contains=(
+                (params.get("url_contains") or params.get("url_match", "") or "")
+            ).strip(),
+            match=(
+                (params.get("match") or params.get("tab") or params.get("target", "") or "")
+            ).strip(),
+        )
 
     return _err(f"Browser action not implemented: {action}")
 
@@ -1302,6 +1720,8 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     total   = len(steps)
     results = []
     all_ok  = True
+    last_step_intent  = ""
+    last_step_action  = ""
     for i, step in enumerate(steps, 1):
         try:
             from core.signals import signals
@@ -1323,6 +1743,9 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             # workflow steps in *this* invocation are skipped (no resume queue yet).
             return sub
         results.append(f"Step {i}: {'OK' if sub['success'] else 'FAIL'} — {sub['output'] or sub['error']}")
+        if sub["success"]:
+            last_step_intent = (step.get("intent") or "").strip()
+            last_step_action = (step.get("action") or "").strip()
         if not sub["success"]:
             all_ok = False
             break
@@ -1331,48 +1754,204 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         workflow_library.mark_run(workflow_id)
 
     summary = "\n".join(results)
-    return _ok(summary) if all_ok else _err(summary)
+    if not all_ok:
+        return _err(summary)
+    out: dict = _ok(summary)
+    if last_step_intent and last_step_action:
+        out["last_step_intent"] = last_step_intent
+        out["last_step_action"] = last_step_action
+    return out
 
 
 # ── Reminders ─────────────────────────────────────────────────────────────────
+#
+# Pure message reminders: fire `status_changed` with REMINDER: …
+# Action reminders: optional `parameters.run` = { intent, action, parameters }
+# — validated and executed on the Qt main thread via `signals.reminder_action`.
 
 _active_reminders: dict[str, threading.Timer] = {}
+_reminder_meta: dict[str, dict[str, Any]] = {}
+
+
+def _format_run_summary(run: dict[str, Any]) -> str:
+    """Short label for transcript and list_reminders."""
+    intent = run.get("intent", "")
+    act = run.get("action", "")
+    p = run.get("parameters") or {}
+    if intent == "open_app":
+        if act == "open_browser":
+            return f"open browser ({p.get('browser', 'default')})"
+        if act == "open_url":
+            return f"open URL"
+        return f"{act}: {p.get('app_name', p.get('url', ''))}"[:80]
+    if intent == "search_web":
+        return f"search: {p.get('query', '')}"[:80]
+    if intent == "system_control":
+        return f"{act}"
+    if intent == "browser_automation":
+        return f"{act}"
+    if intent == "read_screen":
+        return f"{act}"
+    if intent == "jarvis_meta":
+        return f"{act}"
+    return f"{intent}/{act}"
+
+
+def _is_schedulable_reminder_action(intent: str, act: str) -> bool:
+    """Actions that may run unattended when a timer fires (no extra user click)."""
+    if not intent or not act:
+        return False
+    if intent in (
+        "code_execution",
+        "automation_task",
+        "reminder_task",
+        "file_operation",
+        "close_app",
+        "type_text",
+        "control_mouse",
+    ):
+        return False
+    if (intent, act) in _DANGEROUS_STEPS:
+        return False
+    if (intent, act) in _CONFIRMATION_REQUIRED_ACTIONS:
+        return False
+    if intent == "system_control":
+        return act in (
+            "screenshot",
+            "volume_up",
+            "volume_down",
+            "volume_mute",
+            "lock_screen",
+            "brightness_up",
+            "brightness_down",
+        )
+    if intent == "jarvis_meta":
+        return act in ("tell_time", "tell_date", "status_report", "list_voices")
+    if intent == "browser_automation":
+        return act in (
+            "navigate",
+            "new_tab",
+            "read_page",
+            "fill_form",
+            "extract_text",
+            "click_element",
+            "screenshot",
+        )
+    if intent in ("open_app", "search_web", "read_screen"):
+        return True
+    return False
+
+
+def _validate_reminder_run(run: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """Return (normalised run dict, error message)."""
+    if run is None:
+        return None, None
+    if not isinstance(run, dict):
+        return None, "parameters.run must be an object"
+    intent = str(run.get("intent", "")).strip()
+    act = str(run.get("action", "")).strip()
+    params = run.get("parameters")
+    if not isinstance(params, dict):
+        params = {}
+    if not _is_schedulable_reminder_action(intent, act):
+        return None, (
+            f"Scheduled action not allowed for '{intent}/{act}' — "
+            "use a safe action (open app, search, screenshot, navigate, etc.)."
+        )
+    return {"intent": intent, "action": act, "parameters": params}, None
 
 
 def _handle_reminder_task(action: str, params: dict) -> dict:
     if action == "set_reminder":
-        msg   = params.get("message", "Reminder")
+        msg = str(params.get("message", "Reminder")).strip() or "Reminder"
         delay = max(5, int(params.get("delay_seconds", 60)))
+        run_raw = params.get("run")
+        run_norm, verr = _validate_reminder_run(run_raw)
+        if verr:
+            return _err(verr)
 
-        def _fire():
-            _active_reminders.pop(msg, None)
+        sched_conf = params.get("schedule_confidence")
+        try:
+            sc = float(sched_conf) if sched_conf is not None else 0.92
+        except (TypeError, ValueError):
+            sc = 0.92
+        sc = max(0.0, min(1.0, sc))
+
+        rid = str(params.get("reminder_id") or uuid.uuid4().hex[:12])
+
+        def _fire() -> None:
+            _active_reminders.pop(rid, None)
+            meta = _reminder_meta.pop(rid, None) or {}
+            m = meta.get("message", msg)
+            r = meta.get("run")
             try:
                 from core.signals import signals
-                signals.status_changed.emit(f"REMINDER: {msg}")
+                if r and isinstance(r, dict):
+                    signals.reminder_action.emit(
+                        {
+                            "reminder_id": rid,
+                            "message": m,
+                            "run": r,
+                            "schedule_confidence": float(meta.get("schedule_confidence", 0.92)),
+                        }
+                    )
+                else:
+                    signals.status_changed.emit(f"REMINDER: {m}")
             except Exception:
                 pass
 
         t = threading.Timer(delay, _fire)
         t.daemon = True
         t.start()
-        _active_reminders[msg] = t
+        _active_reminders[rid] = t
+        _reminder_meta[rid] = {
+            "message": msg,
+            "run": run_norm,
+            "schedule_confidence": sc,
+        }
         mins = delay // 60
         secs = delay % 60
         time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+        if run_norm:
+            summ = _format_run_summary(run_norm)
+            return _ok(f"In {time_str}: {summ}")
         return _ok(f"In {time_str}: {msg}")
 
     if action == "cancel_reminder":
-        msg = params.get("message", "")
-        t   = _active_reminders.pop(msg, None)
-        if t:
-            t.cancel()
-            return _ok(f"Reminder cancelled: {msg}")
-        return _err(f"No active reminder matching: {msg}")
+        want = str(params.get("message", "")).strip()
+        if not want:
+            return _err("No message provided for cancel_reminder.")
+        cancelled = 0
+        to_del: list[str] = []
+        for rid, meta in list(_reminder_meta.items()):
+            if str(meta.get("message", "")).strip() == want:
+                to_del.append(rid)
+        for rid in to_del:
+            t = _active_reminders.pop(rid, None)
+            _reminder_meta.pop(rid, None)
+            if t:
+                t.cancel()
+                cancelled += 1
+        if cancelled:
+            return _ok(
+                f"Cancelled {cancelled} reminder(s) for: {want}"
+                if cancelled > 1
+                else f"Reminder cancelled: {want}"
+            )
+        return _err(f"No active reminder matching: {want}")
 
     if action == "list_reminders":
-        if not _active_reminders:
+        if not _reminder_meta:
             return _ok("No active reminders.")
-        return _ok(", ".join(_active_reminders.keys()))
+        lines: list[str] = []
+        for rid, meta in _reminder_meta.items():
+            m = str(meta.get("message", ""))
+            r = meta.get("run")
+            if r:
+                lines.append(f"- [{rid}] {m} → {_format_run_summary(r)}")
+            else:
+                lines.append(f"- [{rid}] {m}")
+        return _ok("\n".join(lines))
 
     return _err(f"Unknown reminder action: {action}")
 
@@ -1388,18 +1967,122 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         return _ok(datetime.now().strftime("%A, %d %B %Y"))
     if action == "status_report":
         import psutil
+
         cpu = psutil.cpu_percent(interval=0.3)
         mem = psutil.virtual_memory()
-        return _ok(
-            f"CPU {cpu:.0f}%, memory {mem.percent:.0f}% "
-            f"({mem.used/1e9:.1f}/{mem.total/1e9:.1f} GB)"
-        )
+        parts = [
+            f"CPU {cpu:.0f}%",
+            f"memory {mem.percent:.0f}% ({mem.used/1e9:.1f}/{mem.total/1e9:.1f} GB)",
+        ]
+        try:
+            bat = psutil.sensors_battery()
+        except (AttributeError, NotImplementedError):
+            bat = None
+        if bat is not None and bat.percent is not None:
+            plug = "plugged in" if bat.power_plugged else "on battery"
+            parts.append(f"battery {bat.percent:.0f}% ({plug})")
+        return _ok(", ".join(parts))
     if action == "conversational":
         # Check page cache for "what does it say" queries
         cached = get_page_cache()
         if cached:
             return _ok(cached[:800])
         return _ok("")
+    if action == "list_voices":
+        from core.voice import _EL_VOICES
+        _LABELS = {
+            "male-british":         "George  — deep, warm British",
+            "male-american":        "Adam    — neutral American",
+            "female-british":       "Rachel  — warm British female",
+            "male-broadcast":       "Daniel  — strong broadcast voice",
+            "male-resonant":        "Brian   — resonant, narration",
+            "male-smooth":          "Eric    — smooth, conversational",
+            "male-gravelly":        "Callum  — gravelly, distinctive",
+            "male-casual":          "Chris   — natural, down-to-earth",
+            "male-australian":      "Charlie — energetic Australian",
+            "female-professional":  "Sarah   — professional, warm",
+            "female-british-clear": "Alice   — British female, clear",
+            "female-british-warm":  "Lily    — British female, warm",
+            "female-american":      "Matilda — professional American female",
+        }
+        current = config.tts_voice
+        lines = ["Available voices (* = current):"]
+        for key in _EL_VOICES:
+            label = _LABELS.get(key, key)
+            marker = " *" if key == current else ""
+            lines.append(f"  • {label}{marker}")
+        return _ok("\n".join(lines))
+
+    if action == "change_voice":
+        # Map natural names / aliases → config key
+        _VOICE_ALIASES: dict[str, str] = {
+            # keys — accept exact config key
+            "male-british":         "male-british",
+            "male-american":        "male-american",
+            "female-british":       "female-british",
+            "male-broadcast":       "male-broadcast",
+            "male-resonant":        "male-resonant",
+            "male-smooth":          "male-smooth",
+            "male-gravelly":        "male-gravelly",
+            "male-casual":          "male-casual",
+            "male-australian":      "male-australian",
+            "female-professional":  "female-professional",
+            "female-british-clear": "female-british-clear",
+            "female-british-warm":  "female-british-warm",
+            "female-american":      "female-american",
+            # name aliases
+            "george":    "male-british",
+            "adam":      "male-american",
+            "adams":     "male-american",  # common STT / typo
+            "rachel":    "female-british",
+            "daniel":    "male-broadcast",
+            "brian":     "male-resonant",
+            "eric":      "male-smooth",
+            "callum":    "male-gravelly",
+            "chris":     "male-casual",
+            "charlie":   "male-australian",
+            "sarah":     "female-professional",
+            "alice":     "female-british-clear",
+            "lily":      "female-british-warm",
+            "matilda":   "female-american",
+            # natural language aliases
+            "british":      "male-british",
+            "american":     "male-american",
+            "female":       "female-british",
+            "broadcast":    "male-broadcast",
+            "deep":         "male-resonant",
+            "smooth":       "male-smooth",
+            "gravelly":     "male-gravelly",
+            "casual":       "male-casual",
+            "australian":   "male-australian",
+            "aussie":       "male-australian",
+            "professional": "female-professional",
+        }
+        _VOICE_LABELS: dict[str, str] = {
+            "male-british":         "George (British male)",
+            "male-american":        "Adam (American male)",
+            "female-british":       "Rachel (British female)",
+            "male-broadcast":       "Daniel (broadcast, professional)",
+            "male-resonant":        "Brian (resonant, narration)",
+            "male-smooth":          "Eric (smooth, conversational)",
+            "male-gravelly":        "Callum (gravelly, distinctive)",
+            "male-casual":          "Chris (casual, natural American)",
+            "male-australian":      "Charlie (Australian, energetic)",
+            "female-professional":  "Sarah (professional, warm)",
+            "female-british-clear": "Alice (British female, clear)",
+            "female-british-warm":  "Lily (British female, warm)",
+            "female-american":      "Matilda (American female, professional)",
+        }
+        raw = (params.get("voice") or "").strip().lower()
+        key = _VOICE_ALIASES.get(raw)
+        if not key:
+            available = ", ".join(_VOICE_LABELS.values())
+            return _err(f"Unknown voice {raw!r}. Available: {available}")
+        config.tts_voice = key
+        config.save()
+        label = _VOICE_LABELS[key]
+        return _ok(f"Voice set to {label}")
+
     if action in ("quit_application", "close_jarvis"):
         # Main window speaks `response` then calls QApplication.quit() on a timer
         return {"success": True, "output": "", "error": "", "quit_application": True}

@@ -401,6 +401,24 @@ _P: dict[tuple, dict] = {
     },
 
     # ── JARVIS META ──────────────────────────────────────────────────
+    ("jarvis_meta", "list_voices"): {
+        "ok": [
+            "Here are the available voices, sir:\n{o}",
+            "Here's what I have, sir:\n{o}",
+        ],
+        "err": ["Couldn't fetch the voice list — {e}"],
+    },
+    ("jarvis_meta", "change_voice"): {
+        "ok": [
+            "Done, sir. Switched to {o}.",
+            "Voice changed to {o}.",
+            "{o} — consider it done.",
+        ],
+        "err": [
+            "Couldn't switch voice — {e}",
+            "Voice change failed, sir. {e}",
+        ],
+    },
     ("jarvis_meta", "tell_time"): {
         "ok": [
             "It's {o}, sir.",
@@ -434,6 +452,8 @@ _P: dict[tuple, dict] = {
             "Reminder set. {o}",
             "Got it — I'll ping you. {o}",
             "Noted. {o}",
+            "On it — {o}",
+            "When the time's up, I'll run that for you, sir. {o}",
         ],
         "err": ["Reminder failed — {e}"],
     },
@@ -568,6 +588,173 @@ _DEFAULT = {
     "err": ["That didn't work, sir. {e}", "Something went wrong — {e}"],
 }
 
+# When a *scheduled* reminder fires and runs an action, the transcript second line
+# should always sound like a crisp follow-up (same cadence as "There you go — it's open"),
+# not a wall of raw executor output. Keys match reminder allowlist in executor.py.
+_SCHEDULED_FOLLOWUP: dict[tuple, list[str]] = {
+    ("open_app", "*"): [
+        "There you go — it's open, sir.",
+        "Launched — all yours, sir.",
+        "Up now — you should see it, sir.",
+        "Pulled it up. There you are, sir.",
+    ],
+    ("search_web", "*"): [
+        "There you go — results are up, sir.",
+        "Search is live — have a look, sir.",
+        "On screen — as requested, sir.",
+    ],
+    ("system_control", "screenshot"): [
+        "There you go — screen captured, sir.",
+        "Snapped and saved, sir.",
+        "Capture's on disk, sir.",
+    ],
+    ("system_control", "volume_up"): [
+        "There you go — volume up, sir.",
+        "Dialed it louder, sir.",
+    ],
+    ("system_control", "volume_down"): [
+        "There you go — volume down, sir.",
+        "Brought it down a notch, sir.",
+    ],
+    ("system_control", "volume_mute"): [
+        "There you go — audio muted, sir.",
+        "Muted, sir.",
+    ],
+    ("system_control", "lock_screen"): [
+        "There you go — workstation locked, sir.",
+        "Locked, sir.",
+    ],
+    ("system_control", "brightness_up"): [
+        "Brightness nudged up, sir.",
+        "A touch brighter, sir.",
+    ],
+    ("system_control", "brightness_down"): [
+        "Brightness nudged down, sir.",
+        "A touch dimmer, sir.",
+    ],
+    ("browser_automation", "navigate"): [
+        "There you go — page is up, sir.",
+        "Loaded — it's open, sir.",
+    ],
+    ("browser_automation", "new_tab"): [
+        "There you go — new tab, sir.",
+        "Fresh tab ready, sir.",
+    ],
+    ("browser_automation", "read_page"): [
+        "There you are — I read the page, sir.",
+        "Pulled the visible text for you, sir.",
+    ],
+    ("browser_automation", "fill_form"): [
+        "There you go — form filled, sir.",
+        "Fields are in, sir.",
+    ],
+    ("browser_automation", "click_element"): [
+        "There you go — clicked, sir.",
+        "That click's in, sir.",
+    ],
+    ("browser_automation", "screenshot"): [
+        "There you go — browser capture done, sir.",
+        "Page snap saved, sir.",
+    ],
+    ("browser_automation", "extract_text"): [
+        "There you are — text pulled, sir.",
+        "Extracted, sir. {o}",
+    ],
+    ("read_screen", "*"): [
+        "There you go — text from the screen, sir.",
+        "OCR's done, sir.",
+    ],
+    ("jarvis_meta", "tell_time"): [
+        "There you are, sir — {o}.",
+    ],
+    ("jarvis_meta", "tell_date"): [
+        "There you are, sir — {o}.",
+    ],
+    ("jarvis_meta", "status_report"): [
+        "Here's the readout, sir — {o}.",
+        "Status in — {o}",
+    ],
+    ("jarvis_meta", "list_voices"): [
+        "Voices on file, sir. {o}",
+    ],
+    # Whole workflow done — used only if last-step ack cannot be chosen
+    ("automation_task", "run_workflow"): [
+        "There you go — all steps are done, sir.",
+        "That's the full run, sir.",
+        "All requested steps are through, sir.",
+    ],
+    ("file_operation", "*"): [
+        "There you go — file op complete, sir.",
+        "All set on disk, sir.",
+    ],
+    ("type_text", "*"): [
+        "There you go — input's in, sir.",
+        "Sent to the field, sir.",
+    ],
+    ("code_execution", "git_command"): [
+        "There you go — git's done, sir.",
+        "Command's through, sir.",
+    ],
+    ("code_execution", "run_shell"): [
+        "There you go — shell command finished, sir.",
+        "That's the terminal output, sir.",
+    ],
+}
+
+_SCHEDULED_FALLBACK_OK = [
+    "There you go — all set, sir.",
+    "There you go — done, sir.",
+    "That's taken care of, sir.",
+    "Consider it done, sir.",
+    "All finished on schedule, sir.",
+]
+
+
+def _brief_scheduled_output(output: str, cap: int = 120) -> str:
+    """One short fragment for {o} in scheduled follow-ups — no essay."""
+    s = (output or "").strip().replace("\r\n", "\n")
+    if not s:
+        return ""
+    if "\n" in s:
+        s = s.split("\n", 1)[0].strip()
+    s = s[:cap] + "…" if len(s) > cap else s
+    if ("/" in s or "\\" in s) and not s.startswith("http") and cap > 30:
+        parts = s.replace("\\", "/").split("/")
+        last = next((p for p in reversed(parts) if p), s)
+        return last.strip()[:80]
+    return s
+
+
+def ack_scheduled_action(
+    intent: str,
+    action: str,
+    exec_ok: bool,
+    output: str = "",
+    error: str = "",
+) -> str:
+    """Spoken + transcript line after an action completes (timer or immediate). Compact."""
+    if not exec_ok:
+        return say(intent, action, "err", output, error)
+
+    pool = _SCHEDULED_FOLLOWUP.get((intent, action))
+    if not pool:
+        pool = _SCHEDULED_FOLLOWUP.get((intent, "*"))
+    if not pool:
+        return random.choice(_SCHEDULED_FALLBACK_OK)
+
+    template = random.choice(pool)
+    o = _brief_scheduled_output(output)
+    if "{o}" in template:
+        if not o:
+            plain = [t for t in pool if "{o}" not in t]
+            return random.choice(plain) if plain else random.choice(_SCHEDULED_FALLBACK_OK)
+        try:
+            return template.format(o=o)
+        except (KeyError, ValueError):
+            return template.replace("{o}", o)
+    return template
+
+
 # Intents/actions whose output must never be trimmed (listings, OCR, code output).
 # Use ("intent", "*") to match any action under that intent.
 _NO_TRIM: set[tuple[str, str]] = {
@@ -580,6 +767,7 @@ _NO_TRIM: set[tuple[str, str]] = {
     ("browser_automation", "read_page"),
     ("code_execution",   "*"),
     ("jarvis_meta",      "status_report"),
+    ("jarvis_meta",      "list_voices"),
 }
 
 
@@ -633,3 +821,77 @@ def ask(confirmation_type: str, subject: str = "") -> str:
         return template.format(o=subject)
     except (KeyError, IndexError):
         return template
+
+
+# ── Response assembler (Phase 1/2) ───────────────────────────────────────────
+
+def _is_no_trim_action(intent: str, action: str) -> bool:
+    return (intent, action) in _NO_TRIM or (intent, "*") in _NO_TRIM
+
+
+def action_speech_pair(
+    intent: str,
+    action: str,
+    exec_ok: bool,
+    claude_response: str,
+    output: str = "",
+    error: str = "",
+    *,
+    last_step: tuple[str, str] | None = None,
+) -> tuple[str, str | None]:
+    """Primary line (usually Claude's preamble) plus optional compact done line.
+
+    The follow-up uses the same pools as :func:`ack_scheduled_action` so normal
+    commands get the same "There you go" cadence as timer-fired steps. Full
+    listings/OCR/code are left as a single TTS (no chaser) via ``_NO_TRIM``.
+    """
+    if not exec_ok:
+        return (say(intent, action, "err", output, error), None)
+
+    if (
+        intent == "automation_task"
+        and action == "run_workflow"
+    ):
+        cr = (claude_response or "").strip()
+        primary = cr or "All steps complete, sir."
+        out = (output or "").strip()
+        if not out:
+            follow = ack_scheduled_action(intent, action, True, output, error)
+        else:
+            li, la = (last_step[0], last_step[1]) if (
+                last_step and last_step[0] and last_step[1]
+            ) else (intent, action)
+            follow = ack_scheduled_action(li, la, True, output, error)
+        return (primary, follow)
+
+    if _is_no_trim_action(intent, action):
+        return (say(intent, action, "ok", output, error), None)
+
+    cr = (claude_response or "").strip()
+    if not cr:
+        return (say(intent, action, "ok", output, error), None)
+
+    follow = ack_scheduled_action(intent, action, True, output, error)
+    return (cr, follow)
+
+
+def build_response(
+    intent: str,
+    action: str,
+    exec_ok: bool,
+    claude_response: str,
+    output: str = "",
+    error: str = "",
+    last_step: tuple[str, str] | None = None,
+) -> str:
+    """Assemble the final **display** string for an action (primary + follow-up lines).
+
+    For UI/TTS, prefer :func:`action_speech_pair` in ``main`` so the two lines can
+    be spoken sequentially.
+    """
+    primary, follow = action_speech_pair(
+        intent, action, exec_ok, claude_response, output, error, last_step=last_step
+    )
+    if follow:
+        return f"{primary}\n{follow}"
+    return primary

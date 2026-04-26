@@ -217,6 +217,13 @@ class TranscriptPanel(GlassPanel):
         self._rows.append((you, y_time, jarvis, j_time, intent, conf))
         self._render()
 
+    def append_jarvis_scheduled(
+        self, jarvis: str, j_time: str, intent: str = "", conf: float | None = None
+    ) -> None:
+        """Log line for a background scheduled action (no matching YOU: line)."""
+        self._rows.append(("", "", jarvis, j_time, intent, conf))
+        self._render()
+
     def update_last_you(self, text, y_time=""):
         if not self._rows:
             return
@@ -241,7 +248,8 @@ class TranscriptPanel(GlassPanel):
     def _render(self):
         lines = []
         for you, y_time, jarvis, j_time, intent, conf in self._rows:
-            lines.append(f"[{y_time}] YOU: {you}")
+            if you:
+                lines.append(f"[{y_time}] YOU: {you}")
             if jarvis:
                 suffix = f" ({intent}, {int(conf * 100)}%)" if intent and conf is not None else ""
                 lines.append(f"[{j_time}] JARVIS: {jarvis}{suffix}")

@@ -9,6 +9,8 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 class JarvisSignals(QObject):
     status_changed = pyqtSignal(str)
+    """Fires when a scheduled reminder includes an executable JARVIS action (main thread)."""
+    reminder_action = pyqtSignal(dict)
     command_received = pyqtSignal(str)
     confidence_updated = pyqtSignal(float)
     speaking_state_changed = pyqtSignal(bool)
