@@ -58,7 +58,7 @@
       "id": "night_mode",
       "name": "Night Mode",
       "trigger": "Manual",
-      "enabled": false,
+      "enabled": true,
       "last_run": "2026-04-25T19:12:58Z",
       "steps": [
         {
