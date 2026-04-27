@@ -32,6 +32,7 @@ class AppConfig:
     tts_speed: int = 100
     mic_sensitivity: int = 70
     noise_gate: bool = True
+    mic_device: int = -1      # -1 = system default; ≥0 = sounddevice device index
 
     @classmethod
     def from_env(cls):

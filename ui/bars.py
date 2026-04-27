@@ -274,6 +274,7 @@ class TopBar(QWidget):
     settings_clicked  = pyqtSignal()
     terminal_clicked  = pyqtSignal()
     broadcast_clicked = pyqtSignal()
+    battery_alert     = pyqtSignal(str, str)  # (message, kind)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -400,6 +401,9 @@ class TopBar(QWidget):
             icons_lay.addWidget(btn)
         lay.addWidget(icons_wrap)
 
+        self._prev_batt_pct  = None
+        self._prev_batt_plug = None
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(1000)
@@ -431,6 +435,15 @@ class TopBar(QWidget):
         try:
             b_pct, b_plug = _battery_state()
             self._battery.set_state(b_pct, b_plug)
+            if b_pct is not None:
+                prev = self._prev_batt_pct
+                prev_plug = self._prev_batt_plug
+                if prev is not None and prev > 20 and b_pct <= 20 and not b_plug:
+                    self.battery_alert.emit("Battery at 20% — please plug in.", "warning")
+                if b_plug and b_pct == 100 and (prev_plug is False or prev is not None and prev < 100):
+                    self.battery_alert.emit("Battery fully charged.", "success")
+                self._prev_batt_pct  = b_pct
+                self._prev_batt_plug = b_plug
         except Exception:
             self._battery.set_state(None, False)
 

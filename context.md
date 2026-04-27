@@ -7,6 +7,72 @@
 
 **Brain prompt:** `CLAUDE.md` (or `Claude.md` on case-insensitive systems) — loaded by `core/brain.py`
 
+### Session 2026-04-27 (Claude Code) — Voice pipeline split: audio_pipeline.py + voice.py facade
+
+Split monolithic `core/voice.py` (~515 lines) into:
+- `core/audio_pipeline.py` — `AudioCapture`, `SttEngine`, `TtsEngine`, `SttError`, `_EL_VOICES`
+- `core/voice.py` — thin `VoiceEngine` facade (~150 lines); same public API; overlap guard added
+
+New features inside the split:
+- **Overlap guard**: `listen()` refuses to open mic if `TtsEngine.is_speaking` is True
+- **Typed STT errors**: `SttError` enum (NO_SPEECH / NETWORK / TIMEOUT / DEVICE)
+- **Ambient noise calibration**: `AudioCapture.calibrate_threshold()` samples room noise and adapts threshold
+- **Guaranteed stream cleanup**: `AudioCapture.capture()` always closes the sounddevice stream in `try/finally`
+- **`is_speaking` property**: `VoiceEngine.is_speaking` → `TtsEngine._speaking.is_set()` (threading.Event)
+
+No external API changes — `executor.py` and `main.py` import paths unchanged.
+
+| File | Change |
+|------|--------|
+| `core/audio_pipeline.py` | **New file** — all audio engine internals |
+| `core/voice.py` | Rewritten as thin facade (~150 lines, was ~515) |
+| `context.md` | Voice Pipeline section updated with split details |
+
+---
+
+### Session 2026-04-27 (Claude Code) — Bug fixes: auto-confirm bypass + Win+J global hotkey
+
+**All 9 TESTS.txt tests now pass.** Two bugs were found and fixed during the test run.
+
+#### Bug 1 — Auto-confirm did not bypass executor-level confirmation (Test 2)
+
+**Root cause:** `_on_brain_result` short-circuits the Claude-level `requires_confirmation` flag
+when `_auto_confirm` is ON (passes `confirmed=True` to `dispatch`). But `delete_file` (and
+`create_file`, `rename_file`, etc.) use a **second, separate confirmation path**:
+`request_confirmation()` inside `_handle_file_operation` sets `needs_confirmation` on the result,
+which `_finish_execute` always showed as the confirm card — regardless of `_auto_confirm`.
+
+**Fix — `main.py` `_finish_execute`:** Added a short-circuit before the confirm-card block:
+```python
+if exec_out.get("needs_confirmation") and self._auto_confirm:
+    resolved = resolve_confirmation("yes")
+    self._on_confirmation_resolved(resolved)
+    return
+```
+Now both confirmation layers (brain-level and executor-level) respect the auto-confirm flag.
+
+#### Bug 2 — Win+J summon hotkey only worked while JARVIS was focused (Test 5)
+
+**Root cause:** `QShortcut(QKeySequence("Meta+J"))` with `Qt.ApplicationShortcut` only fires
+when the Qt application itself has focus. When the user switches to another window (browser,
+Notepad, etc.) JARVIS loses focus and the shortcut stops working.
+
+**Fix — `main.py`:** Added Windows `RegisterHotKey` API call (via `ctypes`) in `__init__` to
+register Win+J as a **system-wide** hotkey. Added `nativeEvent` override to catch `WM_HOTKEY`
+(0x0312) messages and call `_summon_window()`. Added `UnregisterHotKey` in `closeEvent`.
+The existing `QShortcut` is kept as a fallback (catches the case before `RegisterHotKey` fires).
+`getattr(self, "_win_hotkey_id", None)` used in `nativeEvent` guard because Qt calls
+`nativeEvent` during window construction before `__init__` sets the attribute.
+
+| File | Change |
+|------|--------|
+| `main.py` | `_finish_execute`: auto-confirm bypass for executor `needs_confirmation` |
+| `main.py` | `__init__`: `RegisterHotKey(MOD_WIN | VK_J)` system-wide hotkey registration |
+| `main.py` | `nativeEvent`: catches `WM_HOTKEY` → `_summon_window()` |
+| `main.py` | `closeEvent`: `UnregisterHotKey` on shutdown |
+
+---
+
 ### Session 2026-04-27 — Architecture hardening, background threads, live telemetry, workflow UI
 
 **Changes shipped in this session — quick reference:**
@@ -564,22 +630,55 @@ tesseract --version           # verify
 
 ## Voice Pipeline
 
+### File split (session 2026-04-27)
+
+The original monolithic `core/voice.py` (~515 lines) was split into two files:
+
+| File | Role |
+|------|------|
+| `core/audio_pipeline.py` | Internal engines: `AudioCapture`, `SttEngine`, `TtsEngine`, `SttError`, `_EL_VOICES` |
+| `core/voice.py` | Thin facade: `VoiceEngine` + `voice_engine` singleton. All audio work delegates to pipeline. |
+
+**Why:** `voice.py` had grown into a 500-line monolith mixing mic capture, VAD, Google STT,
+ElevenLabs streaming, MCI playback, and pyttsx3 fallback. No external API changed —
+`executor.py` still does `from core.voice import _EL_VOICES` (re-exported); `main.py`
+still imports `voice_engine` with the same `say()` / `listen()` signatures.
+
+**Overlap guard (new):** `VoiceEngine.listen()` now refuses to open the mic if `is_speaking`
+is True, preventing mic pickup of JARVIS's own TTS output:
+```python
+if self._tts.is_speaking:
+    if on_error is not None:
+        on_error("JARVIS is speaking — please wait.")
+    return
+```
+
+**Typed STT errors (new):** `SttEngine.recognise()` raises `_SttErrorExc(SttError.X)` with
+human-readable messages instead of bare exceptions. `VoiceEngine._listen_thread` catches
+`_SttErrorExc` and routes the `.message` to `on_error`.
+
+**Ambient noise calibration (new in `AudioCapture`):** `calibrate_threshold(duration, sensitivity)`
+samples RMS for `duration` seconds then returns `max(base * 0.30, ambient * 2.0)` so the
+threshold adapts to the current room noise floor rather than using a static formula.
+
 ### TTS (ElevenLabs)
 - Streams MP3 chunks via `client.text_to_speech.stream()`
 - Plays via Windows MCI (`mciSendStringW`) — no extra audio deps
 - Free tier: `mp3_44100_128` format, `eleven_multilingual_v2` model
 - Fallback: `pyttsx3` (Windows SAPI) if ElevenLabs fails
+- `TtsEngine._speaking` (threading.Event) set **before** acquiring `_lock` so overlap guard sees True immediately
 
-**Voice IDs:**
-- `male-british` → George (`JBFqnCBsd6RMkjVDRZzb`)
-- `male-american` → Adam (`pNInz6obpgDQGcFmaJgB`)
-- `female-british` → Rachel (`21m00Tcm4TlvDq8ikWAM`)
+**Voice IDs (13 voices):**
+- `male-british` → George, `male-american` → Adam, `female-british` → Rachel
+- `male-broadcast` → Daniel, `male-resonant` → Brian, `male-smooth` → Eric
+- `male-gravelly` → Callum, `male-casual` → Chris, `male-australian` → Charlie
+- `female-professional` → Sarah, `female-british-clear` → Alice, `female-british-warm` → Lily, `female-american` → Matilda
 
 ### STT (Google)
-- `sounddevice` mic capture → WAV frames
-- `SpeechRecognition` → Google STT free tier
-- RMS silence detection to auto-stop recording
+- `AudioCapture.capture()` → sounddevice mic, RMS VAD, guaranteed stream cleanup in `finally`
+- `SttEngine.recognise()` → SpeechRecognition → Google STT free tier
 - `audioop` replacement with `struct.unpack` (Python 3.14 compatibility)
+- `SttError` enum: `NO_SPEECH`, `NETWORK`, `TIMEOUT`, `DEVICE`
 
 ---
 

@@ -165,7 +165,7 @@ class _SysLogPanel(GlassPanel):
     def __init__(self, parent=None):
         super().__init__(parent)
         # Reference panel is visually solid; prevent background grid bleed-through.
-        self.set_fill_color(QColor(10, 17, 19, 236))
+        self.set_fill_color(QColor(10, 12, 12, 236))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -265,7 +265,7 @@ class _TelemetryCard(GlassPanel):
     def __init__(self, title: str, value: str, value_color: str = CYAN, parent=None):
         super().__init__(parent)
         # Right-side cards should read as solid glass blocks, not transparent.
-        self.set_fill_color(QColor(10, 17, 19, 236))
+        self.set_fill_color(QColor(10, 12, 12, 236))
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 10, 12, 10)
         self._lay.setSpacing(6)
@@ -577,7 +577,7 @@ class _InputBlock(QWidget):
         # ── Input card ────────────────────────────────────────────────────
         self.input_card = QWidget(self)
         self.input_card.setStyleSheet(
-            "background:rgba(8,15,17,0.92);"
+            "background:rgba(8,10,10,0.92);"
             "border:1px solid rgba(0,229,255,0.45);"
         )
 
@@ -789,35 +789,33 @@ class DashboardView(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, False)
 
-        # Base canvas.
-        p.fillRect(self.rect(), QColor(13, 21, 22, 255))
+        # Base canvas — pure near-black.
+        p.fillRect(self.rect(), QColor(8, 10, 10, 255))
 
-        # Large ambient cyan radial bloom behind the reactor zone.
+        # Subtle ambient cyan radial bloom (reduced vs teal-bg era).
         cx = self.width() * 0.52
         cy = self.height() * 0.56
         grad = QRadialGradient(cx, cy, max(self.width(), self.height()) * 0.58)
-        grad.setColorAt(0.00, QColor(0, 229, 255, 36))
-        grad.setColorAt(0.38, QColor(0, 229, 255, 14))
+        grad.setColorAt(0.00, QColor(0, 229, 255, 22))
+        grad.setColorAt(0.38, QColor(0, 229, 255, 8))
         grad.setColorAt(1.00, QColor(0, 229, 255, 0))
         p.fillRect(self.rect(), QBrush(grad))
 
-        # Modern dotted texture (replaces hard grid lines).
-        # Use 2x2 dots with stronger alpha so they remain visible at runtime.
+        # Dotted texture — slightly dimmer on dark canvas.
         dot_step = 18
         for y in range(0, self.height() + dot_step, dot_step):
             x_offset = (dot_step // 2) if ((y // dot_step) % 2) else 0
             for x in range(-x_offset, self.width() + dot_step, dot_step):
-                # Slight center emphasis so dots blend naturally with the glow.
                 dx = abs(x - cx) / max(self.width(), 1)
                 dy = abs(y - cy) / max(self.height(), 1)
                 fade = min(1.0, (dx + dy) * 0.9)
-                alpha = int(40 - (fade * 18))
-                p.fillRect(int(x), int(y), 2, 2, QColor(0, 229, 255, max(16, alpha)))
+                alpha = int(28 - (fade * 14))
+                p.fillRect(int(x), int(y), 2, 2, QColor(0, 229, 255, max(10, alpha)))
 
-        # Slight vertical vignetting, darkest at edges, to keep focus center.
+        # Vignette.
         vignette = QRadialGradient(self.width() * 0.5, self.height() * 0.55, self.width() * 0.95)
-        vignette.setColorAt(0.65, QColor(13, 21, 22, 0))
-        vignette.setColorAt(1.00, QColor(13, 21, 22, 120))
+        vignette.setColorAt(0.65, QColor(8, 10, 10, 0))
+        vignette.setColorAt(1.00, QColor(8, 10, 10, 130))
         p.fillRect(self.rect(), QBrush(vignette))
 
     def resizeEvent(self, e):

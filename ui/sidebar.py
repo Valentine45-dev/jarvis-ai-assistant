@@ -27,11 +27,11 @@ SIDEBAR_W = 128
 # icon_name uses qtawesome's Phosphor namespace ("ph.*") for a Lucide-like look.
 # (label, icon_name, default_active, tooltip)
 NAV_ITEMS = [
-    ("SYSTEM",   "ph.cpu",                     True,  "System Dashboard"),
-    ("VOICE",    "ph.microphone",              False,  "Voice Interface"),
-    ("AUTOMATE", "ph.robot",                   False,  "Automation Workflows"),
+    ("SYSTEM",   "ph.monitor-play",            True,  "System Dashboard"),
+    ("VOICE",    "ph.microphone-fill",         False,  "Voice Interface"),
+    ("AUTOMATE", "ph.share-network",            False,  "Automation Workflows"),
     ("HISTORY",  "ph.clock-counter-clockwise", False,  "Command History"),
-    ("CONFIG",   "ph.sliders-horizontal",      False,  "System Configuration"),
+    ("CONFIG",   "ph.hexagon",                 False,  "System Configuration"),
 ]
 FOOTER_ITEMS = [
     ("DIAGNOSTICS", "ph.activity", False, "Diagnostics"),
@@ -80,7 +80,7 @@ class SidebarButton(QWidget):
 
     clicked = pyqtSignal()
 
-    ICON_PX = 22  # Rendered icon size; matches the old emoji label height.
+    ICON_PX = 26  # Rendered icon size; matches the bolder reference look.
 
     def __init__(self, label: str, icon_name: str, active: bool = False, parent=None):
         super().__init__(parent)

@@ -294,29 +294,70 @@ class ArcReactorWidget(QWidget):
         p.setBrush(halo)
         p.drawEllipse(center, base * 1.35, base * 1.35)
 
-        # ── 2. Outermost dashed ring (slow rotation) ────────────────────────
+        # ── 2. Outermost dashed ring + triangle markers ──────────────────────
         r_dash = base * 0.96
         p.save()
         p.translate(center)
         p.rotate(self._angle)
-        pen = QPen(QColor(0, 229, 255, 120), 1)
-        pen.setDashPattern([3, 6])
+        pen = QPen(QColor(0, 229, 255, 130), 1)
+        pen.setDashPattern([4, 5])
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(0, 0), r_dash, r_dash)
         p.restore()
 
-        # ── 3. Bright outer ring (the dominant cyan circle) ─────────────────
+        # Triangle markers at 12, 3, 6, 9 o'clock (fixed, not rotating)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 229, 255, 200))
+        tri_r  = r_dash          # radius where tip sits
+        tri_sz = base * 0.045    # triangle half-base
+        for deg in (270, 0, 90, 180):   # 12, 3, 6, 9 o'clock
+            rad = math.radians(deg)
+            tip_x = cx + math.cos(rad) * tri_r
+            tip_y = cy + math.sin(rad) * tri_r
+            # inward-pointing filled triangle
+            in_x  = cx + math.cos(rad) * (tri_r - tri_sz * 2.2)
+            in_y  = cy + math.sin(rad) * (tri_r - tri_sz * 2.2)
+            perp  = math.radians(deg + 90)
+            lx = in_x + math.cos(perp) * tri_sz
+            ly = in_y + math.sin(perp) * tri_sz
+            rx = in_x - math.cos(perp) * tri_sz
+            ry = in_y - math.sin(perp) * tri_sz
+            p.drawPolygon(QPolygonF([QPointF(tip_x, tip_y), QPointF(lx, ly), QPointF(rx, ry)]))
+
+        # ── 3. Armor panel ring — 12 segmented plates between two rings ──────
         r_outer = base * 0.80
+        r_mid_o = base * 0.88   # outer edge of armor band
+        r_mid_i = base * 0.82   # inner edge of armor band
+        N_SEG   = 12
+        gap_deg = 3.0            # gap between panels in degrees
+        p.setPen(QPen(QColor(0, 229, 255, 160), 1.0))
+        for i in range(N_SEG):
+            start_deg = i * (360 / N_SEG) + gap_deg / 2
+            span_deg  = (360 / N_SEG) - gap_deg
+            start_rad = math.radians(start_deg)
+            end_rad   = math.radians(start_deg + span_deg)
+            # Build panel polygon from 4 arc-edge points
+            steps = 6
+            pts = []
+            for s in range(steps + 1):
+                a = start_rad + (end_rad - start_rad) * s / steps
+                pts.append(QPointF(cx + math.cos(a) * r_mid_o, cy + math.sin(a) * r_mid_o))
+            for s in range(steps, -1, -1):
+                a = start_rad + (end_rad - start_rad) * s / steps
+                pts.append(QPointF(cx + math.cos(a) * r_mid_i, cy + math.sin(a) * r_mid_i))
+            poly = QPolygonF(pts)
+            p.setBrush(QColor(4, 18, 22, 210))   # dark armor fill
+            p.drawPolygon(poly)
+
+        # Bright outer ring border over the armor band
         p.setPen(QPen(QColor(0, 229, 255, 235), 2.0))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(center, r_outer, r_outer)
-
-        # subtle inner shadow line just inside the bright outer ring
-        p.setPen(QPen(QColor(0, 229, 255, 70), 1))
+        p.setPen(QPen(QColor(0, 229, 255, 60), 1))
         p.drawEllipse(center, r_outer - 4, r_outer - 4)
 
-        # ── 4. Eight radial spokes between inner and outer bright rings ─────
+        # ── 4. Eight radial spokes between inner and outer bright rings ──────
         r_inner = base * 0.50
         spoke_pen = QPen(QColor(0, 229, 255, 175), 1.2)
         p.setPen(spoke_pen)
@@ -328,8 +369,9 @@ class ArcReactorWidget(QWidget):
             y2 = cy + math.sin(ang) * (r_outer - 1)
             p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
 
-        # ── 5. Bright inner ring ────────────────────────────────────────────
+        # ── 5. Bright inner ring ─────────────────────────────────────────────
         p.setPen(QPen(QColor(0, 229, 255, 235), 2.0))
+        p.setBrush(Qt.NoBrush)
         p.drawEllipse(center, r_inner, r_inner)
 
         # ── 6. Glowing core (white-cyan with soft pulse) ────────────────────

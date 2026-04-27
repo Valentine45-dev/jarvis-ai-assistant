@@ -63,19 +63,21 @@ class InlineConfirmCard(QWidget):
         self._cancel_btn  = QPushButton("[ CANCEL ]")
 
         for btn, r, g, b in (
-            (self._confirm_btn, 0, 212, 255),
-            (self._cancel_btn, 255, 80, 80),
+            (self._confirm_btn, 0, 229, 255),
+            (self._cancel_btn, 255, 70, 70),
         ):
-            btn.setFixedHeight(28)
+            btn.setFixedHeight(30)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
-                f"QPushButton{{color:rgba({r},{g},{b},{_a255(0.70)});"
-                f"border:1px solid rgba({r},{g},{b},{_a255(0.35)});"
-                f"background:rgba({r},{g},{b},{_a255(0.06)});"
-                f"font-family:'{FM}';font-size:11px;letter-spacing:1.5px;"
-                "padding:0 14px;}}"
-                f"QPushButton:hover{{background:rgba({r},{g},{b},{_a255(0.14)});"
-                f"border:1px solid rgba({r},{g},{b},{_a255(0.60)});}}"
+                f"QPushButton{{color:rgba({r},{g},{b},240);"
+                f"border:1px solid rgba({r},{g},{b},160);"
+                f"background:rgba({r},{g},{b},18);"
+                f"font-family:'{FM}';font-size:11px;font-weight:700;"
+                f"letter-spacing:2px;padding:0 16px;}}"
+                f"QPushButton:hover{{color:rgb({r},{g},{b});"
+                f"background:rgba({r},{g},{b},45);"
+                f"border:1px solid rgba({r},{g},{b},230);}}"
+                f"QPushButton:pressed{{background:rgba({r},{g},{b},70);}}"
             )
 
         self._confirm_btn.clicked.connect(self._on_confirm)
@@ -89,10 +91,10 @@ class InlineConfirmCard(QWidget):
         # Card container styling (will be pulsed)
         self.setStyleSheet(
             "InlineConfirmCard{"
-            f"border:1px solid rgba(0,212,255,{_a255(0.25)});"
-            "border-radius:4px;"
-            f"background:rgba(0,212,255,{_a255(0.04)});"
-            "padding:6px 10px;}"
+            f"border:1px dashed rgba(0,229,255,{_a255(0.30)});"
+            "border-radius:2px;"
+            f"background:rgba(0,229,255,{_a255(0.04)});"
+            "padding:10px 14px;}"
         )
 
         # Pulse timer — alternates border brightness while card is visible
@@ -131,14 +133,14 @@ class InlineConfirmCard(QWidget):
             if self._pulse_step <= 0:
                 self._pulse_up = True
 
-        a_border = 0.20 + self._pulse_step * 0.04   # 0.20 – 0.68
-        a_bg     = 0.03 + self._pulse_step * 0.005  # 0.03 – 0.09
+        a_border = 0.25 + self._pulse_step * 0.055   # 0.25 – 0.91
+        a_bg     = 0.03 + self._pulse_step * 0.006   # 0.03 – 0.102
         self.setStyleSheet(
             "InlineConfirmCard{"
-            f"border:1px solid rgba(0,212,255,{_a255(a_border)});"
-            "border-radius:4px;"
-            f"background:rgba(0,212,255,{_a255(a_bg)});"
-            "padding:6px 10px;}"
+            f"border:1px dashed rgba(0,229,255,{_a255(a_border)});"
+            "border-radius:2px;"
+            f"background:rgba(0,229,255,{_a255(a_bg)});"
+            "padding:10px 14px;}"
         )
 
 

@@ -469,6 +469,40 @@ class SettingsView(QWidget):
         ab2.addLayout(ng_col)
 
         audio_lay.addWidget(audio_body, 1)
+
+        # ── Mic input device selector ─────────────────────────────────────────
+        dev_body = QWidget()
+        dev_lay = QHBoxLayout(dev_body)
+        dev_lay.setContentsMargins(14, 8, 14, 8)
+        dev_lay.setSpacing(12)
+        dev_lay.addWidget(_section_lbl("MIC_INPUT_DEVICE"))
+
+        self._mic_device_combo = QComboBox()
+        self._mic_device_combo.setStyleSheet(
+            f"QComboBox{{background:rgba(0,212,255,0.07);color:#d2dcf5;"
+            f"border:1px solid rgba(0,212,255,0.25);border-radius:4px;"
+            f"font-family:{FM};font-size:11px;padding:3px 8px;}}"
+            f"QComboBox::drop-down{{border:none;}}"
+            f"QComboBox QAbstractItemView{{background:#0d1f24;color:#d2dcf5;"
+            f"selection-background-color:rgba(0,212,255,0.20);}}"
+        )
+        self._mic_device_combo.addItem("System Default", -1)
+        try:
+            import sounddevice as _sd
+            for idx, dev in enumerate(_sd.query_devices()):
+                if dev["max_input_channels"] > 0:
+                    self._mic_device_combo.addItem(
+                        f"[{idx}] {dev['name']}", idx
+                    )
+                    if idx == config.mic_device:
+                        self._mic_device_combo.setCurrentIndex(
+                            self._mic_device_combo.count() - 1
+                        )
+        except Exception:
+            pass
+        dev_lay.addWidget(self._mic_device_combo, 1)
+        audio_lay.addWidget(dev_body)
+
         root.addWidget(audio_panel)
 
         # ── Wire all fields → unsaved indicator ───────────────────────────────
@@ -488,6 +522,7 @@ class SettingsView(QWidget):
         self._mic_slider.valueChanged.connect(lambda _: self._mark_dirty())
         self._tts_slider.valueChanged.connect(lambda _: self._mark_dirty())
         self._noise_toggle.toggled.connect(lambda _: self._mark_dirty())
+        self._mic_device_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
 
     # ── Unsaved indicator ─────────────────────────────────────────────────────
 
@@ -511,6 +546,7 @@ class SettingsView(QWidget):
         config.mic_sensitivity    = self._mic_slider.value()
         config.tts_speed          = self._tts_slider.value()
         config.noise_gate         = self._noise_toggle.isChecked()
+        config.mic_device         = self._mic_device_combo.currentData()
 
         try:
             config.save()

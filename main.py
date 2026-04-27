@@ -5,7 +5,6 @@ Launches the HUD window with all views wired up.
 
 import sys
 import ctypes
-import threading
 from datetime import datetime
 
 import psutil
@@ -90,7 +89,6 @@ class JarvisWindow(QMainWindow):
     _voice_error_ready  = pyqtSignal(str)      # STT failure message
     _tts_ready          = pyqtSignal(object)   # transcript payload after TTS is ready
     _action_followup_tts = pyqtSignal(str, str, str, float, int)  # follow, jTime, intent, conf, token
-    _exec_done           = pyqtSignal(object)                      # background dispatch → main thread
 
     def __init__(self):
         super().__init__()
@@ -186,7 +184,6 @@ class JarvisWindow(QMainWindow):
         self._action_followup_tts.connect(
             self._on_action_followup_tts, Qt.QueuedConnection
         )
-        self._exec_done.connect(self._on_exec_done)
 
         # Wire backend signals so reminders and errors surface in the HUD
         signals.status_changed.connect(self._on_status_signal)
@@ -213,6 +210,9 @@ class JarvisWindow(QMainWindow):
             lambda: self._sidebar.goto(_SETTINGS_NAV_IDX)
         )
         self._topbar.settings_clicked.connect(self._show_quick_settings)
+        self._topbar.battery_alert.connect(
+            lambda msg, kind: self._dashboard.toast.show_toast(msg, kind)
+        )
 
         # ── Command palette (TopBar terminal icon + Ctrl+K) ───────────────────
         # Parented to the main window so it can paint a full-window dim
@@ -572,25 +572,18 @@ class JarvisWindow(QMainWindow):
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         confirmed: bool = False):
         """Dispatch to OS + update all HUD surfaces."""
-        # Multi-step workflows can take several seconds per step; run dispatch in a
-        # background thread so the Qt event loop (and UI) stays responsive.
+        # `automation_task` + `run_workflow` must run `dispatch()` on the Qt *main* thread.
+        # Playwright's sync API (greenlets) is bound to the thread that started the browser
+        # (`browser.start()` at startup). Running workflows in a background `threading.Thread`
+        # caused: "Cannot switch to a different thread" on any step that touches Playwright
+        # (e.g. open YouTube + search in one line).
         if (intent == "automation_task"
                 and result.get("action") == "run_workflow"
                 and (result.get("parameters") or {}).get("steps")):
             self._dashboard.left.status_lbl.setText("Running workflow — please wait…")
             self._set_state("processing")
-            def _bg():
-                exec_out = dispatch(result, confirmed=confirmed)
-                self._exec_done.emit((result, intent, conf, resp, hud, exec_out))
-            threading.Thread(target=_bg, daemon=True).start()
-            return
 
         exec_out = dispatch(result, confirmed=confirmed)
-        self._finish_execute(result, intent, conf, resp, hud, exec_out)
-
-    def _on_exec_done(self, payload: object) -> None:
-        """Qt main thread — receives background workflow dispatch result."""
-        result, intent, conf, resp, hud, exec_out = payload
         self._finish_execute(result, intent, conf, resp, hud, exec_out)
 
     def _finish_execute(self, result: dict, intent: str, conf: float, resp: str, hud: str,

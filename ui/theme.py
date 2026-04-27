@@ -24,13 +24,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 COLORS: Dict[str, str] = {
-    "background": "#0d1516",
-    "surface": "#0d1516",
-    "surface_container_low": "#151d1e",
-    "surface_container": "#192122",
-    "surface_container_high": "#242b2d",
-    "surface_container_highest": "#2e3638",
-    "surface_container_lowest": "#080f11",
+    "background": "#080A0A",
+    "surface": "#080A0A",
+    "surface_container_low": "#0D0F0F",
+    "surface_container": "#111313",
+    "surface_container_high": "#181A1A",
+    "surface_container_highest": "#1E2020",
+    "surface_container_lowest": "#050707",
     "outline_variant": "#3b494c",
     "outline": "#849396",
     "on_surface": "#dce4e5",
@@ -72,11 +72,11 @@ CYAN = COLORS["primary_container"]
 RED = COLORS["error"]
 GREEN = COLORS["tertiary_fixed"]
 WARNING = COLORS["secondary_fixed"]
-BG = COLORS["background"]
+BG = "#080A0A"
 
 # Existing modules still import these while the UI migration is in progress.
-PANEL_CLR = (25, 33, 34, 140)
-CARD_CLR = (21, 29, 30, 130)
+PANEL_CLR = (12, 14, 14, 140)
+CARD_CLR = (14, 16, 16, 130)
 BORDER_A = (0, 229, 255, 40)
 BORDER_B = (0, 229, 255, 95)
 
