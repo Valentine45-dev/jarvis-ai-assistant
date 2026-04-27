@@ -18,4 +18,6 @@ config/jarvis.json
 
 # Session data (local only — never commit)
 data/session_history.db
+data/session_history.db-shm
+data/session_history.db-wal
 data/session_history.json
