@@ -1,0 +1,139 @@
+"""Handlers: jarvis_meta, unknown."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from config.settings import config
+from core.handlers.shared import _ok, _err, get_page_cache
+
+
+def _handle_jarvis_meta(action: str, params: dict) -> dict:
+    if action == "tell_time":
+        return _ok(datetime.now().strftime("%I:%M %p").lstrip("0"))
+
+    if action == "tell_date":
+        return _ok(datetime.now().strftime("%A, %d %B %Y"))
+
+    if action == "status_report":
+        import psutil
+        cpu = psutil.cpu_percent(interval=0.3)
+        mem = psutil.virtual_memory()
+        parts = [
+            f"CPU {cpu:.0f}%",
+            f"memory {mem.percent:.0f}% ({mem.used/1e9:.1f}/{mem.total/1e9:.1f} GB)",
+        ]
+        try:
+            bat = psutil.sensors_battery()
+        except (AttributeError, NotImplementedError):
+            bat = None
+        if bat is not None and bat.percent is not None:
+            plug = "plugged in" if bat.power_plugged else "on battery"
+            parts.append(f"battery {bat.percent:.0f}% ({plug})")
+        return _ok(", ".join(parts))
+
+    if action == "conversational":
+        cached = get_page_cache()
+        if cached:
+            return _ok(cached[:800])
+        return _ok("")
+
+    if action == "list_voices":
+        from core.voice import _EL_VOICES
+        _LABELS = {
+            "male-british":         "George  — deep, warm British",
+            "male-american":        "Adam    — neutral American",
+            "female-british":       "Rachel  — warm British female",
+            "male-broadcast":       "Daniel  — strong broadcast voice",
+            "male-resonant":        "Brian   — resonant, narration",
+            "male-smooth":          "Eric    — smooth, conversational",
+            "male-gravelly":        "Callum  — gravelly, distinctive",
+            "male-casual":          "Chris   — natural, down-to-earth",
+            "male-australian":      "Charlie — energetic Australian",
+            "female-professional":  "Sarah   — professional, warm",
+            "female-british-clear": "Alice   — British female, clear",
+            "female-british-warm":  "Lily    — British female, warm",
+            "female-american":      "Matilda — professional American female",
+        }
+        current = config.tts_voice
+        lines = ["Available voices (* = current):"]
+        for key in _EL_VOICES:
+            label = _LABELS.get(key, key)
+            marker = " *" if key == current else ""
+            lines.append(f"  • {label}{marker}")
+        return _ok("\n".join(lines))
+
+    if action == "change_voice":
+        _VOICE_ALIASES: dict[str, str] = {
+            "male-british":         "male-british",
+            "male-american":        "male-american",
+            "female-british":       "female-british",
+            "male-broadcast":       "male-broadcast",
+            "male-resonant":        "male-resonant",
+            "male-smooth":          "male-smooth",
+            "male-gravelly":        "male-gravelly",
+            "male-casual":          "male-casual",
+            "male-australian":      "male-australian",
+            "female-professional":  "female-professional",
+            "female-british-clear": "female-british-clear",
+            "female-british-warm":  "female-british-warm",
+            "female-american":      "female-american",
+            "george":    "male-british",
+            "adam":      "male-american",
+            "adams":     "male-american",
+            "rachel":    "female-british",
+            "daniel":    "male-broadcast",
+            "brian":     "male-resonant",
+            "eric":      "male-smooth",
+            "callum":    "male-gravelly",
+            "chris":     "male-casual",
+            "charlie":   "male-australian",
+            "sarah":     "female-professional",
+            "alice":     "female-british-clear",
+            "lily":      "female-british-warm",
+            "matilda":   "female-american",
+            "british":      "male-british",
+            "american":     "male-american",
+            "female":       "female-british",
+            "broadcast":    "male-broadcast",
+            "deep":         "male-resonant",
+            "smooth":       "male-smooth",
+            "gravelly":     "male-gravelly",
+            "casual":       "male-casual",
+            "australian":   "male-australian",
+            "aussie":       "male-australian",
+            "professional": "female-professional",
+        }
+        _VOICE_LABELS: dict[str, str] = {
+            "male-british":         "George (British male)",
+            "male-american":        "Adam (American male)",
+            "female-british":       "Rachel (British female)",
+            "male-broadcast":       "Daniel (broadcast, professional)",
+            "male-resonant":        "Brian (resonant, narration)",
+            "male-smooth":          "Eric (smooth, conversational)",
+            "male-gravelly":        "Callum (gravelly, distinctive)",
+            "male-casual":          "Chris (casual, natural American)",
+            "male-australian":      "Charlie (Australian, energetic)",
+            "female-professional":  "Sarah (professional, warm)",
+            "female-british-clear": "Alice (British female, clear)",
+            "female-british-warm":  "Lily (British female, warm)",
+            "female-american":      "Matilda (American female, professional)",
+        }
+        raw = (params.get("voice") or "").strip().lower()
+        key = _VOICE_ALIASES.get(raw)
+        if not key:
+            available = ", ".join(_VOICE_LABELS.values())
+            return _err(f"Unknown voice {raw!r}. Available: {available}")
+        config.tts_voice = key
+        config.save()
+        label = _VOICE_LABELS[key]
+        return _ok(f"Voice set to {label}")
+
+    if action in ("quit_application", "close_jarvis"):
+        return {"success": True, "output": "", "error": "", "quit_application": True}
+
+    return _ok(action)
+
+
+def _handle_unknown(action: str, params: dict) -> dict:
+    return _err("Intent not recognised")

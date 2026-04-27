@@ -84,10 +84,12 @@ class JarvisWindow(QMainWindow):
     VIEW_NAMES = ["Dashboard", "Voice", "Automation", "History", "Settings"]
 
     # Thread-bridge signals: worker threads → Qt main thread (always safe to emit)
-    _brain_result_ready = pyqtSignal(object)   # dict from brain.py
-    _voice_text_ready   = pyqtSignal(str)      # transcribed speech text
-    _voice_error_ready  = pyqtSignal(str)      # STT failure message
-    _tts_ready          = pyqtSignal(object)   # transcript payload after TTS is ready
+    _brain_result_ready  = pyqtSignal(object)        # dict from brain.py
+    _voice_text_ready    = pyqtSignal(str)           # transcribed speech text
+    _voice_error_ready   = pyqtSignal(str)           # STT failure message
+    _tts_ready           = pyqtSignal(object)        # transcript payload after TTS is ready
+    _tts_done_signal     = pyqtSignal(int)           # fires (with token) when TTS audio ends
+    _wake_word_signal    = pyqtSignal()              # wake word detected on detector thread
     _action_followup_tts = pyqtSignal(str, str, str, float, int)  # follow, jTime, intent, conf, token
 
     def __init__(self):
@@ -181,9 +183,15 @@ class JarvisWindow(QMainWindow):
         self._voice_text_ready.connect(self._on_voice_heard)
         self._voice_error_ready.connect(self._on_voice_error_ui)
         self._tts_ready.connect(self._on_tts_ready)
+        self._tts_done_signal.connect(self._on_tts_done, Qt.QueuedConnection)
+        self._wake_word_signal.connect(self._on_wake_word, Qt.QueuedConnection)
         self._action_followup_tts.connect(
             self._on_action_followup_tts, Qt.QueuedConnection
         )
+
+        # Start always-on wake-word detector (fires _wake_word_signal on detection)
+        from core.wake_word import wake_detector
+        wake_detector.start(lambda: self._wake_word_signal.emit())
 
         # Wire backend signals so reminders and errors surface in the HUD
         signals.status_changed.connect(self._on_status_signal)
@@ -286,14 +294,28 @@ class JarvisWindow(QMainWindow):
             self._set_state("listening")
             self._voice_capture()
 
-    def _voice_capture(self):
+    def _voice_capture(self, auto_resume: bool = False):
+        """Open the mic for one capture cycle.
+
+        auto_resume=True: 15-second timeout, silent on timeout (no toast).
+        auto_resume=False: 8-second timeout, toast on any error.
+        """
         if self._state != "listening":
             return
         from core.voice import voice_engine
+        timeout = 15.0 if auto_resume else 8.0
+
+        def _on_err(err: str):
+            # Suppress the toast when auto-resume simply timed out with no speech.
+            if auto_resume and "no speech" in err.lower():
+                self._voice_error_ready.emit("")
+            else:
+                self._voice_error_ready.emit(err)
+
         voice_engine.listen(
             callback=lambda text: self._voice_text_ready.emit(text),
-            on_error=lambda err: self._voice_error_ready.emit(err),
-            timeout=8.0,
+            on_error=_on_err,
+            timeout=timeout,
         )
 
     def _on_voice_heard(self, text: str):
@@ -306,7 +328,39 @@ class JarvisWindow(QMainWindow):
     def _on_voice_error_ui(self, msg: str):
         """Qt main thread — STT timed out or failed."""
         self._set_state("idle")
-        self._dashboard.toast.show_toast(msg, "warning")
+        if msg:  # empty = silent auto-resume timeout, no toast needed
+            self._dashboard.toast.show_toast(msg, "warning")
+
+    def _on_wake_word(self):
+        """Qt main thread — wake word detected. Start listening if idle."""
+        if self._state != "idle":
+            return
+        from core.voice import voice_engine
+        if voice_engine.mic_muted:
+            return
+        self._set_state("listening")
+        self._voice_capture()
+
+    def _on_tts_done(self, token: int):
+        """Qt main thread — TTS audio has fully finished playing.
+
+        Auto-resumes the mic for follow-up input unless:
+        - the token is stale (a newer command replaced this one)
+        - we are waiting for a confirmation card response
+        - the mic is muted
+        """
+        if token != self._transcript_update_token:
+            return
+        if getattr(self, "_confirm_mode", None) in ("claude", "executor"):
+            return
+        from core.voice import voice_engine
+        if voice_engine.mic_muted:
+            self._set_state("idle")
+            return
+        # Auto-resume: listen for follow-up with a longer timeout.
+        # If the user stays silent for 15 s, _on_voice_error_ui("") fires → idle.
+        self._set_state("listening")
+        self._voice_capture(auto_resume=True)
 
     def _on_status_signal(self, msg: str):
         """Qt main thread — backend status update (e.g., a reminder fires)."""
@@ -562,9 +616,14 @@ class JarvisWindow(QMainWindow):
         payload = (t, display_resp, j_time, "confirmation", 1.0)
         try:
             from core.voice import voice_engine
-            voice_engine.say(display_resp, on_ready=lambda: self._tts_ready.emit(payload))
+            voice_engine.say(
+                display_resp,
+                on_ready=lambda: self._tts_ready.emit(payload),
+                on_done=lambda: self._tts_done_signal.emit(t),
+            )
         except Exception:
             self._tts_ready.emit(payload)
+            self._tts_done_signal.emit(t)
 
         kind = "success" if resolved.get("success") else "info"
         self._dashboard.toast.show_toast(display_resp, kind)
@@ -736,6 +795,9 @@ class JarvisWindow(QMainWindow):
         transcript_token = self._transcript_update_token
         transcript_payload = (transcript_token, tts_line, j_time, intent, hud_conf)
 
+        has_follow = bool(follow and intent in self._ACTION_INTENTS)
+        tok = transcript_token
+
         def _queue_followup() -> None:
             if not follow or intent not in self._ACTION_INTENTS:
                 return
@@ -744,6 +806,12 @@ class JarvisWindow(QMainWindow):
                 follow, j_time, follow_intent, float(hud_conf), transcript_token
             )
 
+        def _on_primary_done() -> None:
+            if has_follow:
+                _queue_followup()
+            else:
+                self._tts_done_signal.emit(tok)
+
         # TTS runs on a worker thread; emit a Qt signal when audio is ready so
         # transcript animation starts on the main thread at the real playback point.
         try:
@@ -751,7 +819,7 @@ class JarvisWindow(QMainWindow):
             voice_engine.say(
                 tts_line,
                 on_ready=lambda: self._tts_ready.emit(transcript_payload),
-                on_done=_queue_followup if (follow and intent in self._ACTION_INTENTS) else None,
+                on_done=_on_primary_done,
             )
             if exec_out.get("quit_application"):
                 audio_len = len(tts_line) + (len(follow) if follow else 0)
@@ -777,15 +845,14 @@ class JarvisWindow(QMainWindow):
         token, text, j_time, intent, conf = payload
         self._set_state_if_current(token, "speaking")
         self._update_transcript_if_current(token, text, j_time, intent, conf)
-        # After the speaking animation window, return to a confirmation wait if
-        # a confirm card is still active (avoids "idle" while the user must choose).
+        # After the speaking animation window, lock in awaiting_confirmation if
+        # a confirm card is still active; otherwise stay in "speaking" until
+        # on_done fires the _tts_done_signal which drives the actual transition.
         def _post_speaking() -> None:
             if token != self._transcript_update_token:
                 return
             if getattr(self, "_confirm_mode", None) in ("claude", "executor"):
                 self._set_state("awaiting_confirmation")
-            else:
-                self._set_state("idle")
 
         QTimer.singleShot(2000, _post_speaking)
 
@@ -815,11 +882,12 @@ class JarvisWindow(QMainWindow):
         except Exception:
             pass
         from core.voice import voice_engine
+        tok = token
         try:
             self._set_state("speaking")
-            voice_engine.say(follow)
+            voice_engine.say(follow, on_done=lambda: self._tts_done_signal.emit(tok))
         except Exception:
-            pass
+            self._tts_done_signal.emit(tok)
 
     def _update_transcript_if_current(
         self, token: int, text: str, j_time: str, intent: str, conf: float
@@ -886,9 +954,14 @@ class JarvisWindow(QMainWindow):
         payload = (t, msg, j_time, "confirmation", 1.0)
         try:
             from core.voice import voice_engine
-            voice_engine.say(msg, on_ready=lambda: self._tts_ready.emit(payload))
+            voice_engine.say(
+                msg,
+                on_ready=lambda: self._tts_ready.emit(payload),
+                on_done=lambda: self._tts_done_signal.emit(t),
+            )
         except Exception:
             self._tts_ready.emit(payload)
+            self._tts_done_signal.emit(t)
 
     # ── Inline confirm card helpers ───────────────────────────────────────────
 
@@ -1010,6 +1083,15 @@ class JarvisWindow(QMainWindow):
 
     def _set_state(self, s):
         self._state = s
+
+        # Keep wake detector paused while the system is active (prevents false
+        # triggers during speech capture / TTS playback / processing).
+        from core.wake_word import wake_detector
+        if s == "idle":
+            QTimer.singleShot(300, wake_detector.resume)
+        else:
+            wake_detector.pause()
+
         orb_map = {
             "idle": 0, "listening": 1, "thinking": 2, "processing": 2,
             "speaking": 3, "awaiting_confirmation": 2,
@@ -1128,6 +1210,8 @@ class JarvisWindow(QMainWindow):
                 ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._win_hotkey_id)
             except Exception:
                 pass
+        from core.wake_word import wake_detector
+        wake_detector.stop()
         self._botbar._stop_rtt_thread()
         browser.stop()
         history_store.close()

@@ -121,8 +121,12 @@ class VoiceEngine:
         timeout:           float,
         phrase_time_limit: float,
     ) -> None:
+        import time as _time
         print("[voice] _listen_thread running")
         self._listening.set()
+        # Brief yield so the wake detector (if mid-window) can finish its chunk
+        # loop and close its RawInputStream before we open ours.
+        _time.sleep(0.2)
         try:
             threshold = self._capture.calibrate_threshold(
                 duration=0.3,

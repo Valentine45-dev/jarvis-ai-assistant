@@ -437,6 +437,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyttsx3" },
     { name = "qtawesome" },
+    { name = "screen-brightness-control" },
     { name = "sounddevice" },
     { name = "speechrecognition" },
     { name = "vapi-server-sdk" },
@@ -458,6 +459,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyttsx3", specifier = ">=2.99" },
     { name = "qtawesome", specifier = ">=1.4.2" },
+    { name = "screen-brightness-control", specifier = ">=0.22.0" },
     { name = "sounddevice", specifier = ">=0.5.5" },
     { name = "speechrecognition", specifier = ">=3.16.0" },
     { name = "vapi-server-sdk", specifier = ">=1.11.0" },
@@ -3962,6 +3964,20 @@ wheels = [
 ]
 
 [[package]]
+name = "screen-brightness-control"
+version = "0.27.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pypiwin32", marker = "sys_platform == 'win32'" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "wmi", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/f8/40399a560a13e9dd059ad0953daea7bdef5004d048929a2f40c8ad76fac1/screen_brightness_control-0.27.1.tar.gz", hash = "sha256:c27f65a5eadc5a912cc4d26378b5b2b69346ab111639626417ad2de6b09dde6b", size = 48021, upload-time = "2026-03-11T23:41:03.311Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/6d/4f34b48dc0a4504bdd1d4b124e6755a68886a977b9343526aa3fa9f959a4/screen_brightness_control-0.27.1-py3-none-any.whl", hash = "sha256:718ddf0a288fa6fa7f0b5f46358fa8ab9dd92a112d2a56575009db5b8d1f20d4", size = 36772, upload-time = "2026-03-11T23:41:02.072Z" },
+]
+
+[[package]]
 name = "sniffio"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4124,4 +4140,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a5/8f/aea9c71cc92bf9b6cc0f7f70df8f0b420636b6c96ef4feee1e16f80f75dd/websockets-16.0-pp311-pypy311_pp73-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0298d07ee155e2e9fda5be8a9042200dd2e3bb0b8a38482156576f863a9d457c", size = 176968, upload-time = "2026-01-10T09:23:41.031Z" },
     { url = "https://files.pythonhosted.org/packages/9a/3f/f70e03f40ffc9a30d817eef7da1be72ee4956ba8d7255c399a01b135902a/websockets-16.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:a653aea902e0324b52f1613332ddf50b00c06fdaf7e92624fbf8c77c78fa5767", size = 178735, upload-time = "2026-01-10T09:23:42.259Z" },
     { url = "https://files.pythonhosted.org/packages/6f/28/258ebab549c2bf3e64d2b0217b973467394a9cea8c42f70418ca2c5d0d2e/websockets-16.0-py3-none-any.whl", hash = "sha256:1637db62fad1dc833276dded54215f2c7fa46912301a24bd94d45d46a011ceec", size = 171598, upload-time = "2026-01-10T09:23:45.395Z" },
+]
+
+[[package]]
+name = "wmi"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d4/66/6364deb0a03415f96c66803d8c4379f808f2401da3bdb183348487b10510/WMI-1.5.1.tar.gz", hash = "sha256:b6a6be5711b1b6c8d55bda7a8befd75c48c12b770b9d227d31c1737dbf0d40a6", size = 26254, upload-time = "2020-04-28T08:22:58.096Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ee/b9/a80d1ed4d115dac8e2ac08d16af046a77ab58e3d186e22395bf2add24090/WMI-1.5.1-py2.py3-none-any.whl", hash = "sha256:1d6b085e5c445141c475476000b661f60fff1aaa19f76bf82b7abb92e0ff4942", size = 28912, upload-time = "2020-04-28T08:22:56.055Z" },
 ]

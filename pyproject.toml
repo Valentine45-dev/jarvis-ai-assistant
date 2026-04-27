@@ -19,6 +19,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pyttsx3>=2.99",
     "qtawesome>=1.4.2",
+    "screen-brightness-control>=0.22.0",
     "sounddevice>=0.5.5",
     "speechrecognition>=3.16.0",
     "vapi-server-sdk>=1.11.0",

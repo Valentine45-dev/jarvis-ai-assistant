@@ -122,10 +122,11 @@ class AudioCapture:
         Raises RuntimeError on device errors (→ SttError.DEVICE in SttEngine).
     """
 
-    RATE      = 16_000
-    CHANNELS  = 1
-    CHUNK     = 1_024
-    SILENCE_S = 1.5       # seconds of silence after speech = end of phrase
+    RATE        = 16_000
+    CHANNELS    = 1
+    CHUNK       = 1_024
+    SILENCE_S   = 2.5     # seconds of silence after speech = end of phrase
+    MIN_PHRASE_S = 0.8    # don't end phrase until at least this much speech is captured
 
     def calibrate_threshold(
         self, duration: float = 0.5, sensitivity: int = 50
@@ -207,7 +208,9 @@ class AudioCapture:
         frames: list[bytes]  = []
         phrase_started        = False
         silence_frames        = 0
+        speech_frames         = 0
         max_silence_frames    = int(self.RATE / self.CHUNK * self.SILENCE_S)
+        min_speech_frames     = int(self.RATE / self.CHUNK * self.MIN_PHRASE_S)
         max_frames            = int(self.RATE / self.CHUNK * (timeout + phrase_time_limit))
         timeout_frames        = int(self.RATE / self.CHUNK * timeout)
 
@@ -231,9 +234,11 @@ class AudioCapture:
                     if rms > silence_threshold:
                         phrase_started = True
                         silence_frames = 0
+                        speech_frames += 1
                     elif phrase_started:
                         silence_frames += 1
-                        if silence_frames >= max_silence_frames:
+                        if (silence_frames >= max_silence_frames
+                                and speech_frames >= min_speech_frames):
                             break
                     elif frame_idx >= timeout_frames:
                         break   # timed out waiting for speech
