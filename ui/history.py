@@ -13,14 +13,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
-from ui.widgets import GlassPanel, SegmentedBar, StatusPip
-
-
-def _mono(size: int, bold: bool = False):
-    from PyQt5.QtGui import QFont
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
+from ui.widgets import GlassPanel, SegmentedBar, StatusPip, _mono
 
 
 # ── Stat card ──────────────────────────────────────────────────────────────

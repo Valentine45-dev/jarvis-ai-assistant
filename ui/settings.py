@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSlider, QVBoxLayout, QWidget,
@@ -11,14 +11,7 @@ from PyQt5.QtWidgets import (
 
 from config.settings import config
 from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
-from ui.widgets import GlassPanel, StatusPip, ToggleSwitch
-
-
-def _mono(size: int, bold: bool = False):
-    from PyQt5.QtGui import QFont
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
+from ui.widgets import GlassPanel, StatusPip, ToggleSwitch, _mono, _panel_header
 
 
 _INPUT_SS = (
@@ -72,24 +65,6 @@ def _section_lbl(text: str) -> QLabel:
     )
     return lbl
 
-
-def _panel_header(title: str) -> tuple[QWidget, QFrame]:
-    header = QWidget()
-    header.setFixedHeight(36)
-    header.setStyleSheet("background:transparent;")
-    hl = QHBoxLayout(header)
-    hl.setContentsMargins(14, 0, 14, 0)
-    t = QLabel(title)
-    t.setFont(_mono(10, bold=True))
-    t.setStyleSheet(
-        f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;"
-    )
-    hl.addWidget(t)
-    sep = QFrame()
-    sep.setFrameShape(QFrame.HLine)
-    sep.setStyleSheet("color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);")
-    sep.setFixedHeight(1)
-    return header, sep
 
 
 def _field(label: str, widget: QWidget, label_w: int = 120) -> QHBoxLayout:
@@ -217,6 +192,8 @@ class SettingsView(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._bg_px: "QPixmap | None" = None
+        self._bg_sz = (-1, -1)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(12)
@@ -567,11 +544,31 @@ class SettingsView(QWidget):
         self._voice_input.setText(config.tts_voice)
         super().showEvent(event)
 
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor(BG))
+    def _rebuild_bg(self) -> None:
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            self._bg_px = None
+            return
+        px = QPixmap(w, h)
+        p = QPainter(px)
+        p.fillRect(0, 0, w, h, QColor(BG))
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(0, 229, 255, 20))
-        for x in range(0, self.width() + 28, 28):
-            for y in range(0, self.height() + 28, 28):
+        for x in range(0, w + 28, 28):
+            for y in range(0, h + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)
+        p.end()
+        self._bg_px = px
+        self._bg_sz = (w, h)
+
+    def resizeEvent(self, e: object) -> None:
+        super().resizeEvent(e)
+        self._bg_px = None
+
+    def paintEvent(self, _):
+        w, h = self.width(), self.height()
+        if self._bg_px is None or self._bg_sz != (w, h):
+            self._rebuild_bg()
+        p = QPainter(self)
+        if self._bg_px is not None:
+            p.drawPixmap(0, 0, self._bg_px)

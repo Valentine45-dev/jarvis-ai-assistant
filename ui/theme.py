@@ -83,10 +83,24 @@ BORDER_B = (0, 229, 255, 95)
 FN = "Inter"
 FM = "Roboto Mono"
 
-SIDEBAR_W = 240
+SIDEBAR_W = 128   # single source of truth — sidebar.py must not redefine this
 TOPBAR_H = 52
 BOTBAR_H = 40
 RIGHT_W = 420
+
+# ---------------------------------------------------------------------------
+# Semantic design tokens — use these instead of hardcoded rgba() values
+# ---------------------------------------------------------------------------
+
+# Text hierarchy: both values pass WCAG AA (≥4.5:1) on BG = #080A0A
+TEXT_MUTED     = "rgba(186,201,204,0.75)"   # hint/label/secondary text
+TEXT_SECONDARY = "rgba(186,201,204,0.88)"   # supporting body text
+
+# Unified idle state — same color on Dashboard reactor and Voice mic strip
+IDLE_CYAN = "rgba(0,229,255,0.35)"
+
+# Glass panel fill — replaces QColor(10,17,19,220) hardcoded in 15+ places
+BG_PANEL = "rgba(10,17,19,220)"
 
 # New design has no rounded corners; keep exported names for compatibility.
 RADIUS_SM = 0

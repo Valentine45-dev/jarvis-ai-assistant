@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import psutil
 from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt, pyqtProperty, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen, QRadialGradient
+from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QRadialGradient
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
 
 from core.brain import TAG_INTENT_MAP
 from ui.components.typewriter import _TypewriterProxy
-from ui.theme import BG, CYAN, FM
+from ui.theme import BG, CYAN, FM, TEXT_MUTED
 from ui.widgets import (
     ArcReactorWidget,
     CommandBar as _MainCommandBar,
@@ -46,6 +46,7 @@ from ui.widgets import (
     TranscriptPanel,
     TypingIndicator,
     WaveformStrip,
+    _mono,
 )
 
 
@@ -62,14 +63,8 @@ EMERALD = "#83fba5"
 EMERALD_DIM = "#66dd8b"
 
 
-def _mono(size: int, bold: bool = False) -> QFont:
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
-
-
 STATES = {
-    "idle": ("STANDBY", "#ffe16d"),
+    "idle": ("STANDBY", "#00e5ff"),
     "listening": ("LISTENING", "#00e5ff"),
     "thinking": ("PROCESSING", "#00e5ff"),
     "speaking": ("SPEAKING", "#83fba5"),
@@ -376,7 +371,7 @@ class _MemCard(_TelemetryCard):
         self._detail_lbl.setFont(_mono(9))
         self._detail_lbl.setAlignment(Qt.AlignCenter)
         self._detail_lbl.setStyleSheet(
-            "color:rgba(132,147,150,0.65);background:transparent;border:none;"
+            f"color:{TEXT_MUTED};background:transparent;border:none;"
         )
         self.add_widget(self._detail_lbl)
 
@@ -751,6 +746,8 @@ class DashboardView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(f"background:{BG};")
+        self._bg_px: "QPixmap | None" = None
+        self._bg_sz = (-1, -1)
 
         content_lay = QVBoxLayout(self)
         content_lay.setContentsMargins(24, 20, 24, 0)
@@ -785,39 +782,53 @@ class DashboardView(QWidget):
 
         self.toast = ToastNotification(self)
 
-    def paintEvent(self, _):
-        p = QPainter(self)
+    def _rebuild_bg(self) -> None:
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            self._bg_px = None
+            return
+        px = QPixmap(w, h)
+        p = QPainter(px)
         p.setRenderHint(QPainter.Antialiasing, False)
 
-        # Base canvas — pure near-black.
-        p.fillRect(self.rect(), QColor(8, 10, 10, 255))
+        p.fillRect(0, 0, w, h, QColor(8, 10, 10, 255))
 
-        # Subtle ambient cyan radial bloom (reduced vs teal-bg era).
-        cx = self.width() * 0.52
-        cy = self.height() * 0.56
-        grad = QRadialGradient(cx, cy, max(self.width(), self.height()) * 0.58)
+        cx = w * 0.52
+        cy = h * 0.56
+        grad = QRadialGradient(cx, cy, max(w, h) * 0.58)
         grad.setColorAt(0.00, QColor(0, 229, 255, 22))
         grad.setColorAt(0.38, QColor(0, 229, 255, 8))
         grad.setColorAt(1.00, QColor(0, 229, 255, 0))
-        p.fillRect(self.rect(), QBrush(grad))
+        p.fillRect(0, 0, w, h, QBrush(grad))
 
-        # Dotted texture — slightly dimmer on dark canvas.
         dot_step = 18
-        for y in range(0, self.height() + dot_step, dot_step):
+        for y in range(0, h + dot_step, dot_step):
             x_offset = (dot_step // 2) if ((y // dot_step) % 2) else 0
-            for x in range(-x_offset, self.width() + dot_step, dot_step):
-                dx = abs(x - cx) / max(self.width(), 1)
-                dy = abs(y - cy) / max(self.height(), 1)
+            for x in range(-x_offset, w + dot_step, dot_step):
+                dx = abs(x - cx) / max(w, 1)
+                dy = abs(y - cy) / max(h, 1)
                 fade = min(1.0, (dx + dy) * 0.9)
                 alpha = int(28 - (fade * 14))
                 p.fillRect(int(x), int(y), 2, 2, QColor(0, 229, 255, max(10, alpha)))
 
-        # Vignette.
-        vignette = QRadialGradient(self.width() * 0.5, self.height() * 0.55, self.width() * 0.95)
+        vignette = QRadialGradient(w * 0.5, h * 0.55, w * 0.95)
         vignette.setColorAt(0.65, QColor(8, 10, 10, 0))
         vignette.setColorAt(1.00, QColor(8, 10, 10, 130))
-        p.fillRect(self.rect(), QBrush(vignette))
+        p.fillRect(0, 0, w, h, QBrush(vignette))
+
+        p.end()
+        self._bg_px = px
+        self._bg_sz = (w, h)
+
+    def paintEvent(self, _):
+        w, h = self.width(), self.height()
+        if self._bg_px is None or self._bg_sz != (w, h):
+            self._rebuild_bg()
+        p = QPainter(self)
+        if self._bg_px is not None:
+            p.drawPixmap(0, 0, self._bg_px)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._bg_px = None  # invalidate; rebuilt lazily in paintEvent
         self.toast._reposition()

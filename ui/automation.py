@@ -14,41 +14,7 @@ from PyQt5.QtWidgets import (
 
 from core.automation import workflow_library
 from ui.theme import BG, CYAN, FM, PRIMARY
-from ui.widgets import GlassPanel, StatusPip, TerminalLog
-
-
-def _mono(size: int, bold: bool = False):
-    from PyQt5.QtGui import QFont
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
-
-
-def _panel_header(title: str, right: str = "") -> tuple[QWidget, QFrame]:
-    """Returns a (header_widget, separator) pair for GlassPanel headers."""
-    header = QWidget()
-    header.setFixedHeight(36)
-    header.setStyleSheet("background:transparent;")
-    hl = QHBoxLayout(header)
-    hl.setContentsMargins(14, 0, 14, 0)
-    t = QLabel(title)
-    t.setStyleSheet(
-        f"color:{CYAN};font-family:'{FM}';font-size:10px;"
-        "font-weight:700;letter-spacing:2px;background:transparent;border:none;"
-    )
-    hl.addWidget(t, 1)
-    if right:
-        r = QLabel(right)
-        r.setStyleSheet(
-            "color:rgba(132,147,150,0.7);font-family:'Roboto Mono';"
-            "font-size:10px;background:transparent;border:none;"
-        )
-        hl.addWidget(r)
-    sep = QFrame()
-    sep.setFrameShape(QFrame.HLine)
-    sep.setStyleSheet("color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);")
-    sep.setFixedHeight(1)
-    return header, sep
+from ui.widgets import GlassPanel, StatusPip, TerminalLog, _mono, _panel_header
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -25,17 +25,10 @@ from PyQt5.QtWidgets import (
 )
 
 from ui.theme import CYAN, FM, GREEN, RED, WARNING
-from ui.widgets import StatusPip, ToggleSwitch
+from ui.widgets import StatusPip, ToggleSwitch, _mono
 
 
 _POPOVER_WIDTH = 300
-
-
-def _mono(size: int, bold: bool = False):
-    from PyQt5.QtGui import QFont
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
 
 
 class _ToggleRow(QWidget):

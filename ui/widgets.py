@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import random
 import re
@@ -21,6 +22,7 @@ from PyQt5.QtGui import (
     QSyntaxHighlighter, QTextCharFormat, QTextCursor,
 )
 from PyQt5.QtWidgets import (
+    QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -32,7 +34,45 @@ import qtawesome as qta
 
 from ui.components.panels import GlassPanel
 from ui.components.transcript import TerminalLog, TranscriptPanel
-from ui.theme import BG, CYAN, FM, FN, GREEN, PRIMARY, RED, WARNING, _c, _primary
+from ui.theme import BG, CYAN, FM, FN, GREEN, IDLE_CYAN, PRIMARY, RED, TEXT_MUTED, WARNING, _c, _primary
+
+
+# ---------------------------------------------------------------------------
+# Canonical font/layout helpers — import these; do NOT redefine per-file
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=32)
+def _mono(size: int, bold: bool = False) -> QFont:
+    """Create a Roboto Mono QFont. Canonical — replaces 6 per-file copies."""
+    f = QFont(FM, size)
+    f.setBold(bold)
+    return f
+
+
+def _panel_header(title: str, right_text: str = "") -> "tuple[QWidget, QFrame]":
+    """Standard GlassPanel header row + separator. Canonical — replaces 3 per-file copies."""
+    header = QWidget()
+    header.setFixedHeight(36)
+    header.setStyleSheet("background:transparent;")
+    hl = QHBoxLayout(header)
+    hl.setContentsMargins(14, 0, 14, 0)
+    t = QLabel(title)
+    t.setFont(_mono(10, bold=True))
+    t.setStyleSheet(
+        f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;"
+    )
+    hl.addWidget(t)
+    if right_text:
+        r = QLabel(right_text)
+        r.setFont(_mono(8))
+        r.setStyleSheet(f"color:{TEXT_MUTED};background:transparent;border:none;")
+        hl.addStretch(1)
+        hl.addWidget(r)
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setStyleSheet("color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);")
+    sep.setFixedHeight(1)
+    return header, sep
 
 
 class ModuleIDLabel(QLabel):
@@ -243,7 +283,7 @@ class ArcReactorWidget(QWidget):
         self._pulse = 0.0
         self._state = "idle"
         self._state_colors = {
-            "idle": QColor("#ffe16d"),
+            "idle": QColor(0, 229, 255, 89),   # IDLE_CYAN — unified with Voice mic idle
             "listening": QColor("#00e5ff"),
             "thinking": QColor("#00e5ff"),
             "speaking": QColor("#83fba5"),
@@ -496,6 +536,9 @@ class ToggleSwitch(QWidget):
         super().__init__(parent)
         self.setFixedSize(44, 22)
         self._checked = checked
+        self._hovered = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
 
     def isChecked(self):
         return self._checked
@@ -504,22 +547,43 @@ class ToggleSwitch(QWidget):
         self._checked = bool(checked)
         self.update()
 
+    def enterEvent(self, _):
+        self._hovered = True
+        self.update()
+
+    def leaveEvent(self, _):
+        self._hovered = False
+        self.update()
+
     def mousePressEvent(self, _):
         self._checked = not self._checked
         self.toggled.emit(self._checked)
         self.update()
 
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self._checked = not self._checked
+            self.toggled.emit(self._checked)
+            self.update()
+        else:
+            super().keyPressEvent(event)
+
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         track = QRectF(1, 1, 42, 20)
+        hover_boost = 20 if self._hovered else 0
         p.setPen(QPen(QColor(CYAN if self._checked else "#3b494c"), 1))
-        p.setBrush(QColor(0, 229, 255, 40 if self._checked else 20))
+        p.setBrush(QColor(0, 229, 255, (40 if self._checked else 20) + hover_boost))
         p.drawRoundedRect(track, 10, 10)
         knob_x = 24 if self._checked else 2
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(CYAN if self._checked else "#849396"))
         p.drawEllipse(knob_x, 2, 18, 18)
+        if self.hasFocus():
+            p.setPen(QPen(QColor(0, 229, 255, 180), 1, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(0.5, 0.5, 43, 21), 11, 11)
 
 
 class MicButton(QPushButton):
@@ -528,12 +592,22 @@ class MicButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._listening = False
+        self._hovered = False
         self.setFixedSize(42, 38)
         self.setCursor(Qt.PointingHandCursor)
         self.setText("")
+        self.setFocusPolicy(Qt.StrongFocus)
 
     def set_listening(self, listening: bool):
         self._listening = listening
+        self.update()
+
+    def enterEvent(self, _):
+        self._hovered = True
+        self.update()
+
+    def leaveEvent(self, _):
+        self._hovered = False
         self.update()
 
     def mousePressEvent(self, e):
@@ -543,10 +617,18 @@ class MicButton(QPushButton):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.fillRect(self.rect(), QColor(8, 15, 17, 120))
-        p.setPen(QPen(QColor(0, 229, 255, 120), 1))
+        focused = self.hasFocus()
+        bg_alpha = 180 if self._hovered else 120
+        p.fillRect(self.rect(), QColor(8, 15, 17, bg_alpha))
+        border_alpha = 200 if (self._hovered or focused) else 120
+        p.setPen(QPen(QColor(0, 229, 255, border_alpha), 1))
         p.drawRect(self.rect().adjusted(0, 0, -1, -1))
-        icon = qta.icon("fa5s.microphone", color=CYAN if self._listening else PRIMARY)
+        if focused:
+            p.setPen(QPen(QColor(0, 229, 255, 140), 1, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(self.rect().adjusted(2, 2, -3, -3))
+        icon_color = CYAN if (self._listening or self._hovered or focused) else PRIMARY
+        icon = qta.icon("fa5s.microphone", color=icon_color)
         p.drawPixmap((self.width() - 14) // 2, (self.height() - 14) // 2, icon.pixmap(14, 14))
 
 
@@ -783,16 +865,71 @@ class ConfirmationBar(QWidget):
     confirmed = pyqtSignal()
     cancelled = pyqtSignal()
 
+    _AMBER = "rgba(255,219,60,0.92)"
+    _BORDER = "rgba(255,219,60,0.45)"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setVisible(False)
+        self.setFixedHeight(46)
+        self.setStyleSheet(
+            "background:rgba(22,18,8,0.97);"
+            "border-top:1px solid rgba(255,219,60,0.30);"
+            "border-bottom:1px solid rgba(255,219,60,0.30);"
+        )
+
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(14, 0, 10, 0)
+        lay.setSpacing(10)
+
+        warn = QLabel("⚠")
+        warn.setFixedWidth(18)
+        warn.setStyleSheet(
+            "color:rgba(255,219,60,0.80);font-size:13px;"
+            "background:transparent;border:none;"
+        )
+        lay.addWidget(warn)
+
         self._msg = QLabel("Confirm command?")
-        self._ok = QPushButton("CONFIRM")
-        self._no = QPushButton("CANCEL")
-        self._ok.clicked.connect(self.confirmed.emit)
-        self._no.clicked.connect(self.cancelled.emit)
+        self._msg.setFont(_mono(10))
+        self._msg.setStyleSheet(
+            f"color:{self._AMBER};background:transparent;border:none;"
+        )
         lay.addWidget(self._msg, 1)
+
+        self._ok = QPushButton("CONFIRM")
+        self._ok.setFixedSize(86, 28)
+        self._ok.setCursor(Qt.PointingHandCursor)
+        self._ok.setStyleSheet(
+            "QPushButton{"
+            f"color:{self._AMBER};border:1px solid {self._BORDER};"
+            f"font-family:'Roboto Mono';font-size:10px;font-weight:700;"
+            "letter-spacing:1px;background:rgba(255,219,60,0.07);"
+            "}"
+            "QPushButton:hover{background:rgba(255,219,60,0.18);}"
+            "QPushButton:pressed{background:rgba(255,219,60,0.30);}"
+            "QPushButton:focus{border:1px solid rgba(255,219,60,0.85);}"
+        )
+        self._ok.clicked.connect(self.confirmed.emit)
         lay.addWidget(self._ok)
+
+        self._no = QPushButton("CANCEL")
+        self._no.setFixedSize(72, 28)
+        self._no.setCursor(Qt.PointingHandCursor)
+        self._no.setStyleSheet(
+            "QPushButton{"
+            "color:rgba(132,147,150,0.75);border:1px solid rgba(132,147,150,0.25);"
+            "font-family:'Roboto Mono';font-size:10px;letter-spacing:1px;"
+            "background:transparent;"
+            "}"
+            "QPushButton:hover{color:rgba(195,245,255,0.90);border-color:rgba(132,147,150,0.50);}"
+            "QPushButton:pressed{background:rgba(132,147,150,0.10);}"
+        )
+        self._no.clicked.connect(self.cancelled.emit)
         lay.addWidget(self._no)
+
+    def show_confirmation(self, message: str = "") -> None:
+        """Set message text and make the bar visible."""
+        if message:
+            self._msg.setText(message)
+        self.setVisible(True)

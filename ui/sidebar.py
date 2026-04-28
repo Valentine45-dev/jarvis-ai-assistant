@@ -13,14 +13,12 @@ from __future__ import annotations
 
 import qtawesome as qta
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QPainter
+from PyQt5.QtGui import QPainter
 from PyQt5.QtWidgets import QLabel, QStyle, QStyleOption, QVBoxLayout, QWidget
 
 from ui.bars import draw_glow_right_edge, draw_glow_underline
-from ui.theme import CYAN, FM
-
-
-SIDEBAR_W = 128
+from ui.theme import CYAN, FM, SIDEBAR_W
+from ui.widgets import _mono
 
 
 # Visual items: (label, icon_name, default_active).
@@ -42,12 +40,6 @@ FOOTER_ITEMS = [
 _ICON_COLOR_ACTIVE = CYAN                      # "#00E5FF"
 _ICON_COLOR_HOVER  = "#C3F5FF"
 _ICON_COLOR_IDLE   = "rgba(0,229,255,0.35)"    # qtawesome accepts rgba strings
-
-
-def _mono(size: int, bold: bool = False) -> QFont:
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
 
 
 class _BrandZone(QWidget):

@@ -26,19 +26,12 @@ from PyQt5.QtWidgets import (
 )
 
 from ui.theme import CYAN, FM, PRIMARY
-from ui.widgets import _TagLineEdit
+from ui.widgets import _TagLineEdit, _mono
 
 
 _FRAME_WIDTH = 640
 _FRAME_TOP_OFFSET = 110          # distance from window top to frame top
 _BACKDROP_ALPHA = 165            # 0..255 — how dark the dim layer is
-
-
-def _mono(size: int, bold: bool = False):
-    from PyQt5.QtGui import QFont
-    f = QFont(FM, size)
-    f.setBold(bold)
-    return f
 
 
 class _RecentChip(QPushButton):
