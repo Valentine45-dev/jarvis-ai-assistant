@@ -20,7 +20,7 @@ Architecture:
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtGui import QColor, QPainter, QPen, QPalette
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
@@ -42,17 +42,17 @@ class _RecentChip(QPushButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setFlat(True)
         # Truncate visually but keep full text accessible via tooltip + data
-        display = text if len(text) <= 38 else text[:35] + "…"
+        display = text if len(text) <= 28 else text[:25] + "…"
         self.setText(display)
         self.setToolTip(text)
         self._full_text = text
         self.setStyleSheet(
             "QPushButton{"
             "color:rgba(195,245,255,0.78);"
-            f"font-family:'{FM}';font-size:10px;"
+            f"font-family:'{FM}';font-size:11px;"
             "background:rgba(0,229,255,0.06);"
             "border:1px solid rgba(0,229,255,0.18);"
-            "padding:5px 10px;border-radius:2px;text-align:left;"
+            "padding:6px 12px;border-radius:2px;text-align:left;"
             "}"
             "QPushButton:hover{"
             f"color:{CYAN};border-color:rgba(0,229,255,0.55);"
@@ -93,14 +93,14 @@ class CommandPalette(QWidget):
         self._frame.paintEvent = self._frame_paint   # type: ignore[assignment]
 
         outer = QVBoxLayout(self._frame)
-        outer.setContentsMargins(18, 16, 18, 14)
-        outer.setSpacing(10)
+        outer.setContentsMargins(20, 18, 20, 16)
+        outer.setSpacing(12)
 
         # ── Header label ─────────────────────────────────────────────────────
         head_row = QHBoxLayout()
         head_row.setSpacing(10)
         title = QLabel("COMMAND PALETTE")
-        title.setFont(_mono(10, bold=True))
+        title.setFont(_mono(11, bold=True))
         title.setStyleSheet(
             f"color:{CYAN};letter-spacing:3px;background:transparent;border:none;"
         )
@@ -116,26 +116,31 @@ class CommandPalette(QWidget):
 
         # ── Input field ──────────────────────────────────────────────────────
         self._input = _TagLineEdit(self._valid_tags)
-        self._input.setFixedHeight(44)
-        self._input.setPlaceholderText("Issue a directive…  e.g.  open chrome  ·  @browser news today")
+        self._input.setFixedHeight(54)
+        self._input.setPlaceholderText("Issue a directive  ·  open chrome  ·  @browser search today")
         self._input.setStyleSheet(
             "QTextEdit{"
-            f"color:{PRIMARY};font-family:'{FM}';font-size:14px;"
+            f"color:{PRIMARY};font-family:'{FM}';font-size:16px;"
             "background:rgba(8,15,17,0.85);"
             "border:1px solid rgba(0,229,255,0.32);"
-            "padding:10px 12px;"
+            "padding:11px 14px;"
             "selection-background-color:rgba(0,229,255,0.30);"
             "}"
             "QTextEdit:focus{border:1px solid rgba(0,229,255,0.85);}"
         )
+        # Must be set AFTER setStyleSheet — stylesheet rebuilds the palette and
+        # would otherwise override this.
+        _ph_pal = self._input.palette()
+        _ph_pal.setColor(QPalette.PlaceholderText, QColor(0, 229, 255, 150))
+        self._input.setPalette(_ph_pal)
         self._input.returnPressed.connect(self._submit)
         outer.addWidget(self._input)
 
         # ── Recents row ──────────────────────────────────────────────────────
         self._recents_label = QLabel("RECENT")
         self._recents_label.setStyleSheet(
-            "color:rgba(132,147,150,0.45);font-family:'Roboto Mono';"
-            "font-size:9px;letter-spacing:1px;background:transparent;border:none;"
+            "color:rgba(132,147,150,0.65);font-family:'Roboto Mono';"
+            "font-size:10px;letter-spacing:2px;background:transparent;border:none;"
         )
         outer.addWidget(self._recents_label)
 
@@ -148,11 +153,11 @@ class CommandPalette(QWidget):
 
         # ── Footer hint ──────────────────────────────────────────────────────
         hint = QLabel(
-            "Press ENTER to send  ·  Click outside or ESC to dismiss  ·  Routes through brain.py"
+            "Press ENTER to send  ·  Click outside or ESC to dismiss"
         )
         hint.setStyleSheet(
-            "color:rgba(132,147,150,0.45);font-family:'Roboto Mono';"
-            "font-size:9px;letter-spacing:0.5px;background:transparent;border:none;"
+            "color:rgba(132,147,150,0.60);font-family:'Roboto Mono';"
+            "font-size:10px;letter-spacing:0.5px;background:transparent;border:none;"
         )
         outer.addWidget(hint)
 
@@ -178,8 +183,8 @@ class CommandPalette(QWidget):
             self.show_palette()
 
     def set_recents(self, commands: list[str]):
-        """Refresh the recents row. Newest first; capped at 5."""
-        self._recents = list(commands)[:5]
+        """Refresh the recents row. Newest first; capped at 3."""
+        self._recents = list(commands)[:3]
         self._refresh_recents_ui()
 
     # ── Submit / dismiss ─────────────────────────────────────────────────────

@@ -188,7 +188,11 @@ class _HealthStrip(QWidget):
 
 
 class SettingsView(QWidget):
-    scanline_toggled = pyqtSignal(bool)   # preserved for future wiring
+    scanline_toggled     = pyqtSignal(bool)
+    mic_muted_changed    = pyqtSignal(bool)
+    tts_muted_changed    = pyqtSignal(bool)
+    auto_confirm_changed = pyqtSignal(bool)
+    dim_mode_changed     = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -219,7 +223,7 @@ class SettingsView(QWidget):
         head.addWidget(self._unsaved_lbl, 0, Qt.AlignVCenter)
         root.addLayout(head)
 
-        subtitle = QLabel("RUNTIME CONFIGURATION  //  API & AUDIO SETTINGS")
+        subtitle = QLabel("RUNTIME CONFIGURATION  //  API, AUDIO & SESSION FLAGS")
         subtitle.setStyleSheet(
             "QLabel{color:rgba(132,147,150,0.9);font-family:'Roboto Mono';"
             "font-size:11px;letter-spacing:1px;background:transparent;border:none;}"
@@ -380,6 +384,55 @@ class SettingsView(QWidget):
         upper.addWidget(meta_panel, 1)
 
         root.addLayout(upper, 1)
+
+        # ── Session flags ─────────────────────────────────────────────────────
+        flags_panel = GlassPanel()
+        flags_panel.set_fill_color(QColor(10, 17, 19, 220))
+        flags_lay = QVBoxLayout(flags_panel)
+        flags_lay.setContentsMargins(0, 0, 0, 0)
+        flags_lay.setSpacing(0)
+
+        sfhdr, sfsep = _panel_header("SESSION_FLAGS")
+        flags_lay.addWidget(sfhdr)
+        flags_lay.addWidget(sfsep)
+
+        sfbody = QWidget()
+        sfbody.setStyleSheet("background:transparent;")
+        sfb = QHBoxLayout(sfbody)
+        sfb.setContentsMargins(14, 10, 14, 10)
+        sfb.setSpacing(32)
+
+        sf_left = QVBoxLayout()
+        sf_left.setSpacing(4)
+        self._flag_mic = self._make_flag_row(
+            sf_left, "MUTE_MIC",
+            "Block voice capture session-wide.",
+        )
+        self._flag_mic.toggled.connect(self.mic_muted_changed.emit)
+        self._flag_tts = self._make_flag_row(
+            sf_left, "MUTE_TTS",
+            "Suppress spoken responses; transcript still updates.",
+        )
+        self._flag_tts.toggled.connect(self.tts_muted_changed.emit)
+
+        sf_right = QVBoxLayout()
+        sf_right.setSpacing(4)
+        self._flag_conf = self._make_flag_row(
+            sf_right, "AUTO_CONFIRM",
+            "Skip confirmation prompts. Destructive actions run instantly.",
+            warn=True,
+        )
+        self._flag_conf.toggled.connect(self.auto_confirm_changed.emit)
+        self._flag_dim = self._make_flag_row(
+            sf_right, "DIM_MODE",
+            "Reduce brightness for low-light use.",
+        )
+        self._flag_dim.toggled.connect(self.dim_mode_changed.emit)
+
+        sfb.addLayout(sf_left, 1)
+        sfb.addLayout(sf_right, 1)
+        flags_lay.addWidget(sfbody)
+        root.addWidget(flags_panel)
 
         # ── Lower: Audio Configuration ────────────────────────────────────────
         audio_panel = GlassPanel()
@@ -543,6 +596,54 @@ class SettingsView(QWidget):
         """
         self._voice_input.setText(config.tts_voice)
         super().showEvent(event)
+
+    def sync_state(
+        self,
+        mic_muted: bool,
+        tts_muted: bool,
+        auto_confirm: bool,
+        dim_mode: bool = False,
+    ) -> None:
+        """Reflect external flag values without re-emitting toggle signals."""
+        self._flag_mic.setChecked(mic_muted)
+        self._flag_tts.setChecked(tts_muted)
+        self._flag_conf.setChecked(auto_confirm)
+        self._flag_dim.setChecked(dim_mode)
+
+    @staticmethod
+    def _make_flag_row(
+        layout: QVBoxLayout,
+        label: str,
+        helper: str,
+        warn: bool = False,
+    ) -> ToggleSwitch:
+        row = QWidget()
+        row.setStyleSheet("background:transparent;")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 5, 0, 5)
+        rl.setSpacing(10)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        lbl = QLabel(label)
+        lbl.setFont(_mono(9, bold=True))
+        lbl.setStyleSheet(
+            "color:rgba(195,245,255,0.90);letter-spacing:1px;"
+            "background:transparent;border:none;"
+        )
+        col.addWidget(lbl)
+        hlp = QLabel(helper)
+        hlp.setStyleSheet(
+            ("color:rgba(255,219,60,0.85);" if warn else "color:rgba(160,180,185,0.72);")
+            + "font-family:'Roboto Mono';font-size:9px;"
+            "letter-spacing:0.3px;background:transparent;border:none;"
+        )
+        hlp.setWordWrap(True)
+        col.addWidget(hlp)
+        rl.addLayout(col, 1)
+        tog = ToggleSwitch(False)
+        rl.addWidget(tog, 0, Qt.AlignVCenter)
+        layout.addWidget(row)
+        return tog
 
     def _rebuild_bg(self) -> None:
         w, h = self.width(), self.height()
