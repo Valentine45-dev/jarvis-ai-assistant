@@ -783,10 +783,14 @@ class JarvisWindow(QMainWindow):
                     exec_out.get("output", ""),
                     exec_out.get("error", ""),
                 )
+            elif action_name == "change_voice" and exec_out.get("output"):
+                # Speak the handler's line ("Now Adam's speaking, sir.") in the
+                # NEW voice — config.tts_voice is already updated at this point.
+                display_resp = exec_out["output"]
             elif action_name == "conversational" and exec_out.get("output"):
                 display_resp = exec_out["output"]   # page cache answer
             else:
-                display_resp = resp   # Claude's response (change_voice, who_are_you, etc.)
+                display_resp = resp   # Claude's response (who_are_you, etc.)
             primary = display_resp
         else:
             display_resp = resp       # unknown / other — use Claude's response
@@ -1177,11 +1181,16 @@ class JarvisWindow(QMainWindow):
     def _set_state(self, s):
         self._state = s
 
-        # Keep wake detector paused while the system is active (prevents false
-        # triggers during speech capture / TTS playback / processing).
+        # Keep wake detector paused while the system is active.
+        # The deferred resume guards against stale QTimer callbacks: if JARVIS
+        # transitions idle→thinking in <300ms (always), without the guard the
+        # old timer fires and re-enables the detector mid-execution.
         from core.wake_word import wake_detector
         if s == "idle":
-            QTimer.singleShot(300, wake_detector.resume)
+            def _resume_if_still_idle():
+                if self._state == "idle":
+                    wake_detector.resume()
+            QTimer.singleShot(300, _resume_if_still_idle)
         else:
             wake_detector.pause()
 

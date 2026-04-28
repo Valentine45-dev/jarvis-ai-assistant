@@ -370,8 +370,7 @@ class TtsEngine:
                         self._say_elevenlabs(text, _on_ready_once, on_done)
                         return
                     except Exception as exc:
-                        if config.debug_mode:
-                            print(f"[tts] ElevenLabs failed, falling back: {exc}")
+                        print(f"[tts] ElevenLabs FAILED, falling back to pyttsx3: {exc}")
                         # If on_ready already fired, don't duplicate it in fallback.
                         if ready_called.is_set():
                             self._notify(on_done)
@@ -400,6 +399,7 @@ class TtsEngine:
             raise RuntimeError("elevenlabs package not installed")
 
         voice_id = _EL_VOICES.get(config.tts_voice, _DEFAULT_VOICE_ID)
+        print(f"[tts] ElevenLabs → voice={config.tts_voice!r}  id={voice_id}")
         client = el.ElevenLabs(api_key=config.elevenlabs_api_key)
 
         stream_fn = getattr(client.text_to_speech, "stream", None)

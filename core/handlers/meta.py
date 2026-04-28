@@ -64,6 +64,21 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         return _ok("\n".join(lines))
 
     if action == "change_voice":
+        _VOICE_FIRST_NAMES: dict[str, str] = {
+            "male-british":         "George",
+            "male-american":        "Adam",
+            "female-british":       "Rachel",
+            "male-broadcast":       "Daniel",
+            "male-resonant":        "Brian",
+            "male-smooth":          "Eric",
+            "male-gravelly":        "Callum",
+            "male-casual":          "Chris",
+            "male-australian":      "Charlie",
+            "female-professional":  "Sarah",
+            "female-british-clear": "Alice",
+            "female-british-warm":  "Lily",
+            "female-american":      "Matilda",
+        }
         _VOICE_ALIASES: dict[str, str] = {
             "male-british":         "male-british",
             "male-american":        "male-american",
@@ -126,8 +141,10 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
             return _err(f"Unknown voice {raw!r}. Available: {available}")
         config.tts_voice = key
         config.save()
-        label = _VOICE_LABELS[key]
-        return _ok(f"Voice set to {label}")
+        name = _VOICE_FIRST_NAMES.get(key, key)
+        # Spoken in the NEW voice — the caller must read output (not Claude's
+        # pre-execution response) so the user hears audible proof of the switch.
+        return _ok(f"Now {name}'s speaking, sir.")
 
     if action in ("quit_application", "close_jarvis"):
         return {"success": True, "output": "", "error": "", "quit_application": True}
