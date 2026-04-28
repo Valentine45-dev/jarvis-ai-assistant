@@ -10,9 +10,10 @@ _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
     ("system_control",  "restart"),
     ("system_control",  "sleep"),
     ("close_app",       "force_quit"),
+    ("code_execution",  "kill_process"),  # destructive — must run standalone
 })
 
-_BLOCKED_INTENTS: frozenset[str] = frozenset({"code_execution"})
+_BLOCKED_INTENTS: frozenset[str] = frozenset()  # code_execution is now allowed in workflows
 
 _CONFIRMATION_REQUIRED_ACTIONS: frozenset[tuple[str, str]] = frozenset({
     ("automation_task", "remove_workflow"),
