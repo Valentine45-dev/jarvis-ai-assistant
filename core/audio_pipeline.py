@@ -540,43 +540,63 @@ class TtsEngine:
     ) -> None:
         """pyttsx3 (Windows SAPI) fallback TTS.
 
-        Attempts to pick a system voice that matches config.tts_voice profile
-        so audible differences survive ElevenLabs fallback.
+        Picks a system voice matching the profile and adjusts rate so voices
+        within the same gender sound noticeably different.
         """
-        # Keywords per voice profile — first match in the system voice list wins.
+        # First keyword that matches a SAPI voice name/id wins.
+        # Male profiles → David/Mark; female profiles → Zira/Hazel.
         _VOICE_HINTS: dict[str, tuple[str, ...]] = {
-            "male-british":         ("british", "en_gb", "en-gb", "george", "james"),
-            "male-american":        ("zira", "david", "mark", "en_us", "en-us", "american"),
-            "female-british":       ("hazel", "british", "en_gb", "en-gb"),
-            "male-broadcast":       ("david", "mark", "en_us"),
+            "male-british":         ("george", "james", "british", "en_gb", "en-gb", "david", "mark"),
+            "male-american":        ("david", "mark", "en_us", "en-us"),
+            "female-british":       ("hazel", "british", "en_gb", "en-gb", "zira"),
+            "male-broadcast":       ("mark", "david", "en_us"),
             "male-resonant":        ("david", "mark", "en_us"),
             "male-smooth":          ("david", "en_us"),
-            "male-gravelly":        ("david", "mark"),
-            "male-casual":          ("zira", "david", "en_us"),
-            "male-australian":      ("english_australia", "en_au", "en-au", "australian"),
-            "female-professional":  ("zira", "en_us", "female"),
-            "female-british-clear": ("hazel", "british", "en_gb"),
-            "female-british-warm":  ("hazel", "british", "en_gb"),
-            "female-american":      ("zira", "en_us", "female"),
+            "male-gravelly":        ("mark", "david"),
+            "male-casual":          ("david", "mark", "en_us"),
+            "male-australian":      ("english_australia", "en_au", "en-au", "australian", "david"),
+            "female-professional":  ("zira", "en_us"),
+            "female-british-clear": ("hazel", "british", "en_gb", "zira"),
+            "female-british-warm":  ("hazel", "british", "en_gb", "zira"),
+            "female-american":      ("zira", "en_us"),
+        }
+        # Rate multiplier per profile — differentiates voices that share the same SAPI engine.
+        _RATE_MULT: dict[str, float] = {
+            "male-british":         1.00,
+            "male-american":        1.05,
+            "female-british":       0.95,
+            "male-broadcast":       0.90,
+            "male-resonant":        0.88,
+            "male-smooth":          1.08,
+            "male-gravelly":        0.85,
+            "male-casual":          1.10,
+            "male-australian":      1.05,
+            "female-professional":  1.00,
+            "female-british-clear": 0.97,
+            "female-british-warm":  0.93,
+            "female-american":      1.03,
         }
         try:
             import pyttsx3
             engine = pyttsx3.init()
             base_rate = engine.getProperty("rate") or 200
-            engine.setProperty("rate", int(base_rate * config.tts_speed / 100))
+            rate_mult = _RATE_MULT.get(config.tts_voice, 1.0)
+            engine.setProperty("rate", int(base_rate * config.tts_speed / 100 * rate_mult))
             hints = _VOICE_HINTS.get(config.tts_voice, ())
+            selected_voice_name = None
             if hints:
                 for v in engine.getProperty("voices") or []:
                     combined = (v.name + v.id).lower()
                     if any(k in combined for k in hints):
                         engine.setProperty("voice", v.id)
+                        selected_voice_name = v.name
                         break
+            print(f"[tts] pyttsx3 → profile={config.tts_voice!r}  sapi={selected_voice_name!r}")
             self._notify(on_ready)
             engine.say(text)
             engine.runAndWait()
         except Exception as exc:
-            if config.debug_mode:
-                print(f"[tts] pyttsx3 fallback failed: {exc}")
+            print(f"[tts] pyttsx3 fallback failed: {exc}")
             self._notify(on_ready)
             print(f"[JARVIS] {text}")
         self._notify(on_done)
