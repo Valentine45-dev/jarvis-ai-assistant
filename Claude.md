@@ -371,23 +371,111 @@ Execute code, scripts, or terminal commands.
 
 **Actions:**
 
-- `run_python` — Execute Python code
+- `run_python` — Execute Python code inline (`code` field)
 - `run_shell` — Execute a shell/terminal command
 - `run_script` — Execute a script file
 - `git_command` — Execute a git command
 - `npm_command` — Execute an npm/node command
+- `run_powershell` — Run a **PowerShell** command via `powershell.exe`. Use when the user says *"use PowerShell"*, *"PowerShell command"*, or the task is Windows-native (registry, WMI, PS cmdlets, `$env:` variables). Supports full PS5.1 syntax, pipelines, and aliases (`ls`, `mkdir`, `Get-Process`, etc.).
+- `run_cmd` — Run a **CMD** command via `cmd.exe /c`. Use when the user says *"use CMD"*, *"command prompt"*, or needs classic batch-style commands (`dir`, `ipconfig`, `tasklist`, `%USERPROFILE%` expansion, `&&` chaining).
+- `install_package` — Install a package via pip, npm, or uv. Reads `package` (or falls back to `code`) and optional `manager` (`pip` | `npm` | `uv`; defaults to `pip`).
+- `run_background` — Launch a process detached (fire-and-forget). Returns the PID. Use for long-running servers, watchers, or anything that should not block.
+- `kill_process` — Kill a process by `pid` (integer) or `process_name` (string, partial match). Requires confirmation — destructive.
+
+**Action selection guide:**
+
+| User phrasing | `action` |
+|---|---|
+| "use PowerShell to …", "PS command …" | `run_powershell` |
+| "use CMD …", "command prompt …" | `run_cmd` |
+| "install X", "pip install X", "npm install X" | `install_package` |
+| "start X in the background", "run X without blocking" | `run_background` |
+| "kill process X", "terminate PID …" | `kill_process` |
+| "run git …" | `git_command` |
+| "run python …", inline snippet | `run_python` |
 
 **Parameters:**
 
 ```json
-{ "code": "string — code or command to execute" }
-{ "script_path": "string — path to script file" }
-{ "working_directory": "string — optional: working directory" }
-{ "language": "string — python|bash|node" }
+{ "code": "string — code, command, or inline snippet to execute" }
+{ "script_path": "string — path to script file (run_script)" }
+{ "working_directory": "string — optional CWD for the subprocess" }
+{ "language": "string — python|bash|node (hint only; action drives interpreter)" }
+{ "package": "string — package name for install_package" }
+{ "manager": "string — pip|npm|uv (default: pip)" }
+{ "pid": "int — process ID for kill_process" }
+{ "process_name": "string — partial process name for kill_process" }
 ```
 
 **HUD Label:** `EXECUTING`
-**Confirmation:** `true` for `run_shell` with destructive commands (rm, format, etc.)
+**Confirmation:** `true` for `run_shell` with destructive commands (rm, format, etc.) and always for `kill_process`
+
+**Examples:**
+
+*"Use PowerShell to list files on the Desktop"*
+```json
+{
+  "intent": "code_execution",
+  "action": "run_powershell",
+  "parameters": { "code": "Get-ChildItem \"$env:USERPROFILE\\Desktop\"" },
+  "confidence": 0.97,
+  "response": "Running that PowerShell command now, sir.",
+  "hud_status": "EXECUTING",
+  "requires_confirmation": false
+}
+```
+
+*"Use CMD to check my IP address"*
+```json
+{
+  "intent": "code_execution",
+  "action": "run_cmd",
+  "parameters": { "code": "ipconfig" },
+  "confidence": 0.97,
+  "response": "Pulling your IP config via CMD.",
+  "hud_status": "EXECUTING",
+  "requires_confirmation": false
+}
+```
+
+*"Install the requests library"*
+```json
+{
+  "intent": "code_execution",
+  "action": "install_package",
+  "parameters": { "package": "requests", "manager": "pip" },
+  "confidence": 0.96,
+  "response": "Installing requests via pip — give it a moment.",
+  "hud_status": "EXECUTING",
+  "requires_confirmation": false
+}
+```
+
+*"Run the dev server in the background"*
+```json
+{
+  "intent": "code_execution",
+  "action": "run_background",
+  "parameters": { "code": "python manage.py runserver", "working_directory": "~/project" },
+  "confidence": 0.93,
+  "response": "Launching the dev server in the background — I'll keep the PID.",
+  "hud_status": "EXECUTING",
+  "requires_confirmation": false
+}
+```
+
+*"Kill the process named chrome"*
+```json
+{
+  "intent": "code_execution",
+  "action": "kill_process",
+  "parameters": { "process_name": "chrome" },
+  "confidence": 0.95,
+  "response": "Ready to kill Chrome — just confirm, sir.",
+  "hud_status": "EXECUTING",
+  "requires_confirmation": true
+}
+```
 
 -----
 
