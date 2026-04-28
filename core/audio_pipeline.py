@@ -538,19 +538,39 @@ class TtsEngine:
         on_ready: Callable[[], None] | None,
         on_done:  Callable[[], None] | None,
     ) -> None:
-        """pyttsx3 (Windows SAPI) fallback TTS."""
+        """pyttsx3 (Windows SAPI) fallback TTS.
+
+        Attempts to pick a system voice that matches config.tts_voice profile
+        so audible differences survive ElevenLabs fallback.
+        """
+        # Keywords per voice profile — first match in the system voice list wins.
+        _VOICE_HINTS: dict[str, tuple[str, ...]] = {
+            "male-british":         ("british", "en_gb", "en-gb", "george", "james"),
+            "male-american":        ("zira", "david", "mark", "en_us", "en-us", "american"),
+            "female-british":       ("hazel", "british", "en_gb", "en-gb"),
+            "male-broadcast":       ("david", "mark", "en_us"),
+            "male-resonant":        ("david", "mark", "en_us"),
+            "male-smooth":          ("david", "en_us"),
+            "male-gravelly":        ("david", "mark"),
+            "male-casual":          ("zira", "david", "en_us"),
+            "male-australian":      ("english_australia", "en_au", "en-au", "australian"),
+            "female-professional":  ("zira", "en_us", "female"),
+            "female-british-clear": ("hazel", "british", "en_gb"),
+            "female-british-warm":  ("hazel", "british", "en_gb"),
+            "female-american":      ("zira", "en_us", "female"),
+        }
         try:
             import pyttsx3
             engine = pyttsx3.init()
             base_rate = engine.getProperty("rate") or 200
             engine.setProperty("rate", int(base_rate * config.tts_speed / 100))
-            for v in engine.getProperty("voices") or []:
-                combined = (v.name + v.id).lower()
-                if "british" in config.tts_voice and any(
-                    k in combined for k in ("british", "en_gb", "en-gb")
-                ):
-                    engine.setProperty("voice", v.id)
-                    break
+            hints = _VOICE_HINTS.get(config.tts_voice, ())
+            if hints:
+                for v in engine.getProperty("voices") or []:
+                    combined = (v.name + v.id).lower()
+                    if any(k in combined for k in hints):
+                        engine.setProperty("voice", v.id)
+                        break
             self._notify(on_ready)
             engine.say(text)
             engine.runAndWait()

@@ -5,6 +5,7 @@ Launches the HUD window with all views wired up.
 
 import sys
 import ctypes
+import threading
 from datetime import datetime
 
 import psutil
@@ -204,6 +205,7 @@ class JarvisWindow(QMainWindow):
         self._dashboard.left.transcript.cancelled.connect(self._on_cancelled)
         self._pending_result: dict | None = None
         self._confirm_mode: str | None = None  # "claude" | "executor" | None
+        self._last_result: dict | None = None   # Phase 5: last successfully dispatched intent
 
         # ── Quick settings popover (TopBar sliders icon) ──────────────────────
         # Transient session flag — bypass confirmation for destructive actions.
@@ -370,7 +372,7 @@ class JarvisWindow(QMainWindow):
     def _on_reminder_action(self, payload: dict):
         """Qt main thread — delayed reminder with an executable JARVIS step."""
         from core.executor import dispatch
-        from core.personality import ack_scheduled_action
+        from core.responder import responder
         from core.voice import voice_engine
 
         run = payload.get("run") or {}
@@ -393,12 +395,13 @@ class JarvisWindow(QMainWindow):
         exec_out = dispatch(result_dict, confirmed=True)
         exec_ok = bool(exec_out.get("success"))
 
-        display_resp = ack_scheduled_action(
+        display_resp = responder.build_scheduled(
             intent,
             act,
             exec_ok,
             exec_out.get("output", ""),
             exec_out.get("error", ""),
+            params=parameters,
         )
         hud_conf = sc if exec_ok else 0.0
         j_time = datetime.now().strftime("%H:%M")
@@ -528,6 +531,22 @@ class JarvisWindow(QMainWindow):
                 self._on_confirmation_resolved(resolved)
                 return
 
+        # Phase 5: repeat-last-command shorthand — bypass Claude entirely.
+        _REPEAT_PHRASES: frozenset[str] = frozenset({
+            "again", "do it again", "do that again", "repeat that", "repeat it",
+            "try again", "run it again", "run that again", "once more", "one more time",
+        })
+        if cmd.strip().lower() in _REPEAT_PHRASES and self._last_result:
+            r = self._last_result
+            self._execute_result(
+                r,
+                r.get("intent", "unknown"),
+                float(r.get("confidence", 0.85)),
+                r.get("response", ""),
+                r.get("hud_status", self._INTENT_HUD.get(r.get("intent", "unknown"), "STANDBY")),
+            )
+            return
+
         # Normal flow: route through Claude
         def _on_result(result: dict):
             if result.get("_unknown_tag"):
@@ -588,7 +607,19 @@ class JarvisWindow(QMainWindow):
         "read_screen", "automation_task", "reminder_task",
     })
     _FACTUAL_ACTIONS: frozenset = frozenset({
-        "tell_time", "tell_date", "status_report", "list_voices", "change_voice",
+        "tell_time", "tell_date", "status_report", "list_voices",
+    })
+    # (intent, action) pairs where a post-execution suggestion adds value on success.
+    # Deliberately narrow — only actions with an obvious, useful next step.
+    _SUGGEST_ON_SUCCESS: frozenset = frozenset({
+        ("open_app",           "open_browser"),
+        ("open_app",           "open_url"),
+        ("browser_automation", "navigate"),
+        ("file_operation",     "create_file"),
+        ("file_operation",     "create_directory"),
+        ("search_web",         "google_search"),
+        ("search_web",         "youtube_search"),
+        ("search_web",         "web_search_generic"),
     })
 
     def _on_confirmation_resolved(self, resolved: dict):
@@ -643,6 +674,20 @@ class JarvisWindow(QMainWindow):
             self._set_state("processing")
 
         exec_out = dispatch(result, confirmed=confirmed)
+
+        # Phase 5: remember last successful dispatch for "do it again" shorthand.
+        if exec_out.get("success") and intent in self._ACTION_INTENTS:
+            self._last_result = result
+
+        from core.memory import memory
+        memory.inject_outcome(
+            intent=intent,
+            action=result.get("action", ""),
+            success=bool(exec_out.get("success")),
+            output=exec_out.get("output", ""),
+            error=exec_out.get("error", ""),
+        )
+
         self._finish_execute(result, intent, conf, resp, hud, exec_out)
 
     def _finish_execute(self, result: dict, intent: str, conf: float, resp: str, hud: str,
@@ -685,8 +730,9 @@ class JarvisWindow(QMainWindow):
                 self._tts_ready.emit(transcript_payload)
             return
 
-        # ── Build spoken response — personality-driven, honest about failure ──
-        from core.personality import say as personality_say, action_speech_pair
+        # ── Build spoken response ─────────────────────────────────────────────
+        from core.personality import say as personality_say
+        from core.responder import responder
 
         last_step: tuple[str, str] | None = None
         li = exec_out.get("last_step_intent")
@@ -698,15 +744,20 @@ class JarvisWindow(QMainWindow):
         follow: str | None = None
 
         if intent in self._ACTION_INTENTS:
-            primary, follow = action_speech_pair(
+            primary, follow = responder.build(
                 intent,
                 result.get("action", ""),
                 exec_ok,
                 resp,
                 exec_out.get("output", ""),
                 exec_out.get("error", ""),
+                params=result.get("parameters", {}),
                 last_step=last_step,
             )
+            # Phase 4: suppress _data_follow() for run_workflow — async narration
+            # gives a richer per-step summary; "3 steps done." just gets in the way.
+            if intent == "automation_task" and result.get("action") == "run_workflow":
+                follow = None
             display_resp = f"{primary}\n{follow}" if follow else primary
         elif intent == "jarvis_meta":
             action_name = result.get("action", "")
@@ -725,10 +776,17 @@ class JarvisWindow(QMainWindow):
                     exec_out.get("output", ""),
                     exec_out.get("error", ""),
                 )
+            elif not exec_out.get("success"):
+                # Handler reported failure — use personality error pool
+                display_resp = personality_say(
+                    intent, action_name, "err",
+                    exec_out.get("output", ""),
+                    exec_out.get("error", ""),
+                )
             elif action_name == "conversational" and exec_out.get("output"):
                 display_resp = exec_out["output"]   # page cache answer
             else:
-                display_resp = resp   # Claude's conversational response
+                display_resp = resp   # Claude's response (change_voice, who_are_you, etc.)
             primary = display_resp
         else:
             display_resp = resp       # unknown / other — use Claude's response
@@ -831,6 +889,41 @@ class JarvisWindow(QMainWindow):
             self._tts_ready.emit(transcript_payload)
             if exec_out.get("quit_application"):
                 QTimer.singleShot(500, QApplication.instance().quit)
+
+        # Phase 2 (failures) + Phase 3 (success suggestions).
+        # A daemon thread generates a context-aware spoken follow-up:
+        #   - Failure: Claude names the cause and suggests a next step.
+        #   - Success on whitelisted actions: Claude offers a natural continuation.
+        # Primary TTS fires immediately; narration arrives ~300-600ms later via signal.
+        _action_key = result.get("action", "")
+        _want_narration = (
+            (not exec_ok and intent in self._ACTION_INTENTS)
+            or (exec_ok and (intent, _action_key) in self._SUGGEST_ON_SUCCESS)
+            or (_action_key == "run_workflow")   # Phase 4: always narrate workflows
+        )
+        if _want_narration:
+            _tok      = transcript_token
+            _j_time   = j_time
+            _conf     = float(hud_conf)
+            _intent   = intent
+            _action   = _action_key
+            _success  = exec_ok
+            _output   = exec_out.get("output", "")
+            _error    = exec_out.get("error", "")
+            _user_cmd = self._history[-1].get("you", "") if self._history else ""
+
+            def _async_narration() -> None:
+                from core.brain import ask_post_execution
+                narration = ask_post_execution(
+                    _user_cmd, _intent, _action,
+                    success=_success, output=_output, error=_error,
+                )
+                if narration:
+                    self._action_followup_tts.emit(
+                        narration, _j_time, _intent, _conf, _tok
+                    )
+
+            threading.Thread(target=_async_narration, daemon=True).start()
 
         kind = "error" if not exec_out["success"] else "success"
         toast_msg = (

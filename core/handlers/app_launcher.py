@@ -563,10 +563,12 @@ def _handle_close_app(action: str, params: dict) -> dict:
     if not name:
         return _err("No app name provided")
     if _OS == "windows":
-        exe  = name if name.endswith(".exe") else name + ".exe"
-        flag = "/F" if action == "force_quit" else ""
-        cmd  = ["taskkill", "/F", "/IM", exe] if flag else ["taskkill", "/IM", exe]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        exe = name if name.endswith(".exe") else name + ".exe"
+        # Always use /F on Windows — graceful close often fails for multi-process
+        # apps like Chrome; /F is safe and reliable for desktop app termination.
+        result = subprocess.run(
+            ["taskkill", "/F", "/IM", exe], capture_output=True, text=True
+        )
         return _ok(result.stdout.strip()) if result.returncode == 0 else _err(result.stderr.strip())
     flag = "-9" if action == "force_quit" else "-15"
     result = subprocess.run(["pkill", flag, name], capture_output=True, text=True)

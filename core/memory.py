@@ -36,6 +36,42 @@ class ConversationMemory:
         with self._lock:
             return list(self._messages)
 
+    def inject_outcome(
+        self,
+        intent: str,
+        action: str,
+        success: bool,
+        output: str = "",
+        error: str = "",
+    ) -> None:
+        """Amend the last assistant message with the actual execution result.
+
+        Called after dispatch() returns so memory reflects what really happened,
+        not the pre-execution guess in Claude's `response` field.
+        Skipped for pure success actions with no output — nothing useful to add.
+        """
+        output = (output or "").strip()
+        error  = (error or "").strip()
+
+        if success and not output and not error:
+            return
+
+        if success:
+            detail = output[:80] if output else "ok"
+            suffix = f"\n[Result: {intent}/{action} → {detail}]"
+        else:
+            detail = error[:80] if error else "failed"
+            suffix = f"\n[Result: {intent}/{action} → FAILED: {detail}]"
+
+        with self._lock:
+            for i in range(len(self._messages) - 1, -1, -1):
+                if self._messages[i]["role"] == "assistant":
+                    self._messages[i] = {
+                        "role": "assistant",
+                        "content": self._messages[i]["content"] + suffix,
+                    }
+                    break
+
     def clear(self) -> None:
         """Wipe all conversation history."""
         with self._lock:

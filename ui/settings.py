@@ -558,6 +558,15 @@ class SettingsView(QWidget):
 
         QTimer.singleShot(2000, lambda: self._apply_btn.setText("APPLY_CFG"))
 
+    def showEvent(self, event):
+        """Sync input fields from live config each time the Settings page is shown.
+
+        Prevents stale values (e.g. voice changed via command) from being
+        written back when the user clicks APPLY_CFG.
+        """
+        self._voice_input.setText(config.tts_voice)
+        super().showEvent(event)
+
     def paintEvent(self, _):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(BG))

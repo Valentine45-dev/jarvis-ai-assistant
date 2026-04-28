@@ -126,8 +126,9 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     total   = len(steps)
     results = []
     all_ok  = True
-    last_step_intent = ""
-    last_step_action = ""
+    last_step_intent  = ""
+    last_step_action  = ""
+    quit_application  = False
 
     for i, step in enumerate(steps, 1):
         try:
@@ -145,6 +146,8 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         })
         if sub.get("needs_confirmation"):
             return sub
+        if sub.get("quit_application"):
+            quit_application = True
         results.append(f"Step {i}: {'OK' if sub['success'] else 'FAIL'} — {sub['output'] or sub['error']}")
         if sub["success"]:
             last_step_intent = (step.get("intent") or "").strip()
@@ -163,4 +166,6 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     if last_step_intent and last_step_action:
         out["last_step_intent"] = last_step_intent
         out["last_step_action"] = last_step_action
+    if quit_application:
+        out["quit_application"] = True
     return out

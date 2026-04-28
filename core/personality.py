@@ -49,9 +49,7 @@ _P: dict[tuple, dict] = {
     },
     ("browser_automation", "read_page"): {
         "ok": [
-            "Scanned it. Here's what I see: {o}",
-            "Done — {o}",
-            "Read it. {o}",
+            "{o}",
         ],
         "err": [
             "Nothing readable on that page, sir.",
@@ -764,11 +762,37 @@ _NO_TRIM: set[tuple[str, str]] = {
     ("reminder_task",    "list_reminders"),
     ("automation_task",  "list_workflows"),
     ("read_screen",      "*"),
-    ("browser_automation", "read_page"),
+    # read_page intentionally excluded — output is cleaned before speaking
     ("code_execution",   "*"),
     ("jarvis_meta",      "status_report"),
     ("jarvis_meta",      "list_voices"),
 }
+
+
+def _clean_page_for_speech(raw: str, cap: int = 400) -> str:
+    """Strip browser metadata headers and URLs; return only readable prose for TTS."""
+    import re as _re
+    lines = raw.splitlines()
+    clean: list[str] = []
+    in_content = False
+    for line in lines:
+        stripped = line.strip()
+        # Skip metadata headers produced by browser.read_page()
+        if stripped in ("--- Tab ---", "--- Page content ---"):
+            in_content = stripped == "--- Page content ---"
+            continue
+        if stripped.startswith("Document title:") or stripped.startswith("URL:"):
+            continue
+        # Skip bare URLs
+        if _re.match(r"https?://\S+$", stripped):
+            continue
+        if in_content or not stripped.startswith("---"):
+            if stripped:
+                clean.append(stripped)
+    text = " ".join(clean).strip()
+    if not text:
+        return raw[:cap]
+    return text[:cap] + ("…" if len(text) > cap else "")
 
 
 def say(intent: str, action: str, status: str, output: str = "", error: str = "") -> str:
@@ -799,7 +823,9 @@ def say(intent: str, action: str, status: str, output: str = "", error: str = ""
             return ""
         return s[:cap] + "…" if len(s) > cap else s
 
-    if (intent, action) in _NO_TRIM or (intent, "*") in _NO_TRIM:
+    if intent == "browser_automation" and action == "read_page":
+        o = _clean_page_for_speech(output)
+    elif (intent, action) in _NO_TRIM or (intent, "*") in _NO_TRIM:
         o = output      # full output — never trim listings, OCR, code results
     else:
         o = _trim(output)

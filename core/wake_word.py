@@ -143,6 +143,11 @@ class WakeWordDetector:
                 time.sleep(0.5)
                 continue
 
+            # Discard any frames collected before a mid-window pause — the main
+            # pipeline (or TTS) owns the mic now; do not run STT on captured speech.
+            if self._paused.is_set() or not self._running.is_set():
+                continue
+
             # Skip STT for near-silent windows
             if peak_rms < self.ENERGY_FLOOR or not frames:
                 continue

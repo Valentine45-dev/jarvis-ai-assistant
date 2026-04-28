@@ -271,6 +271,7 @@ def ask_claude(
         msg = _get_client().messages.create(
             model=config.claude_model,
             max_tokens=max_out,
+            temperature=0.8,   # varied spoken responses while keeping JSON structure stable
             system=[
                 {
                     "type": "text",
@@ -352,6 +353,81 @@ def ask_claude_async(
         callback(result)
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+# ── Post-execution narration ──────────────────────────────────────────────────
+
+def ask_post_execution(
+    user_cmd: str,
+    intent: str,
+    action: str,
+    success: bool,
+    output: str = "",
+    error: str = "",
+) -> str:
+    """Lightweight post-execution narration — returns a spoken line or "".
+
+    Called from a daemon thread after dispatch() returns. No conversation
+    history, no system-prompt loading — just a tiny focused call.
+    Safe to call concurrently with the main voice pipeline.
+    """
+    output = (output or "").strip()
+    error  = (error or "").strip()
+
+    if success:
+        result_desc = "succeeded" + (f", output: {output[:200]}" if output else "")
+    else:
+        result_desc = "failed" + (f", error: {error[:200]}" if error else "")
+
+    # Workflow gets a dedicated instruction — the output is a structured step log.
+    if intent == "automation_task" and action == "run_workflow":
+        instruction = (
+            "This was a multi-step workflow. The result shows each step. "
+            "Summarize what succeeded and what (if anything) failed in natural spoken language. "
+            "Name the specific apps or actions from the steps. Keep it to 20-30 words."
+        )
+        max_out = 120
+    elif success:
+        instruction = (
+            "The action succeeded. If a clear, natural next step exists "
+            "(e.g. offer to navigate after opening a browser, offer to open a file just created, "
+            "offer to search after opening Chrome) suggest it in one sentence. "
+            "Otherwise just confirm what happened. Keep it to 15-20 words."
+        )
+        max_out = 80
+    else:
+        instruction = (
+            "The action failed. Name the likely cause specifically "
+            "and suggest one concrete next step. Keep it to 15-25 words."
+        )
+        max_out = 80
+
+    user_msg = (
+        f"User said: \"{user_cmd[:120]}\"\n"
+        f"Intent: {intent}/{action}\n"
+        f"Result: {result_desc}\n\n"
+        f"{instruction}\n"
+        "British butler tone, present tense. No JSON, no quotes around your reply."
+    )
+
+    try:
+        msg = _get_client().messages.create(
+            model=config.claude_model,
+            max_tokens=max_out,
+            temperature=0.8,
+            system=(
+                "You are JARVIS, an AI assistant. Given an execution result, "
+                "say ONE natural sentence about what happened. Be specific. "
+                "British butler tone. No filler phrases like 'Certainly' or 'Of course'."
+            ),
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        text = (msg.content[0].text or "").strip()
+        if text.startswith('"') and text.endswith('"'):
+            text = text[1:-1].strip()
+        return text
+    except Exception:
+        return ""
 
 
 # ── Fallback ──────────────────────────────────────────────────────────────────
