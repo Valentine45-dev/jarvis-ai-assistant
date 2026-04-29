@@ -1,118 +1,26 @@
 {
   "workflows": [
     {
-      "id": "morning_routine",
-      "name": "Morning Routine",
-      "trigger": "Manual",
-      "enabled": true,
-      "last_run": "2026-04-25T19:13:35Z",
+      "id": "night_routine",
+      "name": "Night Routine",
+      "trigger": "run night routine",
       "steps": [
-        {
-          "intent": "open_app",
-          "action": "open_browser",
-          "parameters": {
-            "browser": "chrome"
-          }
-        },
-        {
-          "intent": "search_web",
-          "action": "google_search",
-          "parameters": {
-            "query": "today's news"
-          }
-        },
-        {
-          "intent": "system_control",
-          "action": "volume_up",
-          "parameters": {}
-        }
-      ]
+        "open chrome",
+        "search youtube",
+        "search NBA on Youtube"
+      ],
+      "enabled": true,
+      "last_run": "2026-04-29T15:45:55Z"
     },
     {
-      "id": "dev_setup",
-      "name": "Dev Setup",
-      "trigger": "Manual",
-      "enabled": true,
-      "last_run": "",
+      "id": "noon_routine",
+      "name": "Noon Routine",
+      "trigger": "run noon routine",
       "steps": [
-        {
-          "intent": "open_app",
-          "action": "open_vscode",
-          "parameters": {}
-        },
-        {
-          "intent": "open_app",
-          "action": "open_terminal",
-          "parameters": {}
-        },
-        {
-          "intent": "browser_automation",
-          "action": "navigate",
-          "parameters": {
-            "url": "http://localhost:3000"
-          }
-        }
-      ]
-    },
-    {
-      "id": "night_mode",
-      "name": "Night Mode",
-      "trigger": "Manual",
-      "enabled": true,
-      "last_run": "2026-04-25T19:12:58Z",
-      "steps": [
-        {
-          "intent": "system_control",
-          "action": "brightness_down",
-          "parameters": {}
-        },
-        {
-          "intent": "system_control",
-          "action": "volume_mute",
-          "parameters": {}
-        }
-      ]
-    },
-    {
-      "id": "meeting_prep",
-      "name": "Meeting Prep",
-      "trigger": "Manual",
-      "enabled": true,
-      "last_run": "",
-      "steps": [
-        {
-          "intent": "open_app",
-          "action": "open_browser",
-          "parameters": {
-            "browser": "chrome"
-          }
-        },
-        {
-          "intent": "search_web",
-          "action": "google_search",
-          "parameters": {
-            "query": "my calendar today"
-          }
-        },
-        {
-          "intent": "open_app",
-          "action": "open_app_generic",
-          "parameters": {
-            "app_name": "notepad"
-          }
-        },
-        {
-          "intent": "system_control",
-          "action": "screenshot",
-          "parameters": {}
-        }
-      ]
-    },
-    {
-      "id": "morning_routine_1",
-      "name": "Morning Routine",
-      "trigger": "run morning routine",
-      "steps": [],
+        "increase birghtness to 50%",
+        "crete a python script of todo app in C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests",
+        "open youtube and search nba games today"
+      ],
       "enabled": true,
       "last_run": null
     }
