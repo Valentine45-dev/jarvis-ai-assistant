@@ -50,6 +50,7 @@ _OUTPUT_IS_RESPONSE: frozenset = frozenset({
     ("automation_task",    "list_workflows"),
     ("jarvis_meta",        "status_report"),
     ("jarvis_meta",        "list_voices"),
+    ("weather",            "*"),
 })
 
 
@@ -280,6 +281,9 @@ def smart_error(intent: str, action: str, error: str, params: dict) -> str:
         if tb:
             return f"Execution failed.\n{tb}"
         return "Execution failed." + (f"\n{short_e}" if short_e else "")
+    if intent == "weather":
+        place = params.get("location") or params.get("city") or "that location"
+        return f"Couldn't fetch weather for {place!r}." + (f" {short_e}" if short_e else "")
     if intent == "automation_task" and action == "run_workflow":
         name = params.get("task_name", "")
         base = f"Workflow {name!r} hit an error." if name else "Workflow failed."

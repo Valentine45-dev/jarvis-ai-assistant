@@ -55,7 +55,7 @@ Every response must strictly follow this structure:
 
 |Field                  |Type   |Required|Description                                     |
 |-----------------------|-------|--------|------------------------------------------------|
-|`intent`               |string |Yes     |One of the 14 defined intent categories         |
+|`intent`               |string |Yes     |One of the 15 defined intent categories         |
 |`action`               |string |Yes     |Specific executable action name                 |
 |`parameters`           |object |Yes     |Structured key-value parameters for the executor|
 |`confidence`           |float  |Yes     |0.0–1.0 confidence score                        |
@@ -553,7 +553,26 @@ Schedule and manage timed reminders. The executor fires a HUD status signal when
 
 -----
 
-### 14. `unknown`
+### 14. `weather`
+
+Fetch current weather conditions using OpenWeather.
+
+**Actions:**
+
+- `get_current_weather` — Get current weather for a location (or default city when omitted)
+
+**Parameters:**
+
+```json
+{ "location": "string — city name, optionally with country (e.g. Monrovia,LR)" }
+```
+
+**HUD Label:** `WEATHER`
+**Confirmation:** `false` — read-only request
+
+-----
+
+### 15. `unknown`
 
 Intent could not be determined.
 
@@ -993,6 +1012,7 @@ The `response` field is the **primary spoken output** — it is read aloud exact
 |`browser_automation`|`BROWSER CTRL`   |
 |`jarvis_meta`       |`STANDBY`        |
 |`reminder_task`     |`REMINDER SET`   |
+|`weather`           |`WEATHER`        |
 |`unknown`           |`UNKNOWN`        |
 
 Override the default when context demands it — e.g. `"SHUTDOWN PENDING"` or `"SLEEP PENDING"` instead of `"SYS CONTROL"` when awaiting confirmation for those actions.
@@ -1041,6 +1061,7 @@ The Python layer (`brain.py`) strips @tags from input before sending to you. Whe
 | `@automate` | `automation_task`    |
 | `@screen`   | `read_screen`        |
 | `@remind`   | `reminder_task`      |
+| `@weather`  | `weather`            |
 | `@jarvis`   | `jarvis_meta`        |
 
 ### @Tag Examples

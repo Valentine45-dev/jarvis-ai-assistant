@@ -21,6 +21,7 @@ class AppConfig:
     vapi_api_key: str = ""
     vapi_assistant_id: str = ""
     elevenlabs_api_key: str = ""
+    openweather_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
     wake_word: str = "jarvis"
     debug_mode: bool = False
@@ -38,6 +39,7 @@ class AppConfig:
     tts_muted: bool = False
     auto_confirm: bool = False
     dim_mode: bool = False
+    weather_default_city: str = "Monrovia,LR"
 
     @classmethod
     def from_env(cls):
@@ -45,9 +47,11 @@ class AppConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             vapi_api_key=os.getenv("VAPI_API_KEY", ""),
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+            openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
             claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6"),
             wake_word=os.getenv("WAKE_WORD", "jarvis"),
             debug_mode=os.getenv("DEBUG", "false").lower() == "true",
+            weather_default_city=os.getenv("OPENWEATHER_DEFAULT_CITY", "Monrovia,LR"),
         )
 
     @classmethod
@@ -65,7 +69,7 @@ class AppConfig:
                 instance = cls(**{k: v for k, v in data.items() if k in fields})
                 # Env vars always win — API keys must come from .env, not JSON.
                 env = cls.from_env()
-                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key",
+                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key",
                             "claude_model", "wake_word", "debug_mode"):
                     env_val = getattr(env, key)
                     if env_val:
@@ -80,7 +84,7 @@ class AppConfig:
 
     def save(self):
         """Persist non-sensitive config to JSON. API keys stay in .env only."""
-        _SENSITIVE = {"anthropic_api_key", "vapi_api_key", "elevenlabs_api_key"}
+        _SENSITIVE = {"anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key"}
         data = {k: v for k, v in asdict(self).items() if k not in _SENSITIVE}
         _JSON_PATH.write_text(json.dumps(data, indent=2))
 

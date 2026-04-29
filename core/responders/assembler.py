@@ -43,6 +43,9 @@ class ResponseAssembler:
 
         # ── Output-IS-response (listings, OCR, code, read_page) ──────────────
         if in_rule_set(intent, action, _OUTPUT_IS_RESPONSE):
+            # Weather should read the actual summary immediately, not a generic ack.
+            if intent == "weather":
+                return (speech_compact(output or "Weather data unavailable."), None)
             from core.personality import say as _pool_say
             tts_out = tts_safe_output(output) if intent == "code_execution" else output
             return (speech_compact(_pool_say(intent, action, "ok", tts_out, error)), None)

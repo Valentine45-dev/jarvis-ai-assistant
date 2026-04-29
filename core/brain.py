@@ -69,6 +69,7 @@ TAG_INTENT_MAP: dict[str, str] = {
     "automate": "automation_task",
     "screen":   "read_screen",
     "remind":   "reminder_task",
+    "weather":  "weather",
     "jarvis":   "jarvis_meta",
 }
 

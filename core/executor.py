@@ -50,6 +50,7 @@ from core.handlers.browser_handler import _handle_browser_automation
 from core.handlers.screen_handler import _handle_read_screen
 from core.handlers.automation_handler import _handle_automation_task
 from core.handlers.reminders import _handle_reminder_task
+from core.handlers.weather import _handle_weather
 from core.handlers.meta import _handle_jarvis_meta, _handle_unknown
 
 
@@ -68,6 +69,7 @@ _HANDLERS = {
     "read_screen":        _handle_read_screen,
     "automation_task":    _handle_automation_task,
     "reminder_task":      _handle_reminder_task,
+    "weather":            _handle_weather,
     "jarvis_meta":        _handle_jarvis_meta,
     "unknown":            _handle_unknown,
 }
