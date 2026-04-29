@@ -33,6 +33,11 @@ class AppConfig:
     mic_sensitivity: int = 70
     noise_gate: bool = True
     mic_device: int = -1      # -1 = system default; ≥0 = sounddevice device index
+    # Shared session/UI flags persisted in config and mirrored across surfaces.
+    mic_muted: bool = False
+    tts_muted: bool = False
+    auto_confirm: bool = False
+    dim_mode: bool = False
 
     @classmethod
     def from_env(cls):

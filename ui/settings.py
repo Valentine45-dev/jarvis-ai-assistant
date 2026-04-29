@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 )
 
 from config.settings import config
+from core.voice import _EL_VOICES
 from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
 from ui.widgets import GlassPanel, StatusPip, ToggleSwitch, _mono, _panel_header
 
@@ -67,7 +68,7 @@ def _section_lbl(text: str) -> QLabel:
 
 
 
-def _field(label: str, widget: QWidget, label_w: int = 120) -> QHBoxLayout:
+def _field(label: str, widget: QWidget, label_w: int = 132) -> QHBoxLayout:
     row = QHBoxLayout()
     row.setSpacing(10)
     lbl = QLabel(label)
@@ -327,10 +328,18 @@ class SettingsView(QWidget):
         mb.setContentsMargins(14, 14, 14, 14)
         mb.setSpacing(12)
 
-        self._voice_input = QLineEdit(config.tts_voice)
-        self._voice_input.setStyleSheet(_INPUT_SS)
-        self._voice_input.setToolTip("TTS voice identifier")
-        mb.addLayout(_field("VOICE_MATRIX", self._voice_input))
+        self._voice_combo = QComboBox()
+        self._voice_combo.setStyleSheet(_COMBO_SS)
+        self._voice_combo.setToolTip("Select an available ElevenLabs voice profile")
+        for key in sorted(_EL_VOICES.keys()):
+            self._voice_combo.addItem(key.replace("-", " ").title(), userData=key)
+        voice_idx = next(
+            (i for i in range(self._voice_combo.count())
+             if self._voice_combo.itemData(i) == config.tts_voice),
+            0,
+        )
+        self._voice_combo.setCurrentIndex(voice_idx)
+        mb.addLayout(_field("VOICE_MATRIX", self._voice_combo))
 
         self._wake_input = QLineEdit(config.wake_word)
         self._wake_input.setStyleSheet(_INPUT_SS)
@@ -540,11 +549,11 @@ class SettingsView(QWidget):
             self._anthro_key.textChanged,
             self._eleven_key.textChanged,
             self._vapi_key.textChanged,
-            self._voice_input.textChanged,
             self._wake_input.textChanged,
         ):
             sig.connect(lambda _: self._mark_dirty())
 
+        self._voice_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
         self._model_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
         self._theme_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
         self._debug_toggle.toggled.connect(lambda _: self._mark_dirty())
@@ -570,7 +579,7 @@ class SettingsView(QWidget):
         config.vapi_api_key       = self._vapi_key.text().strip()
         config.claude_model       = self._model_combo.currentData()
         config.wake_word          = self._wake_input.text().strip() or "jarvis"
-        config.tts_voice          = self._voice_input.text().strip()
+        config.tts_voice          = self._voice_combo.currentData()
         config.theme              = self._theme_combo.currentData()
         config.debug_mode         = self._debug_toggle.isChecked()
         config.mic_sensitivity    = self._mic_slider.value()
@@ -594,7 +603,12 @@ class SettingsView(QWidget):
         Prevents stale values (e.g. voice changed via command) from being
         written back when the user clicks APPLY_CFG.
         """
-        self._voice_input.setText(config.tts_voice)
+        voice_idx = next(
+            (i for i in range(self._voice_combo.count())
+             if self._voice_combo.itemData(i) == config.tts_voice),
+            0,
+        )
+        self._voice_combo.setCurrentIndex(voice_idx)
         super().showEvent(event)
 
     def sync_state(

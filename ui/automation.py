@@ -322,12 +322,19 @@ class _WorkflowRow(QWidget):
         lay.addWidget(toggle)
         self._toggle_btn = toggle
 
+        has_steps = bool(wf.get("steps"))
         play = QPushButton("▶")
         play.setFixedSize(26, 26)
-        play.setEnabled(self._enabled)
-        play.setCursor(Qt.PointingHandCursor if self._enabled else Qt.ForbiddenCursor)
-        play.setToolTip(f"Run {wf['name']}" if self._enabled else f"{wf['name']} is disabled")
-        if self._enabled:
+        can_run = self._enabled and has_steps
+        play.setEnabled(can_run)
+        play.setCursor(Qt.PointingHandCursor if can_run else Qt.ForbiddenCursor)
+        if not self._enabled:
+            play.setToolTip(f"{wf['name']} is disabled")
+        elif not has_steps:
+            play.setToolTip(f"{wf['name']} has no steps yet")
+        else:
+            play.setToolTip(f"Run {wf['name']}")
+        if can_run:
             play.setStyleSheet(
                 f"QPushButton{{color:{CYAN};background:rgba(0,229,255,0.08);"
                 "border:1px solid rgba(0,229,255,0.30);font-size:10px;}"
@@ -592,11 +599,12 @@ class AutomationView(QWidget):
         self._breakdown = _StepBreakdown()
         body.addWidget(self._breakdown, 1)
 
-        root.addLayout(body, 1)
+        # Give more space to the execution log: top panels are shorter.
+        root.addLayout(body, 3)
 
         log_panel = GlassPanel()
         log_panel.set_fill_color(QColor(10, 17, 19, 220))
-        log_panel.setFixedHeight(110)
+        log_panel.setMinimumHeight(170)
         log_lay = QVBoxLayout(log_panel)
         log_lay.setContentsMargins(0, 0, 0, 0)
         log_lay.setSpacing(0)
@@ -608,7 +616,7 @@ class AutomationView(QWidget):
         self._exec_log = TerminalLog()
         log_lay.addWidget(self._exec_log, 1)
 
-        root.addWidget(log_panel)
+        root.addWidget(log_panel, 2)
 
         self._build_rows(log_init=True)
 

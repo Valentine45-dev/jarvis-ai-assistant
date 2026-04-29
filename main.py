@@ -45,6 +45,7 @@ from ui.history import HistoryView
 from ui.settings import SettingsView
 from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
+from config.settings import config
 from core.brain import ask_claude_async, TAG_INTENT_MAP
 from core.executor import dispatch
 from core.history_store import history_store
@@ -158,6 +159,10 @@ class JarvisWindow(QMainWindow):
         self._stack.addWidget(self._history_view)
 
         self._settings_view = SettingsView()
+        self._settings_view.mic_muted_changed.connect(self._on_mic_mute_toggled)
+        self._settings_view.tts_muted_changed.connect(self._on_tts_mute_toggled)
+        self._settings_view.auto_confirm_changed.connect(self._on_auto_confirm_toggled)
+        self._settings_view.dim_mode_changed.connect(self._on_dim_toggled)
         self._stack.addWidget(self._settings_view)
         right_lay.addWidget(self._stack, 1)
 
@@ -208,10 +213,12 @@ class JarvisWindow(QMainWindow):
         self._last_result: dict | None = None   # Phase 5: last successfully dispatched intent
 
         # ── Quick settings popover (TopBar sliders icon) ──────────────────────
-        # Transient session flag — bypass confirmation for destructive actions.
-        # OFF by default (and intentionally not persisted) so a stale toggle
-        # can never silently survive a restart.
-        self._auto_confirm = False
+        # Shared session flags are persisted in config and mirrored in both
+        # quick settings and full settings.
+        from core.voice import voice_engine
+        self._auto_confirm = bool(getattr(config, "auto_confirm", False))
+        voice_engine.set_mic_muted(bool(getattr(config, "mic_muted", False)))
+        voice_engine.set_tts_muted(bool(getattr(config, "tts_muted", False)))
         self._quick_settings = QuickSettingsPopover(self)
         self._quick_settings.mic_muted_changed.connect(self._on_mic_mute_toggled)
         self._quick_settings.tts_muted_changed.connect(self._on_tts_mute_toggled)
@@ -275,19 +282,60 @@ class JarvisWindow(QMainWindow):
 
         # Dim overlay — full-window dark layer toggled by Quick Settings.
         # WA_TransparentForMouseEvents lets clicks pass through to the UI below.
-        self._dim_mode = False
+        self._dim_mode = bool(getattr(config, "dim_mode", False))
         self._dim_overlay = QWidget(self)
         self._dim_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._dim_overlay.setStyleSheet("background:rgba(0,0,0,0.42);")
-        self._dim_overlay.hide()
+        if self._dim_mode:
+            self._dim_overlay.resize(self.size())
+            self._dim_overlay.raise_()
+            self._dim_overlay.show()
+        else:
+            self._dim_overlay.hide()
 
         self._quick_settings.dim_mode_changed.connect(self._on_dim_toggled)
+        self._sync_session_flag_views()
+
+    def _sync_session_flag_views(self) -> None:
+        """Keep quick-settings popover and settings page toggles in sync."""
+        from core.voice import voice_engine
+        mic_muted = voice_engine.mic_muted
+        tts_muted = voice_engine.tts_muted
+        self._quick_settings.sync_state(
+            mic_muted=mic_muted,
+            tts_muted=tts_muted,
+            auto_confirm=self._auto_confirm,
+            dim_mode=self._dim_mode,
+        )
+        self._settings_view.sync_state(
+            mic_muted=mic_muted,
+            tts_muted=tts_muted,
+            auto_confirm=self._auto_confirm,
+            dim_mode=self._dim_mode,
+        )
+
+    def _persist_session_flags(self) -> None:
+        """Persist shared quick/full settings flags to config JSON."""
+        from core.voice import voice_engine
+        config.mic_muted = bool(voice_engine.mic_muted)
+        config.tts_muted = bool(voice_engine.tts_muted)
+        config.auto_confirm = bool(self._auto_confirm)
+        config.dim_mode = bool(self._dim_mode)
+        try:
+            config.save()
+        except Exception:
+            pass
 
     def _nav(self, idx):
         self._stack.setCurrentIndex(idx)
         name = self.VIEW_NAMES[idx]
         self._topbar.set_view(name)
         self._botbar.set_view(name)
+        if idx == _SETTINGS_NAV_IDX:
+            # Re-sync toggles whenever Settings page is shown.
+            self._sync_session_flag_views()
+        if idx == _SETTINGS_NAV_IDX:
+            self._sync_session_flag_views()
 
     def _toggle_mic(self):
         if self._state == "listening":
@@ -1085,15 +1133,8 @@ class JarvisWindow(QMainWindow):
     # ── Quick settings popover handlers ───────────────────────────────────────
 
     def _show_quick_settings(self):
-        # Sync the popover's toggle state with the live engine flags every time
-        # it opens — defends against drift if anything else mutated them.
-        from core.voice import voice_engine
-        self._quick_settings.sync_state(
-            mic_muted=voice_engine.mic_muted,
-            tts_muted=voice_engine.tts_muted,
-            auto_confirm=self._auto_confirm,
-            dim_mode=self._dim_mode,
-        )
+        # Sync both surfaces every open to prevent toggle drift.
+        self._sync_session_flag_views()
         anchor = self._topbar.icon_button("settings")
         self._quick_settings.show_below(anchor)
 
@@ -1107,6 +1148,8 @@ class JarvisWindow(QMainWindow):
     def _on_mic_mute_toggled(self, muted: bool):
         from core.voice import voice_engine
         voice_engine.set_mic_muted(muted)
+        self._sync_session_flag_views()
+        self._persist_session_flags()
         self._dashboard.toast.show_toast(
             "Microphone muted." if muted else "Microphone live.",
             "warning" if muted else "info",
@@ -1119,6 +1162,8 @@ class JarvisWindow(QMainWindow):
     def _on_tts_mute_toggled(self, muted: bool):
         from core.voice import voice_engine
         voice_engine.set_tts_muted(muted)
+        self._sync_session_flag_views()
+        self._persist_session_flags()
         self._dashboard.toast.show_toast(
             "TTS output muted." if muted else "TTS output enabled.",
             "warning" if muted else "info",
@@ -1127,6 +1172,8 @@ class JarvisWindow(QMainWindow):
     def _on_auto_confirm_toggled(self, on: bool):
         self._auto_confirm = bool(on)
         self._auto_confirm_banner.setVisible(on)
+        self._sync_session_flag_views()
+        self._persist_session_flags()
         self._dashboard.toast.show_toast(
             "Auto-confirm ON — destructive actions run instantly."
             if on else "Auto-confirm OFF — confirmation prompts restored.",
@@ -1135,6 +1182,8 @@ class JarvisWindow(QMainWindow):
 
     def _on_dim_toggled(self, on: bool):
         self._dim_mode = bool(on)
+        self._sync_session_flag_views()
+        self._persist_session_flags()
         if on:
             self._dim_overlay.resize(self.size())
             self._dim_overlay.raise_()
