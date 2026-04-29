@@ -5,7 +5,9 @@ from __future__ import annotations
 from core.handlers.shared import _ok, _err
 
 _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
-    ("file_operation",  "delete_file"),
+    # delete_file is NOT here — requires_confirmation:true on the workflow
+    # already gets the user's explicit go-ahead before execution starts.
+    # Keeping it here caused a double-block: user confirms, executor refuses anyway.
     ("system_control",  "shutdown"),
     ("system_control",  "restart"),
     ("system_control",  "sleep"),
@@ -54,8 +56,10 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         if workflow_library.get(slug) is not None:
             return _err(f"Workflow '{task_name}' already exists.")
         for i, step in enumerate(steps, 1):
+            if isinstance(step, str):
+                continue  # validated at runtime when ask_claude parses it
             if not isinstance(step, dict):
-                return _err(f"Step {i} must be a dict.")
+                return _err(f"Step {i} must be a dict or string.")
             s_intent = step.get("intent", "")
             s_action = step.get("action", "")
             if not s_intent:
@@ -117,6 +121,8 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         return _err("No steps provided in automation task")
 
     for step in steps:
+        if isinstance(step, str):
+            continue  # string steps are parsed at runtime
         intent   = step.get("intent", "")
         s_action = step.get("action", "")
         if intent in _BLOCKED_INTENTS:
@@ -132,6 +138,16 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     quit_application  = False
 
     for i, step in enumerate(steps, 1):
+        # Parse natural-language string steps at runtime
+        if isinstance(step, str):
+            from core.brain import ask_claude
+            parsed = ask_claude(step)
+            if parsed.get("intent") == "unknown":
+                results.append(f"Step {i}: FAIL — could not parse '{step}'")
+                all_ok = False
+                break
+            step = parsed
+
         try:
             from core.signals import signals
             signals.status_changed.emit(

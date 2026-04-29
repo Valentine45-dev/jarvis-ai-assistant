@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
-    QDialog, QDialogButtonBox,
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QVBoxLayout, QWidget,
+    QDialog,
+    QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from core.automation import workflow_library
@@ -20,11 +20,261 @@ from ui.widgets import GlassPanel, StatusPip, TerminalLog, _mono, _panel_header
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class _GlassDialog(QDialog):
+    """Frameless JARVIS-themed modal base."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self._drag_pos = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        self._card = QWidget(self)
+        self._card.setObjectName("_card")
+        self._card.setStyleSheet(
+            "#_card{background:#0d1618;"
+            "border:1px solid rgba(0,229,255,0.22);border-radius:6px;}"
+        )
+        root.addWidget(self._card)
+
+        self._body = QVBoxLayout(self._card)
+        self._body.setContentsMargins(0, 0, 0, 0)
+        self._body.setSpacing(0)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPos() - self._drag_pos)
+
+    def mouseReleaseEvent(self, _):
+        self._drag_pos = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _NewWorkflowDialog(_GlassDialog):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(460)
+
+        # Title bar
+        title_bar = QWidget()
+        title_bar.setFixedHeight(40)
+        title_bar.setStyleSheet("background:transparent;")
+        tb = QHBoxLayout(title_bar)
+        tb.setContentsMargins(16, 0, 12, 0)
+        lbl = QLabel("NEW WORKFLOW")
+        lbl.setFont(_mono(11, bold=True))
+        lbl.setStyleSheet(f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;")
+        x_btn = QPushButton("✕")
+        x_btn.setFixedSize(20, 20)
+        x_btn.setCursor(Qt.PointingHandCursor)
+        x_btn.setStyleSheet(
+            "QPushButton{color:rgba(255,80,80,0.6);background:transparent;border:none;font-size:11px;}"
+            "QPushButton:hover{color:rgba(255,80,80,1.0);}"
+        )
+        x_btn.clicked.connect(self.reject)
+        tb.addWidget(lbl, 1)
+        tb.addWidget(x_btn)
+        self._body.addWidget(title_bar)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);")
+        sep.setFixedHeight(1)
+        self._body.addWidget(sep)
+
+        form = QWidget()
+        form.setStyleSheet("background:transparent;")
+        fl = QVBoxLayout(form)
+        fl.setContentsMargins(16, 14, 16, 16)
+        fl.setSpacing(10)
+
+        self._name_inp = self._field(fl, "WORKFLOW NAME", "Morning Routine")
+        self._trigger_inp = self._field(fl, "TRIGGER PHRASE", "run morning routine")
+
+        steps_lbl = QLabel("STEPS  —  one command per line")
+        steps_lbl.setStyleSheet(
+            f"color:{CYAN};font-size:10px;letter-spacing:1.5px;background:transparent;border:none;"
+        )
+        fl.addWidget(steps_lbl)
+
+        self._steps_edit = QTextEdit()
+        self._steps_edit.setAcceptRichText(False)
+        self._steps_edit.setMinimumHeight(110)
+        self._steps_edit.setPlaceholderText(
+            "open chrome\nsearch youtube for lofi beats\ntake a screenshot"
+        )
+        self._steps_edit.setStyleSheet(
+            "QTextEdit{background:#121a1b;color:#dce4e5;"
+            "border:1px solid rgba(0,229,255,0.22);border-radius:4px;"
+            "padding:8px 10px;font-family:'Roboto Mono';font-size:11px;}"
+            "QTextEdit:focus{border:1px solid rgba(0,229,255,0.55);}"
+        )
+        self._steps_edit.textChanged.connect(self._update_counter)
+        fl.addWidget(self._steps_edit)
+
+        self._counter_lbl = QLabel("0 STEPS")
+        self._counter_lbl.setStyleSheet(
+            "color:rgba(132,147,150,0.6);font-family:'Roboto Mono';"
+            "font-size:10px;background:transparent;border:none;"
+        )
+        fl.addWidget(self._counter_lbl, 0, Qt.AlignRight)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addStretch(1)
+
+        cancel = QPushButton("CANCEL")
+        cancel.setFixedHeight(30)
+        cancel.setCursor(Qt.PointingHandCursor)
+        cancel.setStyleSheet(
+            "QPushButton{color:rgba(132,147,150,0.7);background:transparent;"
+            "border:1px solid rgba(132,147,150,0.25);border-radius:4px;"
+            "font-family:'Roboto Mono';font-size:10px;font-weight:700;padding:0 18px;}"
+            "QPushButton:hover{color:rgba(195,245,255,0.8);}"
+        )
+        cancel.clicked.connect(self.reject)
+
+        create = QPushButton("CREATE")
+        create.setFixedHeight(30)
+        create.setCursor(Qt.PointingHandCursor)
+        create.setDefault(True)
+        create.setStyleSheet(
+            f"QPushButton{{color:{CYAN};background:rgba(0,229,255,0.08);"
+            "border:1px solid rgba(0,229,255,0.35);border-radius:4px;"
+            "font-family:'Roboto Mono';font-size:10px;font-weight:700;padding:0 18px;}"
+            "QPushButton:hover{background:rgba(0,229,255,0.20);}"
+        )
+        create.clicked.connect(self.accept)
+
+        btn_row.addWidget(cancel)
+        btn_row.addWidget(create)
+        fl.addLayout(btn_row)
+
+        self._body.addWidget(form)
+
+    @staticmethod
+    def _field(layout: QVBoxLayout, label: str, placeholder: str) -> QLineEdit:
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            f"color:{CYAN};font-size:10px;letter-spacing:1.5px;background:transparent;border:none;"
+        )
+        inp = QLineEdit()
+        inp.setFixedHeight(32)
+        inp.setPlaceholderText(placeholder)
+        inp.setStyleSheet(
+            "QLineEdit{background:#121a1b;color:#dce4e5;"
+            "border:1px solid rgba(0,229,255,0.22);border-radius:4px;"
+            "padding:0 10px;font-family:'Roboto Mono';font-size:12px;}"
+            "QLineEdit:focus{border:1px solid rgba(0,229,255,0.55);}"
+        )
+        layout.addWidget(lbl)
+        layout.addWidget(inp)
+        return inp
+
+    def _update_counter(self):
+        n = len([s for s in self._steps_edit.toPlainText().splitlines() if s.strip()])
+        self._counter_lbl.setText(f"{n} STEP{'S' if n != 1 else ''}")
+
+    def get_values(self) -> tuple[str, str, list[str]]:
+        name = self._name_inp.text().strip()
+        trigger = self._trigger_inp.text().strip()
+        steps = [s.strip() for s in self._steps_edit.toPlainText().splitlines() if s.strip()]
+        return name, trigger, steps
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _ConfirmDeleteDialog(_GlassDialog):
+
+    def __init__(self, display_name: str, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(360)
+
+        title_bar = QWidget()
+        title_bar.setFixedHeight(40)
+        title_bar.setStyleSheet("background:transparent;")
+        tb = QHBoxLayout(title_bar)
+        tb.setContentsMargins(16, 0, 12, 0)
+        lbl = QLabel("⚠  CONFIRM DELETE")
+        lbl.setFont(_mono(10, bold=True))
+        lbl.setStyleSheet(
+            "color:rgba(255,219,60,0.9);letter-spacing:1.5px;background:transparent;border:none;"
+        )
+        tb.addWidget(lbl, 1)
+        self._body.addWidget(title_bar)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:rgba(255,219,60,0.18);background:rgba(255,219,60,0.18);")
+        sep.setFixedHeight(1)
+        self._body.addWidget(sep)
+
+        bw = QWidget()
+        bw.setStyleSheet("background:transparent;")
+        bl = QVBoxLayout(bw)
+        bl.setContentsMargins(16, 16, 16, 16)
+        bl.setSpacing(14)
+
+        msg = QLabel(f"Delete  <b>{display_name}</b>?<br>This cannot be undone.")
+        msg.setStyleSheet(
+            "color:rgba(195,245,255,0.80);font-family:'Roboto Mono';"
+            "font-size:12px;background:transparent;border:none;"
+        )
+        msg.setWordWrap(True)
+        bl.addWidget(msg)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addStretch(1)
+
+        cancel = QPushButton("CANCEL")
+        cancel.setFixedHeight(30)
+        cancel.setCursor(Qt.PointingHandCursor)
+        cancel.setStyleSheet(
+            "QPushButton{color:rgba(132,147,150,0.7);background:transparent;"
+            "border:1px solid rgba(132,147,150,0.25);border-radius:4px;"
+            "font-family:'Roboto Mono';font-size:10px;font-weight:700;padding:0 18px;}"
+            "QPushButton:hover{color:rgba(195,245,255,0.8);}"
+        )
+        cancel.clicked.connect(self.reject)
+
+        del_btn = QPushButton("DELETE")
+        del_btn.setFixedHeight(30)
+        del_btn.setCursor(Qt.PointingHandCursor)
+        del_btn.setStyleSheet(
+            "QPushButton{color:rgba(255,80,80,0.9);background:rgba(255,80,80,0.08);"
+            "border:1px solid rgba(255,80,80,0.35);border-radius:4px;"
+            "font-family:'Roboto Mono';font-size:10px;font-weight:700;padding:0 18px;}"
+            "QPushButton:hover{background:rgba(255,80,80,0.18);}"
+        )
+        del_btn.clicked.connect(self.accept)
+
+        btn_row.addWidget(cancel)
+        btn_row.addWidget(del_btn)
+        bl.addLayout(btn_row)
+
+        self._body.addWidget(bw)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class _WorkflowRow(QWidget):
     selected = pyqtSignal(int)
     run_requested = pyqtSignal(str)
-    toggle_requested = pyqtSignal(str, bool)   # (workflow_id, new_enabled_state)
-    delete_requested = pyqtSignal(str, str)    # (workflow_id, display_name)
+    toggle_requested = pyqtSignal(str, bool)
+    delete_requested = pyqtSignal(str, str)
 
     def __init__(self, idx: int, wf: dict, parent=None):
         super().__init__(parent)
@@ -46,9 +296,7 @@ class _WorkflowRow(QWidget):
         info.setSpacing(2)
         name = QLabel(wf["name"].upper())
         name.setFont(_mono(11, bold=True))
-        name.setStyleSheet(
-            f"color:{CYAN};letter-spacing:1px;background:transparent;border:none;"
-        )
+        name.setStyleSheet(f"color:{CYAN};letter-spacing:1px;background:transparent;border:none;")
         trigger = QLabel(wf["trigger"])
         trigger.setStyleSheet(
             "color:rgba(132,147,150,0.75);font-family:'Roboto Mono';"
@@ -65,7 +313,6 @@ class _WorkflowRow(QWidget):
         )
         lay.addWidget(steps_lbl)
 
-        # Toggle button — ON/OFF
         toggle = QPushButton("ON" if self._enabled else "OFF")
         toggle.setFixedSize(36, 22)
         toggle.setCursor(Qt.PointingHandCursor)
@@ -75,7 +322,6 @@ class _WorkflowRow(QWidget):
         lay.addWidget(toggle)
         self._toggle_btn = toggle
 
-        # Play button
         play = QPushButton("▶")
         play.setFixedSize(26, 26)
         play.setEnabled(self._enabled)
@@ -83,83 +329,63 @@ class _WorkflowRow(QWidget):
         play.setToolTip(f"Run {wf['name']}" if self._enabled else f"{wf['name']} is disabled")
         if self._enabled:
             play.setStyleSheet(
-                "QPushButton{"
-                f"color:{CYAN};background:rgba(0,229,255,0.08);"
-                "border:1px solid rgba(0,229,255,0.30);font-size:10px;"
-                "}"
+                f"QPushButton{{color:{CYAN};background:rgba(0,229,255,0.08);"
+                "border:1px solid rgba(0,229,255,0.30);font-size:10px;}"
                 "QPushButton:hover{background:rgba(0,229,255,0.20);}"
             )
-            play.clicked.connect(lambda: self.run_requested.emit(f"Run {wf['name']}"))
+            trigger_cmd = wf.get("trigger", "").strip()
+            if not trigger_cmd or trigger_cmd.lower() == "manual":
+                trigger_cmd = f"run {wf['name'].lower()}"
+            play.clicked.connect(lambda checked=False, c=trigger_cmd: self.run_requested.emit(c))
         else:
             play.setStyleSheet(
-                "QPushButton{"
-                "color:rgba(132,147,150,0.35);background:transparent;"
-                "border:1px solid rgba(132,147,150,0.15);font-size:10px;"
-                "}"
+                "QPushButton{color:rgba(132,147,150,0.35);background:transparent;"
+                "border:1px solid rgba(132,147,150,0.15);font-size:10px;}"
             )
         lay.addWidget(play)
 
-        # Delete button
         delete = QPushButton("✕")
         delete.setFixedSize(22, 22)
         delete.setCursor(Qt.PointingHandCursor)
         delete.setToolTip(f"Delete {wf['name']}")
         delete.setStyleSheet(
-            "QPushButton{"
-            "color:rgba(255,80,80,0.55);background:transparent;"
-            "border:1px solid rgba(255,80,80,0.20);font-size:10px;"
-            "}"
-            "QPushButton:hover{"
-            "color:rgba(255,80,80,0.9);background:rgba(255,80,80,0.10);"
-            "border:1px solid rgba(255,80,80,0.45);"
-            "}"
+            "QPushButton{color:rgba(255,80,80,0.55);background:transparent;"
+            "border:1px solid rgba(255,80,80,0.20);font-size:10px;}"
+            "QPushButton:hover{color:rgba(255,80,80,0.9);background:rgba(255,80,80,0.10);"
+            "border:1px solid rgba(255,80,80,0.45);}"
         )
         delete.clicked.connect(lambda: self.delete_requested.emit(self._wf_id, wf["name"]))
         lay.addWidget(delete)
 
         self._set_style(False)
 
-    # ── Toggle ────────────────────────────────────────────────────────────────
-
     @staticmethod
     def _toggle_style(enabled: bool) -> str:
         if enabled:
             return (
-                "QPushButton{"
-                "color:#00c853;background:rgba(0,200,83,0.10);"
+                "QPushButton{color:#00c853;background:rgba(0,200,83,0.10);"
                 "border:1px solid rgba(0,200,83,0.35);"
-                "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
-                "}"
+                "font-family:'Roboto Mono';font-size:9px;font-weight:700;}"
                 "QPushButton:hover{background:rgba(0,200,83,0.22);}"
             )
         return (
-            "QPushButton{"
-            "color:rgba(132,147,150,0.55);background:transparent;"
+            "QPushButton{color:rgba(132,147,150,0.55);background:transparent;"
             "border:1px solid rgba(132,147,150,0.20);"
-            "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
-            "}"
+            "font-family:'Roboto Mono';font-size:9px;font-weight:700;}"
             "QPushButton:hover{background:rgba(132,147,150,0.10);}"
         )
 
     def _on_toggle(self):
         self.toggle_requested.emit(self._wf_id, not self._enabled)
 
-    # ── Row highlight ─────────────────────────────────────────────────────────
-
     def set_active(self, v: bool):
         self._set_style(v)
 
     def _set_style(self, active: bool):
         if active:
-            self.setStyleSheet(
-                "background:rgba(0,229,255,0.07);"
-                f"border-left:2px solid {CYAN};"
-            )
+            self.setStyleSheet("background:rgba(0,229,255,0.07);border-radius:4px;")
         else:
-            self.setStyleSheet(
-                "background:transparent;"
-                "border-left:2px solid transparent;"
-            )
+            self.setStyleSheet("background:transparent;")
 
     def mousePressEvent(self, _):
         self.selected.emit(self._idx)
@@ -276,64 +502,10 @@ class _StepBreakdown(GlassPanel):
 
 
 def _step_label(step) -> str:
-    """Convert a step dict or plain string to a human-readable label."""
     if isinstance(step, str):
         return step
     action = step.get("action", step.get("intent", "unknown"))
     return action.replace("_", " ").title()
-
-
-class _NewWorkflowDialog(QDialog):
-    """Minimal create-workflow dialog: name + trigger phrase."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("New Workflow")
-        self.setMinimumWidth(400)
-        self.setStyleSheet(
-            f"background:#151d1e;color:#dce4e5;"
-            "font-family:'Roboto Mono';font-size:12px;"
-        )
-
-        lay = QVBoxLayout(self)
-        lay.setSpacing(14)
-        lay.setContentsMargins(20, 20, 20, 20)
-
-        def _field(label: str) -> QLineEdit:
-            lbl = QLabel(label)
-            lbl.setStyleSheet(
-                f"color:{CYAN};font-size:10px;letter-spacing:1.5px;"
-                "background:transparent;border:none;"
-            )
-            inp = QLineEdit()
-            inp.setStyleSheet(
-                "background:#192122;color:#dce4e5;border:1px solid rgba(0,229,255,0.25);"
-                "border-radius:4px;padding:6px 10px;font-family:'Roboto Mono';font-size:12px;"
-            )
-            lay.addWidget(lbl)
-            lay.addWidget(inp)
-            return inp
-
-        self._name_inp = _field("WORKFLOW NAME")
-        self._name_inp.setPlaceholderText("Morning Routine")
-        self._trigger_inp = _field("TRIGGER PHRASE")
-        self._trigger_inp.setPlaceholderText("run morning routine")
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.setStyleSheet(
-            "QPushButton{"
-            f"color:{CYAN};background:rgba(0,229,255,0.08);"
-            "border:1px solid rgba(0,229,255,0.30);border-radius:4px;"
-            "padding:5px 18px;font-family:'Roboto Mono';font-size:11px;"
-            "}"
-            "QPushButton:hover{background:rgba(0,229,255,0.20);}"
-        )
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
-
-    def get_values(self) -> tuple[str, str]:
-        return self._name_inp.text().strip(), self._trigger_inp.text().strip()
 
 
 class AutomationView(QWidget):
@@ -347,14 +519,10 @@ class AutomationView(QWidget):
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(12)
 
-        # ── Header ────────────────────────────────────────────────────────────
         title = QLabel("AUTOMATION_CORE")
         title.setStyleSheet(
-            "QLabel{"
-            f"color:{PRIMARY};"
-            "font-family:'Space Grotesk';font-size:40px;font-weight:700;"
-            "background:transparent;border:none;"
-            "}"
+            f"QLabel{{color:{PRIMARY};font-family:'Space Grotesk';"
+            "font-size:40px;font-weight:700;background:transparent;border:none;}"
         )
         subtitle = QLabel("WORKFLOW ORCHESTRATOR  //  ROUTINE MANAGEMENT")
         subtitle.setStyleSheet(
@@ -364,18 +532,15 @@ class AutomationView(QWidget):
         root.addWidget(title)
         root.addWidget(subtitle)
 
-        # ── Main body ─────────────────────────────────────────────────────────
         body = QHBoxLayout()
         body.setSpacing(12)
 
-        # Left: workflow library
         self._lib = GlassPanel()
         self._lib.set_fill_color(QColor(10, 17, 19, 220))
         lib_lay = QVBoxLayout(self._lib)
         lib_lay.setContentsMargins(0, 0, 0, 0)
         lib_lay.setSpacing(0)
 
-        # Header with mutable count label
         lib_hdr = QWidget()
         lib_hdr.setFixedHeight(36)
         lib_hdr.setStyleSheet("background:transparent;")
@@ -394,14 +559,11 @@ class AutomationView(QWidget):
         new_btn = QPushButton("+ NEW")
         new_btn.setFixedHeight(22)
         new_btn.setCursor(Qt.PointingHandCursor)
-        new_btn.setToolTip("Create a new workflow")
         new_btn.setStyleSheet(
-            "QPushButton{"
-            f"color:{CYAN};background:rgba(0,229,255,0.08);"
+            f"QPushButton{{color:{CYAN};background:rgba(0,229,255,0.08);"
             "border:1px solid rgba(0,229,255,0.30);border-radius:3px;"
             "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
-            "padding:0 8px;letter-spacing:1px;"
-            "}"
+            "padding:0 8px;letter-spacing:1px;}"
             "QPushButton:hover{background:rgba(0,229,255,0.20);}"
         )
         new_btn.clicked.connect(self._create_workflow)
@@ -418,7 +580,6 @@ class AutomationView(QWidget):
         lib_lay.addWidget(lib_hdr)
         lib_lay.addWidget(lib_sep)
 
-        # Row container — clear-and-rebuild target for refresh()
         self._row_container = QWidget()
         self._row_container.setStyleSheet("background:transparent;")
         self._row_container_lay = QVBoxLayout(self._row_container)
@@ -428,13 +589,11 @@ class AutomationView(QWidget):
 
         body.addWidget(self._lib, 1)
 
-        # Right: step breakdown
         self._breakdown = _StepBreakdown()
         body.addWidget(self._breakdown, 1)
 
         root.addLayout(body, 1)
 
-        # ── Execution log ─────────────────────────────────────────────────────
         log_panel = GlassPanel()
         log_panel.set_fill_color(QColor(10, 17, 19, 220))
         log_panel.setFixedHeight(110)
@@ -451,13 +610,10 @@ class AutomationView(QWidget):
 
         root.addWidget(log_panel)
 
-        # ── Populate rows and connect live-update signal ───────────────────────
         self._build_rows(log_init=True)
 
         from core.signals import signals
         signals.workflow_library_changed.connect(self.refresh)
-
-    # ── Row management ────────────────────────────────────────────────────────
 
     def _build_rows(self, log_init: bool = False):
         workflows = workflow_library.list_all()
@@ -482,7 +638,6 @@ class AutomationView(QWidget):
             self._select(0)
 
     def refresh(self):
-        """Rebuild the workflow list — called when workflow_library_changed fires."""
         while self._row_container_lay.count():
             item = self._row_container_lay.takeAt(0)
             if item.widget():
@@ -494,7 +649,7 @@ class AutomationView(QWidget):
         dlg = _NewWorkflowDialog(self)
         if dlg.exec_() != QDialog.Accepted:
             return
-        name, trigger = dlg.get_values()
+        name, trigger, steps = dlg.get_values()
         if not name:
             return
         if not trigger:
@@ -502,7 +657,6 @@ class AutomationView(QWidget):
         wf_id = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
         if not wf_id:
             return
-        # Avoid id collisions — append a counter suffix if needed
         base_id = wf_id
         existing = {w["id"] for w in workflow_library.list_all()}
         n = 1
@@ -513,39 +667,28 @@ class AutomationView(QWidget):
             "id": wf_id,
             "name": name,
             "trigger": trigger,
-            "steps": [],
+            "steps": steps,
             "enabled": True,
             "last_run": None,
         })
-        self._exec_log.append_line(f"[SYSTEM] Workflow '{name}' created.")
+        self._exec_log.append_line(f"[SYSTEM] Workflow '{name}' created with {len(steps)} step(s).")
 
     def _delete_workflow(self, wf_id: str, display_name: str):
-        reply = QMessageBox.question(
-            self,
-            "Delete Workflow",
-            f"Delete '{display_name}'? This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        dlg = _ConfirmDeleteDialog(display_name, self)
+        if dlg.exec_() != QDialog.Accepted:
             return
         ok = workflow_library.remove(wf_id)
         if ok:
             self._exec_log.append_line(f"[SYSTEM] Workflow '{display_name}' deleted.")
         else:
             self._exec_log.append_line(f"[WARN] Delete failed — workflow '{wf_id}' not found.")
-        # workflow_library_changed signal triggers refresh() automatically
 
     def _toggle_workflow(self, wf_id: str, enabled: bool):
         ok = workflow_library.set_enabled(wf_id, enabled)
         if ok:
-            state = "enabled" if enabled else "disabled"
-            self._exec_log.append_line(f"[SYSTEM] Workflow '{wf_id}' {state}.")
+            self._exec_log.append_line(f"[SYSTEM] Workflow '{wf_id}' {'enabled' if enabled else 'disabled'}.")
         else:
             self._exec_log.append_line(f"[WARN] Toggle ignored — workflow '{wf_id}' not found.")
-        # workflow_library_changed signal triggers refresh() automatically
-
-    # ── Selection ─────────────────────────────────────────────────────────────
 
     def _select(self, idx: int):
         for i, row in enumerate(self._rows):
