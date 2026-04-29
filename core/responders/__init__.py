@@ -1,4 +1,4 @@
-"""Compatibility shim for moved responder module."""
+"""Response assembly package."""
 
 from core.responders.assembler import ResponseAssembler, responder
 

@@ -12,6 +12,87 @@ from core.handlers.paths import _resolve_screenshot_path, _find_folder
 from core import computer_control as cc
 
 
+def _run_powershell(cmd: str, timeout: int = 12) -> tuple[bool, str]:
+    try:
+        r = subprocess.run(
+            ["powershell", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+            capture_output=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    out = (r.stdout or b"").decode(errors="replace").strip()
+    err = (r.stderr or b"").decode(errors="replace").strip()
+    if r.returncode != 0:
+        return False, err or out or f"PowerShell failed with exit {r.returncode}"
+    return True, out or err or ""
+
+
+def _toggle_wifi_windows() -> dict:
+    probe = (
+        "$a = Get-NetAdapter -Name 'Wi-Fi' -ErrorAction SilentlyContinue;"
+        "if (-not $a) { $a = Get-NetAdapter | Where-Object { $_.Name -match 'Wi-?Fi|Wireless|WLAN' } | Select-Object -First 1 };"
+        "if (-not $a) { Write-Output '__NO_WIFI__'; exit 0 };"
+        "Write-Output ($a.Name + '|' + $a.Status)"
+    )
+    ok, out = _run_powershell(probe)
+    if not ok:
+        return _err(f"Wi-Fi probe failed: {out}")
+    if "__NO_WIFI__" in out:
+        return _err("No Wi-Fi adapter found")
+
+    adapter_name, _, status = out.partition("|")
+    adapter_name = (adapter_name or "Wi-Fi").strip()
+    status = status.strip().lower()
+    should_enable = status in ("disconnected", "disabled", "not present", "unknown")
+
+    cmd = (
+        f"Enable-NetAdapter -Name '{adapter_name}' -Confirm:$false"
+        if should_enable
+        else f"Disable-NetAdapter -Name '{adapter_name}' -Confirm:$false"
+    )
+    ok2, out2 = _run_powershell(cmd)
+    if not ok2:
+        return _err(f"Wi-Fi toggle failed: {out2}")
+    return _ok("Wi-Fi enabled" if should_enable else "Wi-Fi disabled")
+
+
+def _toggle_bluetooth_windows() -> dict:
+    ps = (
+        "Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null;"
+        "[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null;"
+        "[Windows.Devices.Radios.RadioAccessStatus,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null;"
+        "[Windows.Devices.Radios.RadioState,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null;"
+        "$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | "
+        "Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 })[0];"
+        "$accessTask = $asTask.MakeGenericMethod([Windows.Devices.Radios.RadioAccessStatus]).Invoke($null, @([Windows.Devices.Radios.Radio]::RequestAccessAsync()));"
+        "$accessTask.Wait(-1) | Out-Null;"
+        "$access = $accessTask.Result;"
+        "if ($access -ne [Windows.Devices.Radios.RadioAccessStatus]::Allowed) { Write-Output '__ACCESS_DENIED__'; exit 0 };"
+        "$radiosTask = $asTask.MakeGenericMethod([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]).Invoke($null, @([Windows.Devices.Radios.Radio]::GetRadiosAsync()));"
+        "$radiosTask.Wait(-1) | Out-Null;"
+        "$radios = $radiosTask.Result;"
+        "$bt = $radios | Where-Object { $_.Kind -eq [Windows.Devices.Radios.RadioKind]::Bluetooth } | Select-Object -First 1;"
+        "if (-not $bt) { Write-Output '__NO_BT__'; exit 0 };"
+        "$target = if ($bt.State -eq [Windows.Devices.Radios.RadioState]::On) { [Windows.Devices.Radios.RadioState]::Off } else { [Windows.Devices.Radios.RadioState]::On };"
+        "$setTask = $asTask.MakeGenericMethod([Windows.Devices.Radios.RadioAccessStatus]).Invoke($null, @($bt.SetStateAsync($target)));"
+        "$setTask.Wait(-1) | Out-Null;"
+        "$setRes = $setTask.Result;"
+        "if ($setRes -ne [Windows.Devices.Radios.RadioAccessStatus]::Allowed) { Write-Output '__SET_DENIED__'; exit 0 };"
+        "if ($target -eq [Windows.Devices.Radios.RadioState]::On) { Write-Output 'Bluetooth enabled' } else { Write-Output 'Bluetooth disabled' }"
+    )
+    ok, out = _run_powershell(ps, timeout=20)
+    if not ok:
+        return _err(f"Bluetooth toggle failed: {out}")
+    if "__ACCESS_DENIED__" in out:
+        return _err("Bluetooth access denied by Windows")
+    if "__NO_BT__" in out:
+        return _err("No Bluetooth radio found")
+    if "__SET_DENIED__" in out:
+        return _err("Windows denied Bluetooth state change")
+    return _ok(out or "Bluetooth toggled")
+
+
 def _handle_brightness(action: str, level: int | None) -> dict:
     def _target(current: int) -> int:
         if level is not None:
@@ -87,6 +168,16 @@ def _handle_system_control(action: str, params: dict) -> dict:
     if action in ("brightness_up", "brightness_down"):
         level = _coerce_volume_level(params)
         return _handle_brightness(action, level)
+
+    if action == "wifi_toggle":
+        if _OS == "windows":
+            return _toggle_wifi_windows()
+        return _err("Wi-Fi toggle is currently supported only on Windows")
+
+    if action == "bluetooth_toggle":
+        if _OS == "windows":
+            return _toggle_bluetooth_windows()
+        return _err("Bluetooth toggle is currently supported only on Windows")
 
     if action in ("shutdown", "restart", "sleep"):
         _win_root = os.environ.get("SystemRoot", r"C:\Windows")

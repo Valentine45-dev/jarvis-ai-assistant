@@ -41,20 +41,20 @@ from ui.bars import TopBar, BottomBar
 from ui.sidebar import HudSidebar
 from ui.dashboard import DashboardView
 from ui.voice import VoiceView
-from ui.automation import AutomationView
+from ui.views.automation.view import AutomationView
 from ui.history import HistoryView
 from ui.settings import SettingsView
 from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
 from config.settings import config
 from core.brain import ask_claude_async, TAG_INTENT_MAP
-from core.command_controller import CommandController
-from core.confirmation_controller import ConfirmationController
+from core.controllers.command_controller import CommandController
+from core.controllers.confirmation_controller import ConfirmationController
 from core.executor import dispatch
 from core.history_store import history_store
-from core.jarvis_runtime_context import RuntimeCommandContext
-from core.response_composer import compose_execution_response
-from core.session_flags import persist_session_flags, sync_session_flag_views
+from core.controllers.runtime_context import RuntimeCommandContext
+from core.controllers.response_composer import compose_execution_response
+from core.controllers.session_flags import persist_session_flags, sync_session_flag_views
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
 from core.browser import browser
@@ -422,7 +422,7 @@ class JarvisWindow(QMainWindow):
     def _on_reminder_action(self, payload: dict):
         """Qt main thread — delayed reminder with an executable JARVIS step."""
         from core.executor import dispatch
-        from core.responder import responder
+        from core.responders.assembler import responder
         from core.voice import voice_engine
 
         run = payload.get("run") or {}
