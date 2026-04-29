@@ -365,9 +365,14 @@ class JarvisWindow(QMainWindow):
 
     def _on_wake_word(self):
         """Qt main thread — wake word detected. Start listening if idle."""
+        from core.voice import voice_engine
+        # Hard guard: never let wake events re-open the mic during active TTS.
+        if voice_engine.is_speaking:
+            if config.debug_mode:
+                print("[wake] ignored: detector fired while TTS speaking")
+            return
         if self._state != "idle":
             return
-        from core.voice import voice_engine
         if voice_engine.mic_muted:
             return
         self._set_state("listening")
@@ -1220,10 +1225,18 @@ class JarvisWindow(QMainWindow):
         # transitions idle→thinking in <300ms (always), without the guard the
         # old timer fires and re-enables the detector mid-execution.
         from core.wake_word import wake_detector
+        from core.voice import voice_engine
         if s == "idle":
             def _resume_if_still_idle():
-                if self._state == "idle":
+                # Do not resume detector while TTS is still speaking; this prevents
+                # self-triggering wake events from JARVIS's own voice output.
+                if self._state == "idle" and not voice_engine.is_speaking:
                     wake_detector.resume()
+                elif self._state == "idle":
+                    # TTS may still be finishing; retry shortly.
+                    if config.debug_mode:
+                        print("[wake] resume deferred: TTS still speaking")
+                    QTimer.singleShot(200, _resume_if_still_idle)
             QTimer.singleShot(300, _resume_if_still_idle)
         else:
             wake_detector.pause()
