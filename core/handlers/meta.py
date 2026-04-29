@@ -139,8 +139,14 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         if not key:
             available = ", ".join(_VOICE_LABELS.values())
             return _err(f"Unknown voice {raw!r}. Available: {available}")
-        config.tts_voice = key
-        config.save()
+        from core.voice import voice_engine
+        ok, msg, _kind = voice_engine.switch_tts_voice(
+            key,
+            validate_provider=True,
+            persist=True,
+        )
+        if not ok:
+            return _err(msg)
         name = _VOICE_FIRST_NAMES.get(key, key)
         # Spoken in the NEW voice — the caller must read output (not Claude's
         # pre-execution response) so the user hears audible proof of the switch.

@@ -68,6 +68,60 @@ class _SttErrorExc(Exception):
         self.kind = kind
 
 
+class TtsProviderErrorKind(enum.Enum):
+    QUOTA = "quota"
+    AUTH = "auth"
+    NETWORK = "network"
+    UNKNOWN = "unknown"
+
+
+class TtsProviderError(Exception):
+    """Typed provider failure for ElevenLabs validation/synthesis."""
+
+    def __init__(
+        self,
+        kind: TtsProviderErrorKind,
+        message: str,
+        *,
+        raw_error: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.raw_error = raw_error
+
+
+def _classify_elevenlabs_error(exc: Exception) -> TtsProviderError:
+    """Normalize ElevenLabs SDK exceptions into typed provider errors."""
+    raw = str(exc)
+    low = raw.lower()
+    if "quota_exceeded" in low or ("credits" in low and "required" in low):
+        return TtsProviderError(
+            TtsProviderErrorKind.QUOTA,
+            "Voice switch failed — ElevenLabs quota exceeded. "
+            "Please top up credits or use local fallback voices.",
+            raw_error=raw,
+        )
+    if "status_code: 401" in low or "unauthorized" in low or "invalid_api_key" in low:
+        return TtsProviderError(
+            TtsProviderErrorKind.AUTH,
+            "Voice switch failed — ElevenLabs authentication failed. "
+            "Check your API key.",
+            raw_error=raw,
+        )
+    if any(k in low for k in ("timeout", "timed out", "connection", "network", "dns")):
+        return TtsProviderError(
+            TtsProviderErrorKind.NETWORK,
+            "Voice switch failed — ElevenLabs network issue. "
+            "Check your connection and try again.",
+            raw_error=raw,
+        )
+    return TtsProviderError(
+        TtsProviderErrorKind.UNKNOWN,
+        "Voice switch failed — ElevenLabs rejected the request.",
+        raw_error=raw,
+    )
+
+
 # ── Lazy module imports ───────────────────────────────────────────────────────
 
 def _sd():
@@ -332,6 +386,7 @@ class TtsEngine:
     def __init__(self) -> None:
         self._lock     = threading.Lock()
         self._speaking = threading.Event()
+        self._last_provider_error: TtsProviderError | None = None
 
     @property
     def is_speaking(self) -> bool:
@@ -375,6 +430,7 @@ class TtsEngine:
                         self._say_elevenlabs(text, _on_ready_once, on_done)
                         return
                     except Exception as exc:
+                        self._last_provider_error = _classify_elevenlabs_error(exc)
                         print(f"[tts] ElevenLabs FAILED, falling back to pyttsx3: {exc}")
                         # If on_ready already fired, don't duplicate it in fallback.
                         if ready_called.is_set():
@@ -383,6 +439,30 @@ class TtsEngine:
                 self._say_local(text, _on_ready_once, on_done)
         finally:
             self._speaking.clear()
+
+    def probe_elevenlabs_voice(self, voice_key: str, text: str = "Voice check.") -> None:
+        """Validate voice/provider health without committing playback in UI flow."""
+        if not config.elevenlabs_api_key:
+            return
+        el = _el()
+        if el is None:
+            return
+        voice_id = _EL_VOICES.get(voice_key, _DEFAULT_VOICE_ID)
+        client = el.ElevenLabs(api_key=config.elevenlabs_api_key)
+        try:
+            # Small non-streaming probe to surface auth/quota failures early.
+            for chunk in client.text_to_speech.convert(
+                voice_id=voice_id,
+                text=text,
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+            ):
+                if chunk:
+                    break
+        except Exception as exc:
+            err = _classify_elevenlabs_error(exc)
+            self._last_provider_error = err
+            raise err from exc
 
     def _notify(self, cb: Callable[[], None] | None) -> None:
         if cb is None:

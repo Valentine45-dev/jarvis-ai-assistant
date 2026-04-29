@@ -7,6 +7,7 @@ import sys
 import ctypes
 import threading
 from datetime import datetime
+import time
 
 import psutil
 
@@ -89,10 +90,12 @@ class JarvisWindow(QMainWindow):
     _brain_result_ready  = pyqtSignal(object)        # dict from brain.py
     _voice_text_ready    = pyqtSignal(str)           # transcribed speech text
     _voice_error_ready   = pyqtSignal(str)           # STT failure message
+    _confirmation_resolved_ready = pyqtSignal(object)  # resolved confirmation dict
     _tts_ready           = pyqtSignal(object)        # transcript payload after TTS is ready
     _tts_done_signal     = pyqtSignal(int)           # fires (with token) when TTS audio ends
     _wake_word_signal    = pyqtSignal()              # wake word detected on detector thread
     _action_followup_tts = pyqtSignal(str, str, str, float, int)  # follow, jTime, intent, conf, token
+    _RUN_WORKFLOW_PREFIX = "__run_workflow_id__:"
 
     def __init__(self):
         super().__init__()
@@ -188,6 +191,7 @@ class JarvisWindow(QMainWindow):
         self._brain_result_ready.connect(self._on_brain_result)
         self._voice_text_ready.connect(self._on_voice_heard)
         self._voice_error_ready.connect(self._on_voice_error_ui)
+        self._confirmation_resolved_ready.connect(self._on_confirmation_resolved)
         self._tts_ready.connect(self._on_tts_ready)
         self._tts_done_signal.connect(self._on_tts_done, Qt.QueuedConnection)
         self._wake_word_signal.connect(self._on_wake_word, Qt.QueuedConnection)
@@ -202,8 +206,9 @@ class JarvisWindow(QMainWindow):
         # Wire backend signals so reminders and errors surface in the HUD
         signals.status_changed.connect(self._on_status_signal)
         signals.reminder_action.connect(self._on_reminder_action)
-        signals.error_occurred.connect(
-            lambda msg: self._dashboard.toast.show_toast(msg, "error"))
+        signals.error_occurred.connect(self._on_error_signal)
+        self._last_error_toast_msg = ""
+        self._last_error_toast_ts = 0.0
 
         # Wire inline transcript confirmation card signals
         self._dashboard.left.transcript.confirmed.connect(self._on_confirmed)
@@ -421,6 +426,26 @@ class JarvisWindow(QMainWindow):
         self._dashboard.toast.show_toast(msg, "info")
         self._dashboard.left.status_lbl.setText(msg)
 
+    def _on_error_signal(self, msg: str) -> None:
+        """Qt main thread — throttled error toasts for noisy provider failures."""
+        text = (msg or "").strip()
+        if not text:
+            return
+        now = time.monotonic()
+        is_voice_provider_error = (
+            "voice switch failed" in text.lower()
+            and "elevenlabs" in text.lower()
+        )
+        if (
+            is_voice_provider_error
+            and text == self._last_error_toast_msg
+            and (now - self._last_error_toast_ts) < 4.0
+        ):
+            return
+        self._last_error_toast_msg = text
+        self._last_error_toast_ts = now
+        self._dashboard.toast.show_toast(text, "error")
+
     def _on_reminder_action(self, payload: dict):
         """Qt main thread — delayed reminder with an executable JARVIS step."""
         from core.executor import dispatch
@@ -538,6 +563,11 @@ class JarvisWindow(QMainWindow):
     }
 
     def _process_cmd(self, cmd: str):
+        direct_workflow_id = ""
+        display_cmd = cmd
+        if cmd.startswith(self._RUN_WORKFLOW_PREFIX):
+            direct_workflow_id = cmd[len(self._RUN_WORKFLOW_PREFIX):].strip()
+            display_cmd = f"run {direct_workflow_id.replace('_', ' ')}"
         if self._state == "awaiting_confirmation":
             self._dashboard.toast.show_toast(
                 "Please respond to the pending confirmation first, sir.", "warning")
@@ -548,15 +578,15 @@ class JarvisWindow(QMainWindow):
         if len(self._history) >= _HISTORY_MAX:
             self._history = self._history[-(  _HISTORY_MAX - 1):]
         self._history.append({
-            "time": now, "you": cmd, "jarvis": "", "jTime": "",
+            "time": now, "you": display_cmd, "jarvis": "", "jTime": "",
             "intent": "", "conf": 0.0, "status": "pending",
         })
-        self._dashboard.left.transcript.add_exchange(cmd, now)
+        self._dashboard.left.transcript.add_exchange(display_cmd, now)
         self._botbar.increment_commands()
         self._cmd_count += 1
         self._set_state("thinking")
         self._dashboard.left.hud_status.set_status("PROCESSING")
-        self._dashboard.left.status_lbl.setText(f'Processing: "{cmd}"')
+        self._dashboard.left.status_lbl.setText(f'Processing: "{display_cmd}"')
         self._dashboard.left.typing.show_typing()
 
         # Priority: resolve pending confirmation before routing to brain — but if the
@@ -588,7 +618,7 @@ class JarvisWindow(QMainWindow):
             "again", "do it again", "do that again", "repeat that", "repeat it",
             "try again", "run it again", "run that again", "once more", "one more time",
         })
-        if cmd.strip().lower() in _REPEAT_PHRASES and self._last_result:
+        if display_cmd.strip().lower() in _REPEAT_PHRASES and self._last_result:
             r = self._last_result
             self._execute_result(
                 r,
@@ -596,6 +626,24 @@ class JarvisWindow(QMainWindow):
                 float(r.get("confidence", 0.85)),
                 r.get("response", ""),
                 r.get("hud_status", self._INTENT_HUD.get(r.get("intent", "unknown"), "STANDBY")),
+            )
+            return
+
+        if direct_workflow_id:
+            self._execute_result(
+                {
+                    "intent": "automation_task",
+                    "action": "run_workflow",
+                    "parameters": {"task_name": direct_workflow_id},
+                    "requires_confirmation": False,
+                    "confidence": 1.0,
+                    "response": "Running workflow now, sir.",
+                    "hud_status": "AUTOMATION",
+                },
+                "automation_task",
+                1.0,
+                "Running workflow now, sir.",
+                "AUTOMATION",
             )
             return
 
@@ -678,6 +726,24 @@ class JarvisWindow(QMainWindow):
         """Called on the Qt main thread after a pending confirmation is resolved."""
         j_time = datetime.now().strftime("%H:%M")
         self._dashboard.left.typing.hide_typing()
+
+        # A confirmation resolution can itself schedule a follow-up confirmation
+        # (workflow continuation with another file-op step). Keep the confirm
+        # card loop alive instead of dropping out after the first step.
+        if resolved.get("needs_confirmation"):
+            display_resp = resolved.get("output", "Awaiting your confirmation, sir.")
+            self._confirm_mode = "executor"
+            if self._history:
+                self._history[-1].update({
+                    "jarvis": display_resp,
+                    "jTime": j_time,
+                    "intent": "confirmation",
+                    "conf": 1.0,
+                    "status": "pending",
+                })
+            self._show_confirm_card(display_resp)
+            self._dashboard.toast.show_toast(display_resp, "warning")
+            return
 
         display_resp = resolved.get("output", "")
         if not display_resp:
@@ -1068,9 +1134,13 @@ class JarvisWindow(QMainWindow):
                 confirmed=True,
             )
         elif mode == "executor":
-            from core.executor import resolve_confirmation
-            resolved = resolve_confirmation("yes")
-            self._on_confirmation_resolved(resolved)
+            # Resolve executor confirmation off the UI thread — the callback may
+            # continue a workflow and call Claude for later steps.
+            def _resolve_async() -> None:
+                from core.executor import resolve_confirmation
+                resolved = resolve_confirmation("yes")
+                self._confirmation_resolved_ready.emit(resolved)
+            threading.Thread(target=_resolve_async, daemon=True).start()
 
     def _on_cancelled(self):
         self._hide_confirm_card()

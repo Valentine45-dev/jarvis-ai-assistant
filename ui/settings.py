@@ -574,12 +574,32 @@ class SettingsView(QWidget):
     # ── Actions ───────────────────────────────────────────────────────────────
 
     def _apply_cfg(self):
+        from core.signals import signals
+        from core.voice import voice_engine
+
         config.anthropic_api_key = self._anthro_key.text().strip()
         config.elevenlabs_api_key = self._eleven_key.text().strip()
         config.vapi_api_key       = self._vapi_key.text().strip()
         config.claude_model       = self._model_combo.currentData()
         config.wake_word          = self._wake_input.text().strip() or "jarvis"
-        config.tts_voice          = self._voice_combo.currentData()
+        selected_voice = self._voice_combo.currentData() or config.tts_voice
+        voice_err = ""
+        if selected_voice != config.tts_voice:
+            ok, msg, _kind = voice_engine.switch_tts_voice(
+                selected_voice,
+                validate_provider=True,
+                persist=False,
+            )
+            if not ok:
+                voice_err = msg
+                selected_voice = config.tts_voice
+                voice_idx = next(
+                    (i for i in range(self._voice_combo.count())
+                     if self._voice_combo.itemData(i) == selected_voice),
+                    0,
+                )
+                self._voice_combo.setCurrentIndex(voice_idx)
+        config.tts_voice = selected_voice
         config.theme              = self._theme_combo.currentData()
         config.debug_mode         = self._debug_toggle.isChecked()
         config.mic_sensitivity    = self._mic_slider.value()
@@ -589,9 +609,11 @@ class SettingsView(QWidget):
 
         try:
             config.save()
-            self._apply_btn.setText("SAVED ✓")
+            self._apply_btn.setText("SAVED ✓" if not voice_err else "SAVED (VOICE UNCHANGED)")
             self._mark_clean()
             self._health.refresh()
+            if voice_err:
+                signals.error_occurred.emit(voice_err)
         except Exception:
             self._apply_btn.setText("SAVE ERROR")
 

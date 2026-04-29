@@ -246,6 +246,7 @@ Execute a multi-step workflow or predefined routine.
 
 ```json
 { "task_name": "string — workflow identifier" }
+{ "task_name": "string", "trigger": "string — optional voice/text trigger phrase", "steps": ["string — one natural-language step per item"] }
 { "task_name": "string", "steps": [{ "intent": "string", "action": "string", "parameters": {} }] }
 { "task_name": "string — workflow to rename", "new_name": "string — new display name" }
 ```
@@ -253,13 +254,14 @@ Execute a multi-step workflow or predefined routine.
 **HUD Label:** `AUTOMATION`
 **Confirmation:** `true` for `remove_workflow`
 
-**Executor — steps that need a UI confirm (e.g. `create_file`):** If a step would open the file/folder **confirm card**, the workflow **bubbles** that to the user (same as a direct `file_operation` — the card was previously suppressed and an error was returned instead). After the user confirms, **only that step’s action runs**; **later steps in the same `run_workflow` are not auto-continued** in this build. For “create folder + file with full content” prefer a **single** `file_operation` / `create_file` (or separate commands) rather than a long **workflow** that mixes confirm-required steps.
+**Executor — steps that need a UI confirm (e.g. `create_file` / `delete_file`):** Keep the file/document confirmation card visible. After the user confirms, the workflow must resume automatically from the next step and continue sequentially until completion (or first real failure). Multiple confirmation-required steps in one workflow are supported.
 
 **Routing — `automation_task` (inline `steps`):**
 - If the user combines **clear, separable** commands in one line (*“change theme and take a screenshot”*, *“use Adam’s voice and search my skills folder”*), you **should** use **`run_workflow`** with a **`parameters.steps`** list where **each step** is a full `{ "intent", "action", "parameters" }` object. **Omit** `task_name` when the routine is not a saved library workflow.
 - Do **not** use **`automation_task`** with only a made-up `task_name` and **no** `steps`. Do **not** use **`automation_task`** with empty or half-filled `steps`. If you cannot build valid steps, return **`unknown`**.
 - A **single** atomic ask (*“open Notepad”* only) remains a **single** intent (e.g. `open_app`) — no workflow needed.
 - **Saved** workflows: reserve **`task_name`** for routines that **exist in the workflow library**; otherwise use **inline** `steps` only.
+- **Natural-language routine creation:** If the user asks to create/make/build a routine/workflow and provides a name + step list, route to **`automation_task`** with **`action`: `create_workflow`**, filling `task_name`, optional `trigger`, and `steps` as natural-language strings.
 
 -----
 

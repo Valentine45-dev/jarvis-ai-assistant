@@ -23,6 +23,7 @@ import anthropic
 
 from config.settings import config
 from core.memory import memory
+from core.workflow_nlu import parse_create_workflow_command
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -212,6 +213,7 @@ def ask_claude(
     raw_input: str,
     context: dict[str, Any] | None = None,
     *,
+    use_memory: bool = True,
     active_window: str | None = None,
     clipboard: str | None = None,
 ) -> dict[str, Any]:
@@ -235,6 +237,15 @@ def ask_claude(
         cleaned = text
 
     tag_override: str | None = tag_result
+
+    # Fast-path deterministic routine creation parser:
+    # "create a night routine ... <steps>" should directly create a workflow
+    # without depending on model variability.
+    wf_result = parse_create_workflow_command(cleaned if cleaned else text)
+    if wf_result and (tag_override in (None, "automation_task")):
+        if tag_override == "automation_task":
+            wf_result["confidence"] = min(1.0, float(wf_result.get("confidence", 0.9)) + 0.05)
+        return wf_result
 
     # 3. Context assembly (per-call metadata — not stored in history)
     ctx = build_context(
@@ -268,6 +279,7 @@ def ask_claude(
     max_out = _infer_max_output_tokens(user_msg)
     raw = ""
     try:
+        prior_messages = memory.get_messages() if use_memory else []
         msg = _get_client().messages.create(
             model=config.claude_model,
             max_tokens=max_out,
@@ -279,7 +291,7 @@ def ask_claude(
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            messages=memory.get_messages() + [{"role": "user", "content": user_msg}],
+            messages=prior_messages + [{"role": "user", "content": user_msg}],
         )
         if not msg.content:
             raise ValueError("empty_model_content")
@@ -291,7 +303,8 @@ def ask_claude(
             raw = re.sub(r"\n?```$", "", raw)
 
         result: dict[str, Any] = _parse_claude_json_raw(raw)
-        memory.add_exchange(cmd_text, raw)
+        if use_memory:
+            memory.add_exchange(cmd_text, raw)
 
     except json.JSONDecodeError as exc:
         if config.debug_mode:

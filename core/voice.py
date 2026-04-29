@@ -23,10 +23,18 @@ from core.audio_pipeline import (
     _SttErrorExc,
     AudioCapture,
     SttEngine,
+    TtsProviderError,
+    TtsProviderErrorKind,
     TtsEngine,
 )
 
-__all__ = ["_EL_VOICES", "VoiceEngine", "voice_engine"]
+__all__ = [
+    "_EL_VOICES",
+    "TtsProviderError",
+    "TtsProviderErrorKind",
+    "VoiceEngine",
+    "voice_engine",
+]
 
 
 class VoiceEngine:
@@ -90,6 +98,44 @@ class VoiceEngine:
             self._fire(on_done)
             return
         self._tts.say(text, on_ready=on_ready, on_done=on_done)
+
+    def switch_tts_voice(
+        self,
+        voice_key: str,
+        *,
+        validate_provider: bool = True,
+        persist: bool = True,
+    ) -> tuple[bool, str, str]:
+        """Switch TTS voice with rollback-safe provider validation.
+
+        Returns: (ok, message, error_kind)
+        - ok=True  -> message is empty, error_kind='ok'
+        - ok=False -> message is user-readable failure detail
+        """
+        key = (voice_key or "").strip().lower()
+        if key not in _EL_VOICES:
+            return (False, f"Unknown voice '{voice_key}'.", "unknown_voice")
+
+        prev = config.tts_voice
+        config.tts_voice = key
+        try:
+            if validate_provider:
+                self._tts.probe_elevenlabs_voice(key)
+        except TtsProviderError as exc:
+            config.tts_voice = prev
+            return (False, str(exc), exc.kind.value)
+        except Exception as exc:
+            config.tts_voice = prev
+            return (False, f"Voice switch failed — {exc}", "unknown")
+
+        if persist:
+            try:
+                config.save()
+            except Exception as exc:
+                # Roll back if persistence fails so runtime + disk stay consistent.
+                config.tts_voice = prev
+                return (False, f"Voice switch failed — couldn't save config ({exc}).", "save")
+        return (True, "", "ok")
 
     # ── STT ──────────────────────────────────────────────────────────────────
 

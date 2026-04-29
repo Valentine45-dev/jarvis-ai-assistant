@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.handlers.shared import _ok, _err
 
 _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
@@ -48,6 +50,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     if action == "create_workflow":
         task_name = params.get("task_name", "")
         steps     = params.get("steps", [])
+        trigger   = (params.get("trigger") or "Manual").strip() or "Manual"
         if not task_name:
             return _err("No task_name provided for workflow creation.")
         if not isinstance(steps, list) or not steps:
@@ -71,7 +74,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             if (s_intent, s_action) in _DANGEROUS_STEPS:
                 return _err(f"Step {i} contains dangerous action '{s_action}'.")
         wf = {
-            "id": slug, "name": task_name, "trigger": "Manual",
+            "id": slug, "name": task_name, "trigger": trigger,
             "enabled": True, "last_run": "", "steps": steps,
         }
         workflow_library.add(wf)
@@ -103,19 +106,23 @@ def _handle_automation_task(action: str, params: dict) -> dict:
 
     # run_workflow
     from core.executor import dispatch  # late import — executor is fully loaded by runtime
+    from core.handlers.shared import get_pending_confirmation, request_confirmation
 
     steps     = params.get("steps", [])
     task_name = params.get("task_name", "")
     workflow_id: str = ""
 
-    if task_name and not steps:
+    # If task_name resolves to a saved workflow, always prefer its persisted
+    # step list over any inline steps from model output.
+    if task_name:
         wf = workflow_library.get(task_name)
-        if wf is None:
+        if wf is not None:
+            if not wf.get("enabled", True):
+                return _err(f"Workflow '{wf['name']}' is disabled.")
+            steps       = wf.get("steps", [])
+            workflow_id = wf.get("id", "")
+        elif not steps:
             return _err(f"Workflow not found: {task_name!r}")
-        if not wf.get("enabled", True):
-            return _err(f"Workflow '{wf['name']}' is disabled.")
-        steps       = wf.get("steps", [])
-        workflow_id = wf.get("id", "")
 
     if not steps:
         return _err("No steps provided in automation task")
@@ -130,59 +137,130 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         if (intent, s_action) in _DANGEROUS_STEPS:
             return _err(f"Workflow contains dangerous step '{s_action}' — run manually.")
 
-    total   = len(steps)
-    results = []
-    all_ok  = True
-    last_step_intent  = ""
-    last_step_action  = ""
-    quit_application  = False
+    total = len(steps)
+    state: dict = {
+        "results": [],
+        "all_ok": True,
+        "last_step_intent": "",
+        "last_step_action": "",
+        "quit_application": False,
+        "last_python_file": "",
+        "last_directory": "",
+    }
 
-    for i, step in enumerate(steps, 1):
-        # Parse natural-language string steps at runtime
-        if isinstance(step, str):
-            from core.brain import ask_claude
-            parsed = ask_claude(step)
-            if parsed.get("intent") == "unknown":
-                results.append(f"Step {i}: FAIL — could not parse '{step}'")
-                all_ok = False
-                break
-            step = parsed
+    def _append_step_result(idx: int, sub: dict) -> None:
+        state["results"].append(
+            f"Step {idx}: {'OK' if sub.get('success') else 'FAIL'} — {sub.get('output') or sub.get('error')}"
+        )
 
-        try:
-            from core.signals import signals
-            signals.status_changed.emit(
-                f"Automation: step {i}/{total} — {step.get('action', '').replace('_', ' ')}"
-            )
-        except Exception:
-            pass
-        sub = dispatch({
-            "intent":     step.get("intent", "unknown"),
-            "action":     step.get("action", ""),
-            "parameters": step.get("parameters", {}),
-            "requires_confirmation": False,
-        })
-        if sub.get("needs_confirmation"):
-            return sub
-        if sub.get("quit_application"):
-            quit_application = True
-        results.append(f"Step {i}: {'OK' if sub['success'] else 'FAIL'} — {sub['output'] or sub['error']}")
-        if sub["success"]:
-            last_step_intent = (step.get("intent") or "").strip()
-            last_step_action = (step.get("action") or "").strip()
-        if not sub["success"]:
-            all_ok = False
-            break
+    def _run_from(start_idx: int) -> dict:
+        for idx in range(start_idx, total):
+            step_n = idx + 1
+            step = steps[idx]
+            if isinstance(step, str):
+                from core.brain import ask_claude
+                parsed = ask_claude(
+                    step,
+                    use_memory=False,
+                    context={
+                        "workflow_step_index": step_n,
+                        "workflow_total_steps": total,
+                        "workflow_last_python_file": state["last_python_file"],
+                        "workflow_last_directory": state["last_directory"],
+                        "workflow_last_output": state["results"][-1] if state["results"] else "",
+                    },
+                )
+                if parsed.get("intent") == "unknown":
+                    state["results"].append(f"Step {step_n}: FAIL — could not parse '{step}'")
+                    state["all_ok"] = False
+                    return _err("\n".join(state["results"]))
+                step = parsed
 
-    if workflow_id and all_ok:
+            try:
+                from core.signals import signals
+                signals.status_changed.emit(
+                    f"Automation: step {step_n}/{total} — {step.get('action', '').replace('_', ' ')}"
+                )
+            except Exception:
+                pass
+
+            sub = dispatch({
+                "intent":     step.get("intent", "unknown"),
+                "action":     step.get("action", ""),
+                "parameters": step.get("parameters", {}),
+                "requires_confirmation": False,
+            }, confirmed=False)
+
+            if sub.get("needs_confirmation"):
+                pending = get_pending_confirmation()
+                if not pending or not pending.get("fn"):
+                    return sub
+                original_fn = pending["fn"]
+                prompt = pending["prompt"]
+
+                def _resume_after_confirm(
+                    original_fn=original_fn,
+                    prompt=prompt,
+                    step_n=step_n,
+                    step=step,
+                    idx=idx,
+                ) -> dict:
+                    first = original_fn()
+                    _append_step_result(step_n, first)
+                    if not first.get("success"):
+                        state["all_ok"] = False
+                        return _err("\n".join(state["results"]))
+
+                    state["last_step_intent"] = (step.get("intent") or "").strip()
+                    state["last_step_action"] = (step.get("action") or "").strip()
+                    if first.get("quit_application"):
+                        state["quit_application"] = True
+                    if (
+                        state["last_step_intent"] == "file_operation"
+                        and state["last_step_action"] == "create_file"
+                    ):
+                        params = step.get("parameters") or {}
+                        path = str(params.get("path") or "").strip()
+                        if path.lower().endswith(".py"):
+                            state["last_python_file"] = path
+                            state["last_directory"] = str(Path(path).parent)
+
+                    return _run_from(idx + 1)
+
+                # Re-register pending confirmation with a continuation closure:
+                # UI confirm executes current step, then resumes later steps.
+                return request_confirmation(prompt, _resume_after_confirm)
+
+            if sub.get("quit_application"):
+                state["quit_application"] = True
+            _append_step_result(step_n, sub)
+            if sub.get("success"):
+                state["last_step_intent"] = (step.get("intent") or "").strip()
+                state["last_step_action"] = (step.get("action") or "").strip()
+                if (
+                    state["last_step_intent"] == "file_operation"
+                    and state["last_step_action"] == "create_file"
+                ):
+                    params = step.get("parameters") or {}
+                    path = str(params.get("path") or "").strip()
+                    if path.lower().endswith(".py"):
+                        state["last_python_file"] = path
+                        state["last_directory"] = str(Path(path).parent)
+            else:
+                state["all_ok"] = False
+                return _err("\n".join(state["results"]))
+
+        out: dict = _ok("\n".join(state["results"]))
+        if state["last_step_intent"] and state["last_step_action"]:
+            out["last_step_intent"] = state["last_step_intent"]
+            out["last_step_action"] = state["last_step_action"]
+        if state["quit_application"]:
+            out["quit_application"] = True
+        return out
+
+    out = _run_from(0)
+    if out.get("needs_confirmation"):
+        return out
+    if workflow_id and out.get("success"):
         workflow_library.mark_run(workflow_id)
-
-    summary = "\n".join(results)
-    if not all_ok:
-        return _err(summary)
-    out: dict = _ok(summary)
-    if last_step_intent and last_step_action:
-        out["last_step_intent"] = last_step_intent
-        out["last_step_action"] = last_step_action
-    if quit_application:
-        out["quit_application"] = True
     return out

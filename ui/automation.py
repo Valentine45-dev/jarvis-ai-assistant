@@ -340,10 +340,11 @@ class _WorkflowRow(QWidget):
                 "border:1px solid rgba(0,229,255,0.30);font-size:10px;}"
                 "QPushButton:hover{background:rgba(0,229,255,0.20);}"
             )
-            trigger_cmd = wf.get("trigger", "").strip()
-            if not trigger_cmd or trigger_cmd.lower() == "manual":
-                trigger_cmd = f"run {wf['name'].lower()}"
-            play.clicked.connect(lambda checked=False, c=trigger_cmd: self.run_requested.emit(c))
+            # Bypass NLP for Play clicks so we always execute the selected
+            # saved workflow, not a model-reconstructed approximation.
+            play.clicked.connect(
+                lambda checked=False, wid=self._wf_id: self.run_requested.emit(f"__run_workflow_id__:{wid}")
+            )
         else:
             play.setStyleSheet(
                 "QPushButton{color:rgba(132,147,150,0.35);background:transparent;"
