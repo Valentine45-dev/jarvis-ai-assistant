@@ -48,8 +48,13 @@ from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
 from config.settings import config
 from core.brain import ask_claude_async, TAG_INTENT_MAP
+from core.command_controller import CommandController
+from core.confirmation_controller import ConfirmationController
 from core.executor import dispatch
 from core.history_store import history_store
+from core.jarvis_runtime_context import RuntimeCommandContext
+from core.response_composer import compose_execution_response
+from core.session_flags import persist_session_flags, sync_session_flag_views
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
 from core.browser import browser
@@ -64,24 +69,6 @@ _HISTORY_MAX = 500
 # Maximum characters sent to TTS for data-heavy actions (read_page, OCR, code output).
 # ElevenLabs free tier has a monthly character quota — long read_page dumps burn it fast.
 _TTS_MAX_CHARS = 800
-
-
-def _pending_should_yield_to_new_command(cmd: str) -> bool:
-    """If True, a full new directive should go to the brain, not to resolve_confirmation()."""
-    s = (cmd or "").strip()
-    if len(s) > 100:
-        return True
-    low = s.lower()
-    # Another command phrased as a task (not a short yes / no to the last prompt)
-    if len(s) > 20:
-        for needle in (
-            "create ", "create a", "write ", "make ", "open ", "read ", "search ",
-            "list ", "delete ", "run ", "go to", "remind", "check ", "put ", "save ",
-        ):
-            if needle in low:
-                return True
-    return False
-
 
 class JarvisWindow(QMainWindow):
     VIEW_NAMES = ["Dashboard", "Voice", "Automation", "History", "Settings"]
@@ -216,9 +203,9 @@ class JarvisWindow(QMainWindow):
         self._pending_result: dict | None = None
         self._confirm_mode: str | None = None  # "claude" | "executor" | None
         self._last_result: dict | None = None   # Phase 5: last successfully dispatched intent
-        self._last_python_file: str = ""
-        self._last_directory: str = ""
-        self._previous_user_command: str = ""
+        self._runtime_ctx = RuntimeCommandContext()
+        self._command_controller = CommandController(self._RUN_WORKFLOW_PREFIX)
+        self._confirmation_controller = ConfirmationController()
 
         # ── Quick settings popover (TopBar sliders icon) ──────────────────────
         # Shared session flags are persisted in config and mirrored in both
@@ -306,33 +293,16 @@ class JarvisWindow(QMainWindow):
 
     def _sync_session_flag_views(self) -> None:
         """Keep quick-settings popover and settings page toggles in sync."""
-        from core.voice import voice_engine
-        mic_muted = voice_engine.mic_muted
-        tts_muted = voice_engine.tts_muted
-        self._quick_settings.sync_state(
-            mic_muted=mic_muted,
-            tts_muted=tts_muted,
-            auto_confirm=self._auto_confirm,
-            dim_mode=self._dim_mode,
-        )
-        self._settings_view.sync_state(
-            mic_muted=mic_muted,
-            tts_muted=tts_muted,
+        sync_session_flag_views(
+            self._quick_settings,
+            self._settings_view,
             auto_confirm=self._auto_confirm,
             dim_mode=self._dim_mode,
         )
 
     def _persist_session_flags(self) -> None:
         """Persist shared quick/full settings flags to config JSON."""
-        from core.voice import voice_engine
-        config.mic_muted = bool(voice_engine.mic_muted)
-        config.tts_muted = bool(voice_engine.tts_muted)
-        config.auto_confirm = bool(self._auto_confirm)
-        config.dim_mode = bool(self._dim_mode)
-        try:
-            config.save()
-        except Exception:
-            pass
+        persist_session_flags(auto_confirm=self._auto_confirm, dim_mode=self._dim_mode)
 
     def _nav(self, idx):
         self._stack.setCurrentIndex(idx)
@@ -566,11 +536,7 @@ class JarvisWindow(QMainWindow):
     }
 
     def _process_cmd(self, cmd: str):
-        direct_workflow_id = ""
-        display_cmd = cmd
-        if cmd.startswith(self._RUN_WORKFLOW_PREFIX):
-            direct_workflow_id = cmd[len(self._RUN_WORKFLOW_PREFIX):].strip()
-            display_cmd = f"run {direct_workflow_id.replace('_', ' ')}"
+        direct_workflow_id, display_cmd = self._command_controller.parse_command(cmd)
         if self._state == "awaiting_confirmation":
             self._dashboard.toast.show_toast(
                 "Please respond to the pending confirmation first, sir.", "warning")
@@ -578,14 +544,14 @@ class JarvisWindow(QMainWindow):
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
         # Cap history to avoid unbounded memory growth
-        previous_cmd = self._history[-1]["you"] if self._history else self._previous_user_command
+        previous_cmd = self._runtime_ctx.get_previous_command(self._history)
         if len(self._history) >= _HISTORY_MAX:
             self._history = self._history[-(  _HISTORY_MAX - 1):]
         self._history.append({
             "time": now, "you": display_cmd, "jarvis": "", "jTime": "",
             "intent": "", "conf": 0.0, "status": "pending",
         })
-        self._previous_user_command = display_cmd
+        self._runtime_ctx.note_user_command(display_cmd)
         self._dashboard.left.transcript.add_exchange(display_cmd, now)
         self._botbar.increment_commands()
         self._cmd_count += 1
@@ -604,7 +570,7 @@ class JarvisWindow(QMainWindow):
         )
 
         if get_pending_confirmation():
-            if _pending_should_yield_to_new_command(cmd):
+            if self._command_controller.pending_should_yield_to_new_command(cmd):
                 abandon_pending_confirmation()
                 self._hide_confirm_card()
                 self._confirm_mode = None
@@ -619,11 +585,7 @@ class JarvisWindow(QMainWindow):
                 return
 
         # Phase 5: repeat-last-command shorthand — bypass Claude entirely.
-        _REPEAT_PHRASES: frozenset[str] = frozenset({
-            "again", "do it again", "do that again", "repeat that", "repeat it",
-            "try again", "run it again", "run that again", "once more", "one more time",
-        })
-        if display_cmd.strip().lower() in _REPEAT_PHRASES and self._last_result:
+        if self._command_controller.is_repeat_phrase(display_cmd) and self._last_result:
             r = self._last_result
             self._execute_result(
                 r,
@@ -663,11 +625,7 @@ class JarvisWindow(QMainWindow):
         ask_claude_async(
             cmd,
             callback=_on_result,
-            context={
-                "previous_command": previous_cmd or "",
-                "last_python_file": self._last_python_file,
-                "last_directory": self._last_directory,
-            },
+            context=self._runtime_ctx.build_brain_context(previous_cmd),
         )
 
     def _on_brain_result(self, result: dict):
@@ -743,8 +701,8 @@ class JarvisWindow(QMainWindow):
         # A confirmation resolution can itself schedule a follow-up confirmation
         # (workflow continuation with another file-op step). Keep the confirm
         # card loop alive instead of dropping out after the first step.
-        if resolved.get("needs_confirmation"):
-            display_resp = resolved.get("output", "Awaiting your confirmation, sir.")
+        if self._confirmation_controller.needs_followup_confirmation(resolved):
+            display_resp = self._confirmation_controller.prompt_from_result(resolved)
             self._confirm_mode = "executor"
             if self._history:
                 self._history[-1].update({
@@ -758,20 +716,18 @@ class JarvisWindow(QMainWindow):
             self._dashboard.toast.show_toast(display_resp, "warning")
             return
 
-        display_resp = resolved.get("output", "")
-        if not display_resp:
-            display_resp = "Done, sir." if resolved.get("success") else "Understood, standing down, sir."
+        display_resp = self._confirmation_controller.final_display_response(resolved)
 
         if self._history:
             self._history[-1].update({
                 "jarvis": display_resp, "jTime": j_time,
                 "intent": "confirmation", "conf": 1.0,
-                "status": "success" if resolved.get("success") else "error",
+                "status": self._confirmation_controller.final_history_status(resolved),
             })
 
         self._set_state("processing")
         self._dashboard.left.status_lbl.setText(display_resp)
-        self._dashboard.left.hud_status.set_status("CONFIRMED" if resolved.get("success") else "CANCELLED")
+        self._dashboard.left.hud_status.set_status(self._confirmation_controller.final_hud_status(resolved))
 
         self._transcript_update_token += 1
         t = self._transcript_update_token
@@ -787,7 +743,7 @@ class JarvisWindow(QMainWindow):
             self._tts_ready.emit(payload)
             self._tts_done_signal.emit(t)
 
-        kind = "success" if resolved.get("success") else "info"
+        kind = self._confirmation_controller.final_toast_kind(resolved)
         self._dashboard.toast.show_toast(display_resp, kind)
 
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
@@ -826,22 +782,7 @@ class JarvisWindow(QMainWindow):
         """Update all HUD surfaces after dispatch completes (must run on main thread)."""
         exec_ok = bool(exec_out.get("success"))
         if exec_ok:
-            last_py = str(exec_out.get("last_python_file") or "").strip()
-            last_dir = str(exec_out.get("last_directory") or "").strip()
-            if last_py:
-                self._last_python_file = last_py
-            if last_dir:
-                self._last_directory = last_dir
-
-            if intent == "file_operation" and result.get("action") == "create_file":
-                p = str((result.get("parameters") or {}).get("path") or "").strip()
-                if p.lower().endswith(".py"):
-                    self._last_python_file = p
-                    try:
-                        from pathlib import Path as _Path
-                        self._last_directory = str(_Path(p).parent)
-                    except Exception:
-                        pass
+            self._runtime_ctx.absorb_execution(intent, result, exec_out)
 
         j_time = datetime.now().strftime("%H:%M")
         self._dashboard.left.typing.hide_typing()
@@ -856,7 +797,7 @@ class JarvisWindow(QMainWindow):
             self._on_confirmation_resolved(resolved)
             return
         if exec_out.get("needs_confirmation"):
-            display_resp = exec_out.get("output", "Awaiting your confirmation, sir.")
+            display_resp = self._confirmation_controller.prompt_from_result(exec_out)
             self._confirm_mode = "executor"
             if self._history:
                 self._history[-1].update({"jarvis": display_resp, "jTime": j_time,
@@ -878,74 +819,14 @@ class JarvisWindow(QMainWindow):
                 self._tts_ready.emit(transcript_payload)
             return
 
-        # ── Build spoken response ─────────────────────────────────────────────
-        from core.personality import say as personality_say
-        from core.responder import responder
-
-        last_step: tuple[str, str] | None = None
-        li = exec_out.get("last_step_intent")
-        la = exec_out.get("last_step_action")
-        if li and la:
-            last_step = (str(li), str(la))
-
-        primary = ""
-        follow: str | None = None
-
-        if intent in self._ACTION_INTENTS:
-            primary, follow = responder.build(
-                intent,
-                result.get("action", ""),
-                exec_ok,
-                resp,
-                exec_out.get("output", ""),
-                exec_out.get("error", ""),
-                params=result.get("parameters", {}),
-                last_step=last_step,
-            )
-            # Phase 4: suppress _data_follow() for run_workflow — async narration
-            # gives a richer per-step summary; "3 steps done." just gets in the way.
-            if intent == "automation_task" and result.get("action") == "run_workflow":
-                follow = None
-            display_resp = f"{primary}\n{follow}" if follow else primary
-        elif intent == "jarvis_meta":
-            action_name = result.get("action", "")
-            if (
-                action_name in ("quit_application", "close_jarvis")
-                and exec_out.get("quit_application")
-            ):
-                display_resp = (resp or "").strip() or (
-                    "Understood, sir. Closing JARVIS — we shall speak again."
-                )
-            elif action_name in self._FACTUAL_ACTIONS and exec_out.get("output"):
-                # Personality formats: "It's 7:25 AM, sir." / "Today is Sunday…"
-                status       = "ok" if exec_out["success"] else "err"
-                display_resp = personality_say(
-                    intent, action_name, status,
-                    exec_out.get("output", ""),
-                    exec_out.get("error", ""),
-                )
-            elif not exec_out.get("success"):
-                # Handler reported failure — use personality error pool
-                display_resp = personality_say(
-                    intent, action_name, "err",
-                    exec_out.get("output", ""),
-                    exec_out.get("error", ""),
-                )
-            elif action_name == "change_voice" and exec_out.get("output"):
-                # Speak the handler's line ("Now Adam's speaking, sir.") in the
-                # NEW voice — config.tts_voice is already updated at this point.
-                display_resp = exec_out["output"]
-            elif action_name == "conversational" and exec_out.get("output"):
-                display_resp = exec_out["output"]   # page cache answer
-            else:
-                display_resp = resp   # Claude's response (who_are_you, etc.)
-            primary = display_resp
-        else:
-            display_resp = resp       # unknown / other — use Claude's response
-            primary = display_resp
-
-        if not primary and display_resp is not None:
-            primary = display_resp
+        primary, follow, display_resp = compose_execution_response(
+            intent=intent,
+            result=result,
+            exec_out=exec_out,
+            resp=resp,
+            action_intents=self._ACTION_INTENTS,
+            factual_actions=self._FACTUAL_ACTIONS,
+        )
 
         # One dashboard line for the first TTS; a second line is appended when `follow` is set.
         hist_jarvis = (
@@ -1181,7 +1062,7 @@ class JarvisWindow(QMainWindow):
             from core.executor import resolve_confirmation
             resolve_confirmation("no")
 
-        msg = "Understood, standing down, sir."
+        msg = self._confirmation_controller.CANCEL_MESSAGE
         j_time = datetime.now().strftime("%H:%M")
 
         if self._history:
