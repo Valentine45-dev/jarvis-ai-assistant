@@ -109,6 +109,44 @@ def _first_sentence(text: str, cap: int = 150) -> str:
     return text[:m.end()].strip() if m else text[:cap].strip()
 
 
+def _tts_safe_output(output: str) -> str:
+    """Sanitize raw code/script stdout for spoken delivery.
+
+    Removes decorative separator lines, shortens absolute file paths to just
+    the filename, and caps at 180 chars so TTS stays concise.
+    """
+    if not output:
+        return "Done."
+    kept = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Drop pure decorator lines (only =, -, or space characters)
+        if set(stripped) <= {"=", "-", " "}:
+            continue
+        # Shorten Windows absolute paths — keep only the final filename/folder
+        shortened = re.sub(
+            r"[A-Za-z]:\\(?:[^\\/:*?\"<>|\r\n]+\\)*([^\\/:*?\"<>|\r\n]+)",
+            lambda m: m.group(1),
+            stripped,
+        )
+        # Also shorten Unix-style absolute paths
+        shortened = re.sub(
+            r"/(?:[^/\s]+/)+([^/\s]+)",
+            lambda m: m.group(1),
+            shortened,
+        )
+        kept.append(shortened)
+
+    text = "  ".join(kept).strip()
+    if not text:
+        return "Done."
+    if len(text) > 180:
+        text = text[:180].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return text
+
+
 # ── Data-rich follow-up builders ──────────────────────────────────────────────
 
 def _data_follow(
@@ -283,7 +321,10 @@ class ResponseAssembler:
         # ── Output-IS-response (listings, OCR, code, read_page) ──────────────
         if _in(intent, action, _OUTPUT_IS_RESPONSE):
             from core.personality import say as _pool_say
-            return (_pool_say(intent, action, "ok", output, error), None)
+            # Code output can contain separator bars, long paths, and hundreds
+            # of lines — sanitize to a spoken-length summary before TTS.
+            tts_out = _tts_safe_output(output) if intent == "code_execution" else output
+            return (_pool_say(intent, action, "ok", tts_out, error), None)
 
         # ── Standard path: Claude primary + optional data-rich follow ─────────
         primary = _first_sentence((claude_response or "").strip())

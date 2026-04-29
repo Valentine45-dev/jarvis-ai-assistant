@@ -309,10 +309,14 @@ class JarvisWindow(QMainWindow):
 
         def _on_err(err: str):
             # Suppress the toast when auto-resume simply timed out with no speech.
-            if auto_resume and "no speech" in err.lower():
-                self._voice_error_ready.emit("")
-            else:
-                self._voice_error_ready.emit(err)
+            # Guard emit against the window being deleted during shutdown.
+            try:
+                if auto_resume and "no speech" in err.lower():
+                    self._voice_error_ready.emit("")
+                else:
+                    self._voice_error_ready.emit(err)
+            except RuntimeError:
+                pass
 
         voice_engine.listen(
             callback=lambda text: self._voice_text_ready.emit(text),

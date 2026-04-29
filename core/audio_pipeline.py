@@ -244,7 +244,12 @@ class AudioCapture:
                         break   # timed out waiting for speech
 
         except Exception as exc:
-            raise RuntimeError(f"Mic capture failed: {exc}") from exc
+            # PaErrorCode -9983 "Stream is stopped" fires when the stream is
+            # closed during shutdown or a device change — not a hard failure.
+            # Fall through to the phrase_started check so callers get None
+            # (no speech) instead of an exception that crashes the voice thread.
+            if "stream is stopped" not in str(exc).lower():
+                raise RuntimeError(f"Mic capture failed: {exc}") from exc
 
         if not phrase_started:
             return None

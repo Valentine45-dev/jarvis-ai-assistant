@@ -141,7 +141,10 @@ class VoiceEngine:
             print(f"[voice] capture() returned: {'WAV bytes' if wav_bytes else 'None (no speech)'}")
             if wav_bytes is None:
                 if on_error:
-                    on_error("No speech detected — try speaking louder.")
+                    try:
+                        on_error("No speech detected — try speaking louder.")
+                    except RuntimeError:
+                        pass
                 return
             print("[voice] calling STT recognise()...")
             text = self._stt.recognise(wav_bytes)
@@ -150,15 +153,24 @@ class VoiceEngine:
                 callback(text)
             else:
                 if on_error:
-                    on_error("Could not understand audio.")
+                    try:
+                        on_error("Could not understand audio.")
+                    except RuntimeError:
+                        pass
         except _SttErrorExc as exc:
             print(f"[voice] SttError: {exc}")
             if on_error:
-                on_error(str(exc))
+                try:
+                    on_error(str(exc))
+                except RuntimeError:
+                    pass
         except Exception as exc:
             print(f"[voice] Exception in _listen_thread: {type(exc).__name__}: {exc}")
             if on_error:
-                on_error(f"Voice error: {exc}")
+                try:
+                    on_error(f"Voice error: {exc}")
+                except RuntimeError:
+                    pass
         finally:
             self._listening.clear()
             print("[voice] _listen_thread done")
