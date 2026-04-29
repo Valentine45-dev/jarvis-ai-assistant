@@ -22,10 +22,14 @@ from PyQt5.QtGui import (
     QSyntaxHighlighter, QTextCharFormat, QTextCursor,
 )
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QTextEdit,
     QWidget,
@@ -718,8 +722,37 @@ class _TagLineEdit(QTextEdit):
         self.document().setDocumentMargin(0)
         self.setFixedHeight(36)
         self.setPlaceholderText("Awaiting directive...")
+        self._valid_tags = tuple(sorted(t.lower() for t in valid_tags))
         self._highlighter = _TagHighlighter(self.document(), valid_tags)
         self.document().contentsChanged.connect(self._reflow_height)
+        self.textChanged.connect(self._refresh_tag_suggestions)
+        self.cursorPositionChanged.connect(self._refresh_tag_suggestions)
+        self._tag_popup = QListWidget()
+        self._tag_popup.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+        self._tag_popup.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self._tag_popup.setFocusPolicy(Qt.NoFocus)
+        self._tag_popup.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._tag_popup.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._tag_popup.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._tag_popup.setStyleSheet(
+            "QListWidget{"
+            "background:rgba(8,15,17,0.98);"
+            "border:1px solid rgba(0,229,255,0.45);"
+            "color:#c3f5ff;"
+            "font-family:'Roboto Mono';"
+            "font-size:11px;"
+            "padding:4px;"
+            "}"
+            "QListWidget::item{padding:6px 8px;}"
+            "QListWidget::item:selected{"
+            "background:rgba(0,229,255,0.20);"
+            "color:#00e5ff;"
+            "}"
+            "QListWidget::item:hover{background:rgba(0,229,255,0.12);}"
+        )
+        self._tag_popup.itemClicked.connect(lambda *_: self._accept_tag_suggestion())
+        self._popup_tag_range: tuple[int, int] | None = None
+        self._popup_token_prefix: str = ""
 
     # ── QLineEdit-compatible API ──────────────────────────────────────────
 
@@ -752,13 +785,121 @@ class _TagLineEdit(QTextEdit):
         else:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.contentHeightChanged.emit(self.height())
+        self._reposition_tag_popup()
+
+    def _current_tag_context(self) -> tuple[int, int, str] | None:
+        """Return (start_pos, end_pos, typed_fragment) for the @token near cursor."""
+        c = self.textCursor()
+        block = c.block()
+        block_pos = block.position()
+        in_block = c.position() - block_pos
+        left = block.text()[:in_block]
+        m = re.search(r'(^|\s)@([A-Za-z0-9_]*)$', left)
+        if not m:
+            return None
+        at_idx = m.start(2) - 1  # include '@' before capture group 2
+        start = block_pos + at_idx
+        end = c.position()
+        typed = m.group(2).lower()
+        return start, end, typed
+
+    def _refresh_tag_suggestions(self):
+        ctx = self._current_tag_context()
+        if not ctx or not self._valid_tags:
+            self._hide_tag_popup()
+            return
+
+        start, end, typed = ctx
+        if typed:
+            choices = [t for t in self._valid_tags if t.startswith(typed)]
+        else:
+            choices = list(self._valid_tags)
+        if not choices:
+            self._hide_tag_popup()
+            return
+
+        self._popup_tag_range = (start, end)
+        self._popup_token_prefix = typed
+        self._tag_popup.clear()
+        for t in choices[:12]:
+            QListWidgetItem(f"@{t}", self._tag_popup)
+        self._tag_popup.setCurrentRow(0)
+        self._reposition_tag_popup()
+        if not self._tag_popup.isVisible():
+            self._tag_popup.show()
+
+    def _reposition_tag_popup(self):
+        if not self._tag_popup.isVisible():
+            return
+        cr = self.cursorRect()
+        anchor = self.mapToGlobal(cr.topLeft())
+        width = max(220, min(self.width() - 4, 360))
+        rows = min(max(self._tag_popup.count(), 1), 8)
+        row_h = self._tag_popup.sizeHintForRow(0) if self._tag_popup.count() else 24
+        height = max(80, rows * row_h + 10)
+        x = anchor.x()
+        y = anchor.y() - height - 6  # default: open above the input
+
+        screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            if y < avail.top() + 4:
+                # Fallback below when there is not enough room above.
+                y = self.mapToGlobal(cr.bottomLeft()).y() + 4
+            if x + width > avail.right() - 4:
+                x = max(avail.left() + 4, avail.right() - width - 4)
+            if x < avail.left() + 4:
+                x = avail.left() + 4
+            if y + height > avail.bottom() - 4:
+                y = max(avail.top() + 4, avail.bottom() - height - 4)
+
+        self._tag_popup.setGeometry(x, y, width, height)
+
+    def _hide_tag_popup(self):
+        self._popup_tag_range = None
+        self._popup_token_prefix = ""
+        self._tag_popup.hide()
+
+    def _accept_tag_suggestion(self) -> bool:
+        if not self._tag_popup.isVisible():
+            return False
+        item = self._tag_popup.currentItem()
+        if item is None or self._popup_tag_range is None:
+            self._hide_tag_popup()
+            return False
+        start, end = self._popup_tag_range
+        tc = self.textCursor()
+        tc.setPosition(start)
+        tc.setPosition(end, QTextCursor.KeepAnchor)
+        tc.insertText(item.text() + " ")
+        self.setTextCursor(tc)
+        self._hide_tag_popup()
+        return True
 
     # ── Behaviour overrides ───────────────────────────────────────────────
 
     def keyPressEvent(self, event):
+        if self._tag_popup.isVisible():
+            if event.key() == Qt.Key_Down:
+                row = min(self._tag_popup.currentRow() + 1, self._tag_popup.count() - 1)
+                self._tag_popup.setCurrentRow(row)
+                return
+            if event.key() == Qt.Key_Up:
+                row = max(self._tag_popup.currentRow() - 1, 0)
+                self._tag_popup.setCurrentRow(row)
+                return
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
+                if self._accept_tag_suggestion():
+                    return
+            if event.key() == Qt.Key_Escape:
+                self._hide_tag_popup()
+                return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if event.modifiers() & Qt.ShiftModifier:
                 super().keyPressEvent(event)
+                return
+            # If tag suggestions are open, Enter accepts suggestion before submit.
+            if self._accept_tag_suggestion():
                 return
             self.returnPressed.emit()
             return
@@ -775,6 +916,11 @@ class _TagLineEdit(QTextEdit):
         super().resizeEvent(event)
         # Word wrap reflows line count when width changes
         self._reflow_height()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        # Keep suggestions visible while typing in the same field; they will
+        # hide automatically when context no longer matches or on explicit Esc.
 
 
 class CommandBar(QWidget):
