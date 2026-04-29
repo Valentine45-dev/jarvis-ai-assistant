@@ -55,8 +55,8 @@ def _handle_brightness(action: str, level: int | None) -> dict:
 def _handle_system_control(action: str, params: dict) -> dict:
     if action in ("volume_up", "volume_down"):
         return cc.set_volume(action, level=_coerce_volume_level(params))
-    if action == "volume_mute":
-        return cc.set_volume("volume_mute", level=None)
+    if action in ("volume_mute", "volume_unmute"):
+        return cc.set_volume(action, level=None)
 
     if action == "screenshot":
         save_param = params.get("save_path") or params.get("folder") or None

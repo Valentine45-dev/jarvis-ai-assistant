@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from core.handlers.shared import _ok, _err
 
@@ -32,6 +33,17 @@ _KNOWN_STEP_INTENTS: frozenset[str] = frozenset({
     "system_control", "file_operation", "browser_automation",
     "read_screen", "reminder_task", "jarvis_meta", "code_execution",
 })
+
+
+def _yield_ui() -> None:
+    """Keep Qt responsive while long workflow steps execute on the main thread."""
+    try:
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+    except Exception:
+        pass
 
 
 def _handle_automation_task(action: str, params: dict) -> dict:
@@ -153,23 +165,37 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             f"Step {idx}: {'OK' if sub.get('success') else 'FAIL'} — {sub.get('output') or sub.get('error')}"
         )
 
+    def _ask_claude_step(step_text: str, step_n: int) -> dict:
+        holder: dict[str, dict] = {}
+
+        def _run() -> None:
+            from core.brain import ask_claude
+            holder["result"] = ask_claude(
+                step_text,
+                use_memory=False,
+                context={
+                    "workflow_step_index": step_n,
+                    "workflow_total_steps": total,
+                    "workflow_last_python_file": state["last_python_file"],
+                    "workflow_last_directory": state["last_directory"],
+                    "workflow_last_output": state["results"][-1] if state["results"] else "",
+                },
+            )
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        while t.is_alive():
+            _yield_ui()
+            t.join(0.03)
+        return holder.get("result", {"intent": "unknown"})
+
     def _run_from(start_idx: int) -> dict:
         for idx in range(start_idx, total):
+            _yield_ui()
             step_n = idx + 1
             step = steps[idx]
             if isinstance(step, str):
-                from core.brain import ask_claude
-                parsed = ask_claude(
-                    step,
-                    use_memory=False,
-                    context={
-                        "workflow_step_index": step_n,
-                        "workflow_total_steps": total,
-                        "workflow_last_python_file": state["last_python_file"],
-                        "workflow_last_directory": state["last_directory"],
-                        "workflow_last_output": state["results"][-1] if state["results"] else "",
-                    },
-                )
+                parsed = _ask_claude_step(step, step_n)
                 if parsed.get("intent") == "unknown":
                     state["results"].append(f"Step {step_n}: FAIL — could not parse '{step}'")
                     state["all_ok"] = False
@@ -184,12 +210,15 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             except Exception:
                 pass
 
+            # Keep executor dispatch on the owner thread; browser/session backends
+            # (Playwright sync API) are thread-affine and fail if switched.
             sub = dispatch({
                 "intent":     step.get("intent", "unknown"),
                 "action":     step.get("action", ""),
                 "parameters": step.get("parameters", {}),
                 "requires_confirmation": False,
             }, confirmed=False)
+            _yield_ui()
 
             if sub.get("needs_confirmation"):
                 pending = get_pending_confirmation()
@@ -205,7 +234,9 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     step=step,
                     idx=idx,
                 ) -> dict:
+                    _yield_ui()
                     first = original_fn()
+                    _yield_ui()
                     _append_step_result(step_n, first)
                     if not first.get("success"):
                         state["all_ok"] = False
@@ -254,6 +285,10 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         if state["last_step_intent"] and state["last_step_action"]:
             out["last_step_intent"] = state["last_step_intent"]
             out["last_step_action"] = state["last_step_action"]
+        if state["last_python_file"]:
+            out["last_python_file"] = state["last_python_file"]
+        if state["last_directory"]:
+            out["last_directory"] = state["last_directory"]
         if state["quit_application"]:
             out["quit_application"] = True
         return out

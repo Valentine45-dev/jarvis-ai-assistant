@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import html
 import random
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QPushButton, QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from ui.components.panels import GlassPanel
@@ -190,12 +191,17 @@ class TranscriptPanel(GlassPanel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows = []
-        self._view = QTextEdit(self)
-        self._view.setReadOnly(True)
+        self._expanded_jarvis_rows: set[int] = set()
+        self._preview_chars = 260
+        self._view = QTextBrowser(self)
+        self._view.setOpenLinks(False)
+        self._view.setOpenExternalLinks(False)
+        self._view.anchorClicked.connect(self._on_link_clicked)
         self._view.setStyleSheet(
-            "QTextEdit{background:transparent;border:none;"
+            "QTextBrowser{background:transparent;border:none;"
             f"color:{PRIMARY};font-family:'{FM}';font-size:14px;"
             "line-height:1.6;}"
+            "QTextBrowser a{color:#00e5ff;text-decoration:none;}"
         )
         self._confirm_card = InlineConfirmCard(self)
         self._confirm_card.confirmed.connect(self.confirmed)
@@ -248,13 +254,48 @@ class TranscriptPanel(GlassPanel):
         self._render()
 
     def _render(self):
-        lines = []
-        for you, y_time, jarvis, j_time, intent, conf in self._rows:
+        blocks: list[str] = []
+        for idx, (you, y_time, jarvis, j_time, intent, conf) in enumerate(self._rows):
             if you:
-                lines.append(f"[{y_time}] YOU: {you}")
+                you_html = html.escape(f"[{y_time}] YOU: {you}")
+                blocks.append(f"<div>{you_html}</div>")
             if jarvis:
                 suffix = f" ({intent}, {int(conf * 100)}%)" if intent and conf is not None else ""
-                lines.append(f"[{j_time}] JARVIS: {jarvis}{suffix}")
-            lines.append("")
-        self._view.setPlainText("\n".join(lines))
-        self._view.moveCursor(self._view.textCursor().End)
+                body = jarvis
+                load_toggle = ""
+                if len(jarvis) > self._preview_chars:
+                    expanded = idx in self._expanded_jarvis_rows
+                    if expanded:
+                        load_toggle = (
+                            f' <a href="jarvis://collapse/{idx}">[show less]</a>'
+                        )
+                    else:
+                        body = jarvis[: self._preview_chars].rstrip() + "…"
+                        load_toggle = (
+                            f' <a href="jarvis://expand/{idx}">[load more]</a>'
+                        )
+                line = f"[{j_time}] JARVIS: {body}{suffix}"
+                line_html = html.escape(line).replace("\n", "<br>")
+                blocks.append(f"<div>{line_html}{load_toggle}</div>")
+            blocks.append("<div>&nbsp;</div>")
+
+        self._view.setHtml("".join(blocks))
+        sb = self._view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _on_link_clicked(self, url):
+        token = url.toString()
+        if token.startswith("jarvis://expand/"):
+            try:
+                idx = int(token.rsplit("/", 1)[-1])
+                self._expanded_jarvis_rows.add(idx)
+                self._render()
+            except Exception:
+                return
+        elif token.startswith("jarvis://collapse/"):
+            try:
+                idx = int(token.rsplit("/", 1)[-1])
+                self._expanded_jarvis_rows.discard(idx)
+                self._render()
+            except Exception:
+                return

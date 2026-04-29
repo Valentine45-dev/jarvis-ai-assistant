@@ -30,6 +30,22 @@ class WorkflowNluTests(unittest.TestCase):
     def test_non_creation_command_returns_none(self) -> None:
         self.assertIsNone(parse_create_workflow_command("run night routine"))
 
+    def test_single_line_with_windows_path_and_after_clause(self) -> None:
+        text = (
+            "hey jarvis create a morning routine where should take screenshot and store it in "
+            "C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests, after you should increase "
+            "the brightness to 100% and create a python script of a terminal-based matrix rain effect in "
+            "Python — curses, falling green characters, the works."
+        )
+        out = parse_create_workflow_command(text)
+        self.assertIsNotNone(out)
+        assert out is not None
+        steps = out["parameters"]["steps"]
+        self.assertEqual(len(steps), 3)
+        self.assertIn("C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests", steps[0])
+        self.assertIn("brightness to 100%", steps[1].lower())
+        self.assertIn("matrix rain effect", steps[2].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

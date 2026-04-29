@@ -216,6 +216,9 @@ class JarvisWindow(QMainWindow):
         self._pending_result: dict | None = None
         self._confirm_mode: str | None = None  # "claude" | "executor" | None
         self._last_result: dict | None = None   # Phase 5: last successfully dispatched intent
+        self._last_python_file: str = ""
+        self._last_directory: str = ""
+        self._previous_user_command: str = ""
 
         # ── Quick settings popover (TopBar sliders icon) ──────────────────────
         # Shared session flags are persisted in config and mirrored in both
@@ -575,12 +578,14 @@ class JarvisWindow(QMainWindow):
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
         # Cap history to avoid unbounded memory growth
+        previous_cmd = self._history[-1]["you"] if self._history else self._previous_user_command
         if len(self._history) >= _HISTORY_MAX:
             self._history = self._history[-(  _HISTORY_MAX - 1):]
         self._history.append({
             "time": now, "you": display_cmd, "jarvis": "", "jTime": "",
             "intent": "", "conf": 0.0, "status": "pending",
         })
+        self._previous_user_command = display_cmd
         self._dashboard.left.transcript.add_exchange(display_cmd, now)
         self._botbar.increment_commands()
         self._cmd_count += 1
@@ -655,7 +660,15 @@ class JarvisWindow(QMainWindow):
                 )
             self._brain_result_ready.emit(result)
 
-        ask_claude_async(cmd, callback=_on_result)
+        ask_claude_async(
+            cmd,
+            callback=_on_result,
+            context={
+                "previous_command": previous_cmd or "",
+                "last_python_file": self._last_python_file,
+                "last_directory": self._last_directory,
+            },
+        )
 
     def _on_brain_result(self, result: dict):
         """Runs on the Qt main thread after brain.py returns."""
@@ -812,6 +825,23 @@ class JarvisWindow(QMainWindow):
                         exec_out: dict) -> None:
         """Update all HUD surfaces after dispatch completes (must run on main thread)."""
         exec_ok = bool(exec_out.get("success"))
+        if exec_ok:
+            last_py = str(exec_out.get("last_python_file") or "").strip()
+            last_dir = str(exec_out.get("last_directory") or "").strip()
+            if last_py:
+                self._last_python_file = last_py
+            if last_dir:
+                self._last_directory = last_dir
+
+            if intent == "file_operation" and result.get("action") == "create_file":
+                p = str((result.get("parameters") or {}).get("path") or "").strip()
+                if p.lower().endswith(".py"):
+                    self._last_python_file = p
+                    try:
+                        from pathlib import Path as _Path
+                        self._last_directory = str(_Path(p).parent)
+                    except Exception:
+                        pass
 
         j_time = datetime.now().strftime("%H:%M")
         self._dashboard.left.typing.hide_typing()

@@ -19,9 +19,60 @@ def _truncate(text: str, limit: int = 2000) -> str:
     return text
 
 
+def _valid_cwd(cwd: str | None) -> str | None:
+    if not cwd:
+        return None
+    try:
+        p = Path(str(cwd).strip().strip('"')).expanduser()
+        return str(p) if p.is_dir() else None
+    except Exception:
+        return None
+
+
+def _resolve_script_path(script_hint: str, cwd: str | None) -> Path | None:
+    hint = (script_hint or "").strip().strip('"')
+    if not hint:
+        return None
+    p = Path(hint).expanduser()
+    if p.exists():
+        return p
+
+    roots: list[Path] = []
+    vcwd = _valid_cwd(cwd)
+    if vcwd:
+        roots.append(Path(vcwd))
+    roots.append(Path.cwd())
+
+    # Direct relative checks first (fast path)
+    for r in roots:
+        rp = (r / p)
+        if rp.exists():
+            return rp
+
+    # Basename search for common "run matrix_rain.py" style follow-ups.
+    # Keep bounded to avoid expensive full-drive scans.
+    if p.suffix and len(p.parts) == 1:
+        name = p.name
+        for r in roots:
+            try:
+                matches: list[Path] = []
+                for m in r.rglob(name):
+                    if m.is_file():
+                        matches.append(m)
+                        if len(matches) >= 12:
+                            break
+                if matches:
+                    matches.sort(key=lambda x: (len(x.parts), str(x)))
+                    return matches[0]
+            except Exception:
+                continue
+    return None
+
+
 def _handle_code_execution(action: str, params: dict) -> dict:
     code = params.get("code", params.get("script_path", ""))
-    cwd  = params.get("working_directory", None)
+    cwd_raw = params.get("working_directory", None)
+    cwd = _valid_cwd(cwd_raw)
 
     # ── PowerShell ────────────────────────────────────────────────────────────
     if action == "run_powershell":
@@ -174,12 +225,13 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             return _err(str(exc))
 
     if action == "run_script":
-        p = Path(code).expanduser()
-        if not p.exists():
-            return _err(f"Script not found: {p}")
+        p = _resolve_script_path(str(code), cwd_raw)
+        if p is None:
+            return _err(f"Script not found: {code}")
+        run_cwd = cwd or str(p.parent)
         result = subprocess.run(
             [sys.executable, str(p)] if p.suffix == ".py" else [str(p)],
-            capture_output=True, text=True, timeout=60, cwd=cwd,
+            capture_output=True, text=True, timeout=60, cwd=run_cwd,
         )
         out = _truncate((result.stdout or result.stderr or "").strip())
         return _ok(out) if result.returncode == 0 else _err(out)

@@ -307,10 +307,18 @@ def set_volume(action: str, level: int | None = None) -> dict:
         vol       = cast(interface, POINTER(IAudioEndpointVolume))
 
         if action == "volume_mute":
+            # Idempotent mute: "mute" should always end in muted state.
             is_muted = bool(vol.GetMute())
-            vol.SetMute(not is_muted, None)
-            _osd_trigger(vol, vol.GetMasterVolumeLevelScalar())
-            return _ok("Unmuted" if is_muted else "Muted")
+            if not is_muted:
+                vol.SetMute(True, None)
+            return _ok("Muted")
+
+        if action == "volume_unmute":
+            # Idempotent unmute counterpart.
+            is_muted = bool(vol.GetMute())
+            if is_muted:
+                vol.SetMute(False, None)
+            return _ok("Unmuted")
 
         if level is not None:
             scalar = max(0.0, min(1.0, level / 100.0))
@@ -346,9 +354,11 @@ def set_volume(action: str, level: int | None = None) -> dict:
             "volume_up":   "volumeup",
             "volume_down": "volumedown",
             "volume_mute": "volumemute",
+            "volume_unmute": "volumemute",
         }
         key = key_map.get(action, "volumeup")
-        for _ in range(5):    # 5 presses ≈ 10% change
+        presses = 5 if action in ("volume_up", "volume_down") else 1
+        for _ in range(presses):
             pag.press(key)
         return _ok(action.replace("_", " ").title())
     except pag.FailSafeException:

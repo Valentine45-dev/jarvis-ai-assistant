@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 
 # ── Suppress follow-up: Claude's response is already a complete statement ─────
@@ -112,8 +113,12 @@ def _first_sentence(text: str, cap: int = 150) -> str:
 def _tts_safe_output(output: str) -> str:
     """Sanitize raw code/script stdout for spoken delivery.
 
-    Removes decorative separator lines, shortens absolute file paths to just
-    the filename, and caps at 180 chars so TTS stays concise.
+    Removes decorative separator lines and shortens absolute file paths to just
+    the filename/final folder segment.
+
+    Important: do not hard-truncate here. Transcript should retain the full
+    response so the UI "load more" control can expand it; TTS length is capped
+    later in main.py before speaking.
     """
     if not output:
         return "Done."
@@ -139,12 +144,89 @@ def _tts_safe_output(output: str) -> str:
         )
         kept.append(shortened)
 
-    text = "  ".join(kept).strip()
+    text = _speech_compact("  ".join(kept).strip())
     if not text:
         return "Done."
-    if len(text) > 180:
-        text = text[:180].rsplit(" ", 1)[0].rstrip(",;:") + "…"
     return text
+
+
+def _compact_path_for_speech(path: str) -> str:
+    s = (path or "").strip().strip('"').strip("'")
+    if not s:
+        return s
+    # Normalize separators and remove drive prefix for speech.
+    s = s.replace("\\", "/")
+    s = re.sub(r"^[A-Za-z]:", "", s)
+    parts = [p for p in s.split("/") if p and p not in (".", "..")]
+    if not parts:
+        return s
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[-2]}/{parts[-1]}"
+
+
+def _compact_url_for_speech(url: str) -> str:
+    raw = (url or "").strip().strip('"').strip("'")
+    if not raw:
+        return raw
+    p = urlparse(raw)
+    host = (p.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return raw
+    return host
+
+
+def _speech_compact(text: str) -> str:
+    """Compact file paths and URLs for spoken output."""
+    if not text:
+        return text
+
+    out = text
+
+    # URLs: keep only host/domain for speech brevity.
+    out = re.sub(
+        r"https?://[^\s)>\]\"']+",
+        lambda m: _compact_url_for_speech(m.group(0)),
+        out,
+    )
+
+    # Windows absolute paths, including spaces.
+    out = re.sub(
+        r"[A-Za-z]:\\[^\r\n\"']+",
+        lambda m: _compact_path_for_speech(m.group(0)),
+        out,
+    )
+
+    # Unix absolute paths.
+    out = re.sub(
+        r"/(?:[^/\s]+/)*[^/\s]+",
+        lambda m: _compact_path_for_speech(m.group(0)),
+        out,
+    )
+
+    return out
+
+
+def _traceback_summary(error: str) -> str:
+    """Extract 'ExceptionType: message' from Python traceback text."""
+    if not error:
+        return ""
+    lines = [ln.strip() for ln in error.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    tail = lines[-1]
+    if ":" in tail:
+        cls, msg = tail.split(":", 1)
+        cls = cls.strip()
+        msg = msg.strip()
+        if cls.endswith("Error") or cls.endswith("Exception"):
+            return f"{cls}: {msg}" if msg else cls
+    # Fallback when traceback tail is non-standard.
+    if tail.endswith("Error") or tail.endswith("Exception"):
+        return tail
+    return ""
 
 
 # ── Data-rich follow-up builders ──────────────────────────────────────────────
@@ -210,7 +292,8 @@ def _smart_error(
     """Build an informative error message that names the specific thing that failed."""
     params   = params or {}
     error    = (error or "").strip()
-    short_e  = (error[:100] + "…" if len(error) > 100 else error)
+    compact_err = _speech_compact(error)
+    short_e  = (compact_err[:100] + "…" if len(compact_err) > 100 else compact_err)
 
     if intent == "open_app":
         app = (
@@ -270,13 +353,19 @@ def _smart_error(
             return "Brightness adjustment failed." + (f" {short_e}" if short_e else "")
 
     if intent == "code_execution":
+        tb = _speech_compact(_traceback_summary(error))
+        if tb:
+            return f"Execution failed.\n{tb}"
         return "Execution failed." + (f"\n{short_e}" if short_e else "")
 
     if intent == "automation_task":
         if action == "run_workflow":
             name = params.get("task_name", "")
             base = f"Workflow {name!r} hit an error." if name else "Workflow failed."
-            return f"{base}\n{short_e}" if short_e else base
+            full_e = compact_err.strip()
+            if full_e:
+                return f"{base}\n{full_e}"
+            return base
 
     if intent == "reminder_task":
         if action == "set_reminder":
@@ -316,7 +405,7 @@ class ResponseAssembler:
 
         # ── Error path ────────────────────────────────────────────────────────
         if not exec_ok:
-            return (_smart_error(intent, action, error, params), None)
+            return (_speech_compact(_smart_error(intent, action, error, params)), None)
 
         # ── Output-IS-response (listings, OCR, code, read_page) ──────────────
         if _in(intent, action, _OUTPUT_IS_RESPONSE):
@@ -324,13 +413,14 @@ class ResponseAssembler:
             # Code output can contain separator bars, long paths, and hundreds
             # of lines — sanitize to a spoken-length summary before TTS.
             tts_out = _tts_safe_output(output) if intent == "code_execution" else output
-            return (_pool_say(intent, action, "ok", tts_out, error), None)
+            return (_speech_compact(_pool_say(intent, action, "ok", tts_out, error)), None)
 
         # ── Standard path: Claude primary + optional data-rich follow ─────────
         primary = _first_sentence((claude_response or "").strip())
         if not primary:
             from core.personality import say as _pool_say
             primary = _pool_say(intent, action, "ok", output, error)
+        primary = _speech_compact(primary)
 
         # Suppress follow-up for self-contained responses
         if _in(intent, action, _SUPPRESS_FOLLOW):
@@ -338,7 +428,7 @@ class ResponseAssembler:
 
         # Build data-rich follow-up
         follow = _data_follow(intent, action, output, params)
-        return (primary, follow)
+        return (primary, _speech_compact(follow) if follow else None)
 
     def build_scheduled(
         self,
@@ -356,15 +446,15 @@ class ResponseAssembler:
         params = params or {}
 
         if not exec_ok:
-            return _smart_error(intent, action, error, params)
+            return _speech_compact(_smart_error(intent, action, error, params))
 
         follow = _data_follow(intent, action, output, params)
         if follow:
-            return follow
+            return _speech_compact(follow)
 
         # Fallback: personality pool for scheduled actions
         from core.personality import ack_scheduled_action
-        return ack_scheduled_action(intent, action, True, output, error)
+        return _speech_compact(ack_scheduled_action(intent, action, True, output, error))
 
 
 responder = ResponseAssembler()

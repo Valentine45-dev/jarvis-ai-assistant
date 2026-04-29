@@ -61,9 +61,10 @@ class _GlassDialog(QDialog):
 
 class _NewWorkflowDialog(_GlassDialog):
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, workflow: dict | None = None):
         super().__init__(parent)
         self.setMinimumWidth(460)
+        is_edit = workflow is not None
 
         # Title bar
         title_bar = QWidget()
@@ -71,7 +72,7 @@ class _NewWorkflowDialog(_GlassDialog):
         title_bar.setStyleSheet("background:transparent;")
         tb = QHBoxLayout(title_bar)
         tb.setContentsMargins(16, 0, 12, 0)
-        lbl = QLabel("NEW WORKFLOW")
+        lbl = QLabel("EDIT WORKFLOW" if is_edit else "NEW WORKFLOW")
         lbl.setFont(_mono(11, bold=True))
         lbl.setStyleSheet(f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;")
         x_btn = QPushButton("✕")
@@ -144,7 +145,7 @@ class _NewWorkflowDialog(_GlassDialog):
         )
         cancel.clicked.connect(self.reject)
 
-        create = QPushButton("CREATE")
+        create = QPushButton("SAVE" if is_edit else "CREATE")
         create.setFixedHeight(30)
         create.setCursor(Qt.PointingHandCursor)
         create.setDefault(True)
@@ -161,6 +162,12 @@ class _NewWorkflowDialog(_GlassDialog):
         fl.addLayout(btn_row)
 
         self._body.addWidget(form)
+        if workflow:
+            self._name_inp.setText(str(workflow.get("name", "")))
+            self._trigger_inp.setText(str(workflow.get("trigger", "")))
+            step_lines = [s if isinstance(s, str) else _step_label(s) for s in workflow.get("steps", [])]
+            self._steps_edit.setPlainText("\n".join(step_lines))
+            self._update_counter()
 
     @staticmethod
     def _field(layout: QVBoxLayout, label: str, placeholder: str) -> QLineEdit:
@@ -522,6 +529,7 @@ class AutomationView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list[_WorkflowRow] = []
+        self._selected_workflow_id: str = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
@@ -575,9 +583,24 @@ class AutomationView(QWidget):
             "QPushButton:hover{background:rgba(0,229,255,0.20);}"
         )
         new_btn.clicked.connect(self._create_workflow)
+        self._edit_btn = QPushButton("EDIT")
+        self._edit_btn.setFixedHeight(22)
+        self._edit_btn.setCursor(Qt.PointingHandCursor)
+        self._edit_btn.setEnabled(False)
+        self._edit_btn.setStyleSheet(
+            f"QPushButton{{color:{CYAN};background:rgba(0,229,255,0.06);"
+            "border:1px solid rgba(0,229,255,0.24);border-radius:3px;"
+            "font-family:'Roboto Mono';font-size:9px;font-weight:700;"
+            "padding:0 8px;letter-spacing:1px;}"
+            "QPushButton:hover{background:rgba(0,229,255,0.16);}"
+            "QPushButton:disabled{color:rgba(132,147,150,0.45);"
+            "background:transparent;border:1px solid rgba(132,147,150,0.16);}"
+        )
+        self._edit_btn.clicked.connect(self._edit_selected_workflow)
 
         lib_hdr_lay.addWidget(lib_title, 1)
         lib_hdr_lay.addWidget(self._wf_count_lbl)
+        lib_hdr_lay.addWidget(self._edit_btn)
         lib_hdr_lay.addWidget(new_btn)
 
         lib_sep = QFrame()
@@ -682,6 +705,49 @@ class AutomationView(QWidget):
         })
         self._exec_log.append_line(f"[SYSTEM] Workflow '{name}' created with {len(steps)} step(s).")
 
+    def _edit_selected_workflow(self):
+        if not self._selected_workflow_id:
+            return
+        wf = workflow_library.get(self._selected_workflow_id)
+        if not wf:
+            self._exec_log.append_line("[WARN] Edit failed — selected workflow no longer exists.")
+            return
+        dlg = _NewWorkflowDialog(self, workflow=wf)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        name, trigger, steps = dlg.get_values()
+        if not name:
+            return
+        if not trigger:
+            trigger = f"run {name.lower()}"
+
+        old_id = str(wf.get("id") or self._selected_workflow_id).strip()
+        new_id = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
+        if not new_id:
+            return
+
+        if new_id != old_id:
+            existing = workflow_library.get(new_id)
+            if existing is not None:
+                self._exec_log.append_line(
+                    f"[WARN] Edit blocked — another workflow already uses id '{new_id}'."
+                )
+                return
+            if not workflow_library.rename(old_id, name):
+                self._exec_log.append_line(f"[WARN] Edit failed — could not rename '{old_id}'.")
+                return
+            wf = workflow_library.get(new_id) or {}
+            old_id = new_id
+
+        updated = dict(wf)
+        updated["id"] = old_id
+        updated["name"] = name
+        updated["trigger"] = trigger
+        updated["steps"] = steps
+        workflow_library.add(updated)
+        self._selected_workflow_id = old_id
+        self._exec_log.append_line(f"[SYSTEM] Workflow '{name}' updated ({len(steps)} step(s)).")
+
     def _delete_workflow(self, wf_id: str, display_name: str):
         dlg = _ConfirmDeleteDialog(display_name, self)
         if dlg.exec_() != QDialog.Accepted:
@@ -704,7 +770,12 @@ class AutomationView(QWidget):
             row.set_active(i == idx)
         workflows = workflow_library.list_all()
         if 0 <= idx < len(workflows):
+            self._selected_workflow_id = str(workflows[idx].get("id", ""))
+            self._edit_btn.setEnabled(True)
             self._breakdown.show_workflow(workflows[idx])
+        else:
+            self._selected_workflow_id = ""
+            self._edit_btn.setEnabled(False)
 
     def paintEvent(self, _):
         p = QPainter(self)

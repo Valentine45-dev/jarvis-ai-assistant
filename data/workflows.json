@@ -13,16 +13,16 @@
       "last_run": "2026-04-29T15:45:55Z"
     },
     {
-      "id": "noon_routine",
-      "name": "Noon Routine",
-      "trigger": "run noon routine",
-      "steps": [
-        "increase birghtness to 50%",
-        "crete a python script of todo app in C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests",
-        "open youtube and search nba games today"
-      ],
+      "id": "morning_routine",
+      "name": "morning_routine",
+      "trigger": "run morning routine",
       "enabled": true,
-      "last_run": null
+      "last_run": "",
+      "steps": [
+        "Open Chrome browser",
+        "Search Google for Facebook",
+        "Create a Python script file called matrix_rain.py with a terminal-based Matrix rain effect using curses, falling green characters in C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests"
+      ]
     }
   ]
 }
