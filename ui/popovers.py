@@ -96,6 +96,7 @@ class QuickSettingsPopover(QFrame):
     tts_muted_changed    = pyqtSignal(bool)
     auto_confirm_changed = pyqtSignal(bool)
     dim_mode_changed     = pyqtSignal(bool)
+    wake_word_changed    = pyqtSignal(bool)
     open_settings        = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -155,6 +156,14 @@ class QuickSettingsPopover(QFrame):
         self._row_dim.toggled.connect(self.dim_mode_changed.emit)
         outer.addWidget(self._row_dim)
 
+        self._row_wake = _ToggleRow(
+            "WAKE WORD",
+            "Listen for 'Jarvis' to activate voice input.",
+            checked=True,
+        )
+        self._row_wake.toggled.connect(self.wake_word_changed.emit)
+        outer.addWidget(self._row_wake)
+
         outer.addWidget(self._sep())
 
         # Footer link → full settings page
@@ -191,12 +200,14 @@ class QuickSettingsPopover(QFrame):
         tts_muted: bool,
         auto_confirm: bool,
         dim_mode: bool = False,
+        wake_word: bool = True,
     ) -> None:
         """Reflect external flag values without re-emitting toggle signals."""
         self._row_mic.set_checked(mic_muted)
         self._row_tts.set_checked(tts_muted)
         self._row_conf.set_checked(auto_confirm)
         self._row_dim.set_checked(dim_mode)
+        self._row_wake.set_checked(wake_word)
 
     def show_below(self, anchor: QWidget, x_offset: int = 0, y_gap: int = 6) -> None:
         """Pop up directly under *anchor*, right-aligned to its right edge.

@@ -194,6 +194,7 @@ class SettingsView(QWidget):
     tts_muted_changed    = pyqtSignal(bool)
     auto_confirm_changed = pyqtSignal(bool)
     dim_mode_changed     = pyqtSignal(bool)
+    wake_word_changed    = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -437,6 +438,12 @@ class SettingsView(QWidget):
             "Reduce brightness for low-light use.",
         )
         self._flag_dim.toggled.connect(self.dim_mode_changed.emit)
+        self._flag_wake = self._make_flag_row(
+            sf_left, "WAKE_WORD",
+            "Listen for 'Jarvis' to activate voice input.",
+        )
+        self._flag_wake.setChecked(True)
+        self._flag_wake.toggled.connect(self.wake_word_changed.emit)
 
         sfb.addLayout(sf_left, 1)
         sfb.addLayout(sf_right, 1)
@@ -606,6 +613,13 @@ class SettingsView(QWidget):
         config.tts_speed          = self._tts_slider.value()
         config.noise_gate         = self._noise_toggle.isChecked()
         config.mic_device         = self._mic_device_combo.currentData()
+        # Session flags — capture current toggle state so APPLY_CFG is a
+        # complete snapshot of all settings, not just API/audio fields.
+        config.mic_muted          = self._flag_mic.isChecked()
+        config.tts_muted          = self._flag_tts.isChecked()
+        config.auto_confirm       = self._flag_conf.isChecked()
+        config.dim_mode           = self._flag_dim.isChecked()
+        config.wake_word_enabled  = self._flag_wake.isChecked()
 
         try:
             config.save()
@@ -639,12 +653,14 @@ class SettingsView(QWidget):
         tts_muted: bool,
         auto_confirm: bool,
         dim_mode: bool = False,
+        wake_word: bool = True,
     ) -> None:
         """Reflect external flag values without re-emitting toggle signals."""
         self._flag_mic.setChecked(mic_muted)
         self._flag_tts.setChecked(tts_muted)
         self._flag_conf.setChecked(auto_confirm)
         self._flag_dim.setChecked(dim_mode)
+        self._flag_wake.setChecked(wake_word)
 
     @staticmethod
     def _make_flag_row(

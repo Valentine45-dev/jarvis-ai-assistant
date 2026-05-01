@@ -39,6 +39,7 @@ class AppConfig:
     tts_muted: bool = False
     auto_confirm: bool = False
     dim_mode: bool = False
+    wake_word_enabled: bool = True
     weather_default_city: str = "Monrovia,LR"
 
     @classmethod
@@ -84,7 +85,9 @@ class AppConfig:
 
     def save(self):
         """Persist non-sensitive config to JSON. API keys stay in .env only."""
-        _SENSITIVE = {"anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key"}
+        _SENSITIVE = {
+            "anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key",
+        }
         data = {k: v for k, v in asdict(self).items() if k not in _SENSITIVE}
         _JSON_PATH.write_text(json.dumps(data, indent=2))
 

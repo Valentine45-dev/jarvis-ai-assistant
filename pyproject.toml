@@ -7,6 +7,9 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
     "elevenlabs>=2.44.0",
+    "livekit-agents>=1.5.6",
+    "livekit-plugins-deepgram>=1.5.6",
+    "livekit-plugins-silero>=1.5.6",
     "numpy>=2.4.4",
     "playwright>=1.58.0",
     "psutil>=7.2.2",

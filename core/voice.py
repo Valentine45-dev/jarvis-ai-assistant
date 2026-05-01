@@ -9,13 +9,22 @@ Public API (unchanged — main.py and executor.py import from here):
     voice_engine.tts_muted     → bool
     voice_engine.set_mic_muted(bool)
     voice_engine.set_tts_muted(bool)
+    voice_engine.bridge        → VoiceBridge (lazy; access only from main thread)
     _EL_VOICES                 → dict[str, str]  (re-exported for executor.py)
+
+Signals (on voice_engine.bridge — connect from main thread):
+    transcript_partial(str)  — interim word-by-word transcript
+    transcript_final(str)    — confirmed full utterance
+    speaking_started()       — TTS audio has begun
+    speaking_finished()      — TTS audio is done
 """
 
 from __future__ import annotations
 
 import threading
 from typing import Callable
+
+from PyQt5.QtCore import QObject, pyqtSignal
 
 from config.settings import config
 from core.audio_pipeline import (
@@ -32,9 +41,25 @@ __all__ = [
     "_EL_VOICES",
     "TtsProviderError",
     "TtsProviderErrorKind",
+    "VoiceBridge",
     "VoiceEngine",
     "voice_engine",
 ]
+
+
+# ── Signal carrier ────────────────────────────────────────────────────────────
+
+class VoiceBridge(QObject):
+    """Qt signal carrier for VoiceEngine.
+
+    Kept separate from VoiceEngine so that VoiceEngine can be instantiated at
+    module load time (before QApplication exists).  VoiceBridge is created
+    lazily via voice_engine.bridge on the first access from the main thread.
+    """
+    transcript_partial = pyqtSignal(str)   # interim word-by-word transcript
+    transcript_final   = pyqtSignal(str)   # confirmed full utterance
+    speaking_started   = pyqtSignal()      # TTS audio has begun playing
+    speaking_finished  = pyqtSignal()      # TTS audio finished
 
 
 class VoiceEngine:
@@ -54,6 +79,26 @@ class VoiceEngine:
         self._listening = threading.Event()
         self._mic_muted = False
         self._tts_muted = False
+        self._bridge: VoiceBridge | None = None  # lazy — created on main thread
+
+    # ── Signal bridge ─────────────────────────────────────────────────────────
+
+    @property
+    def bridge(self) -> VoiceBridge:
+        """Return the Qt signal carrier, creating it on first access.
+
+        MUST be first accessed from the Qt main thread (QApplication must exist).
+        Subsequent emit() calls from worker threads are safe — Qt queues them.
+        """
+        if self._bridge is None:
+            self._bridge = VoiceBridge()
+        return self._bridge
+
+    def _emit(self, signal_name: str, *args) -> None:
+        """Thread-safe helper: emit a bridge signal only if bridge is initialised."""
+        if self._bridge is None:
+            return
+        getattr(self._bridge, signal_name).emit(*args)
 
     # ── Mute controls ────────────────────────────────────────────────────────
 
@@ -89,7 +134,7 @@ class VoiceEngine:
         on_ready: Callable[[], None] | None = None,
         on_done:  Callable[[], None] | None = None,
     ) -> None:
-        """Speak *text* via ElevenLabs (pyttsx3 fallback). Non-blocking."""
+        """Speak *text* (pyttsx3; ElevenLabs via tts_elevenlabs.py when re-enabled). Non-blocking."""
         if not text.strip():
             return
         if self._tts_muted:
@@ -97,7 +142,16 @@ class VoiceEngine:
             self._fire(on_ready)
             self._fire(on_done)
             return
-        self._tts.say(text, on_ready=on_ready, on_done=on_done)
+
+        def _ready_wrapper():
+            self._emit("speaking_started")
+            self._fire(on_ready)
+
+        def _done_wrapper():
+            self._emit("speaking_finished")
+            self._fire(on_done)
+
+        self._tts.say(text, on_ready=_ready_wrapper, on_done=_done_wrapper)
 
     def switch_tts_voice(
         self,
@@ -153,7 +207,8 @@ class VoiceEngine:
             if on_error is not None:
                 on_error("Microphone muted.")
             return
-        print("[voice] starting _listen_thread")
+
+        print("[voice] starting _listen_thread (Google STT)")
         threading.Thread(
             target=self._listen_thread,
             args=(callback, on_error, timeout, phrase_time_limit),

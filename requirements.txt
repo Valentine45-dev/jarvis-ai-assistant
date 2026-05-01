@@ -1,0 +1,36 @@
+# ── Core UI ──────────────────────────────────────────────────────────────────
+PyQt5==5.15.11
+qtawesome>=0.8
+
+# ── Claude / AI ───────────────────────────────────────────────────────────────
+anthropic>=0.25
+openai>=2.0
+
+# ── Voice — LiveKit streaming pipeline (Deepgram STT + Silero VAD) ────────────
+livekit-agents==1.5.6
+livekit-plugins-deepgram==1.5.6
+livekit-plugins-silero==1.5.6
+sounddevice>=0.4
+
+# ── Voice — Google STT fallback ───────────────────────────────────────────────
+SpeechRecognition>=3.10
+PyAudio>=0.2.14
+
+# ── TTS fallback (pyttsx3) ────────────────────────────────────────────────────
+pyttsx3>=2.90
+
+# ── Browser automation ────────────────────────────────────────────────────────
+playwright>=1.40
+
+# ── OCR ───────────────────────────────────────────────────────────────────────
+pytesseract>=0.3.10
+Pillow>=10.0
+
+# ── System / OS ───────────────────────────────────────────────────────────────
+psutil>=5.9
+pycaw>=20181226          # Windows audio volume control
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0
+requests>=2.31
+numpy>=1.26

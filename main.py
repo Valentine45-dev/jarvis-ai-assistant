@@ -67,7 +67,6 @@ _SETTINGS_NAV_IDX = 4
 _HISTORY_MAX = 500
 
 # Maximum characters sent to TTS for data-heavy actions (read_page, OCR, code output).
-# ElevenLabs free tier has a monthly character quota — long read_page dumps burn it fast.
 _TTS_MAX_CHARS = 800
 
 class JarvisWindow(QMainWindow):
@@ -153,6 +152,7 @@ class JarvisWindow(QMainWindow):
         self._settings_view.tts_muted_changed.connect(self._on_tts_mute_toggled)
         self._settings_view.auto_confirm_changed.connect(self._on_auto_confirm_toggled)
         self._settings_view.dim_mode_changed.connect(self._on_dim_toggled)
+        self._settings_view.wake_word_changed.connect(self._on_wake_word_toggle)
         self._stack.addWidget(self._settings_view)
         right_lay.addWidget(self._stack, 1)
 
@@ -186,9 +186,13 @@ class JarvisWindow(QMainWindow):
             self._on_action_followup_tts, Qt.QueuedConnection
         )
 
+
         # Start always-on wake-word detector (fires _wake_word_signal on detection)
+        self._wake_word_enabled = bool(getattr(config, "wake_word_enabled", True))
         from core.wake_word import wake_detector
         wake_detector.start(lambda: self._wake_word_signal.emit())
+        if not self._wake_word_enabled:
+            wake_detector.pause()
 
         # Wire backend signals so reminders and errors surface in the HUD
         signals.status_changed.connect(self._on_status_signal)
@@ -218,6 +222,7 @@ class JarvisWindow(QMainWindow):
         self._quick_settings.mic_muted_changed.connect(self._on_mic_mute_toggled)
         self._quick_settings.tts_muted_changed.connect(self._on_tts_mute_toggled)
         self._quick_settings.auto_confirm_changed.connect(self._on_auto_confirm_toggled)
+        self._quick_settings.wake_word_changed.connect(self._on_wake_word_toggle)
         self._quick_settings.open_settings.connect(
             lambda: self._sidebar.goto(_SETTINGS_NAV_IDX)
         )
@@ -298,11 +303,16 @@ class JarvisWindow(QMainWindow):
             self._settings_view,
             auto_confirm=self._auto_confirm,
             dim_mode=self._dim_mode,
+            wake_word=self._wake_word_enabled,
         )
 
     def _persist_session_flags(self) -> None:
         """Persist shared quick/full settings flags to config JSON."""
-        persist_session_flags(auto_confirm=self._auto_confirm, dim_mode=self._dim_mode)
+        persist_session_flags(
+            auto_confirm=self._auto_confirm,
+            dim_mode=self._dim_mode,
+            wake_word=self._wake_word_enabled,
+        )
 
     def _nav(self, idx):
         self._stack.setCurrentIndex(idx)
@@ -410,10 +420,11 @@ class JarvisWindow(QMainWindow):
         if not text:
             return
         now = time.monotonic()
-        is_voice_provider_error = (
-            "voice switch failed" in text.lower()
-            and "elevenlabs" in text.lower()
-        )
+        # [ELEVENLABS-DISABLED] is_voice_provider_error = (
+        # [ELEVENLABS-DISABLED]     "voice switch failed" in text.lower()
+        # [ELEVENLABS-DISABLED]     and "elevenlabs" in text.lower()
+        # [ELEVENLABS-DISABLED] )
+        is_voice_provider_error = False  # [ELEVENLABS-DISABLED] always False until re-enabled
         if (
             is_voice_provider_error
             and text == self._last_error_toast_msg
@@ -1177,6 +1188,18 @@ class JarvisWindow(QMainWindow):
         else:
             self._dim_overlay.hide()
 
+    def _on_wake_word_toggle(self, enabled: bool):
+        from core.wake_word import wake_detector
+        self._wake_word_enabled = bool(enabled)
+        self._sync_session_flag_views()
+        self._persist_session_flags()
+        if enabled:
+            wake_detector.resume()
+            self._dashboard.toast.show_toast("Wake word active — say 'Jarvis' to start.", "info")
+        else:
+            wake_detector.pause()
+            self._dashboard.toast.show_toast("Wake word disabled — use mic button to speak.", "warning")
+
     # ── Command palette handlers ──────────────────────────────────────────────
 
     def _summon_window(self) -> None:
@@ -1220,6 +1243,12 @@ class JarvisWindow(QMainWindow):
     def _set_state(self, s):
         self._state = s
 
+        # Clear the listening flag whenever we leave "listening" state so the
+        # mic button icon updates correctly.
+        if s != "listening":
+            from core.voice import voice_engine as _ve
+            _ve._listening.clear()
+
         # Keep wake detector paused while the system is active.
         # The deferred resume guards against stale QTimer callbacks: if JARVIS
         # transitions idle→thinking in <300ms (always), without the guard the
@@ -1230,6 +1259,9 @@ class JarvisWindow(QMainWindow):
             def _resume_if_still_idle():
                 # Do not resume detector while TTS is still speaking; this prevents
                 # self-triggering wake events from JARVIS's own voice output.
+                # Also skip resume if the user has disabled the wake word.
+                if not self._wake_word_enabled:
+                    return
                 if self._state == "idle" and not voice_engine.is_speaking:
                     wake_detector.resume()
                 elif self._state == "idle":

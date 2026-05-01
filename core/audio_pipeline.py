@@ -8,11 +8,11 @@ Classes
 -------
 AudioCapture   — sounddevice mic capture with RMS VAD + guaranteed stream cleanup
 SttEngine      — Google STT with typed SttError (NO_SPEECH / NETWORK / TIMEOUT / DEVICE)
-TtsEngine      — ElevenLabs streaming + pyttsx3 fallback; exposes is_speaking for overlap guard
+TtsEngine      — pyttsx3 TTS; ElevenLabs streaming in core/tts_elevenlabs.py (disabled)
 
 Constants
 ---------
-_EL_VOICES       — voice-key → ElevenLabs voice-ID map (re-exported via voice.py)
+_EL_VOICES        — voice-key → ElevenLabs voice-ID map (re-exported via voice.py)
 _DEFAULT_VOICE_ID — fallback when config.tts_voice is unrecognised
 SttError          — enum of typed failure modes for the STT path
 """
@@ -122,6 +122,12 @@ def _classify_elevenlabs_error(exc: Exception) -> TtsProviderError:
     )
 
 
+from core.tts_elevenlabs import (
+    say_elevenlabs  as _say_elevenlabs_fn,
+    probe_voice     as _probe_el_voice_fn,
+)
+
+
 # ── Lazy module imports ───────────────────────────────────────────────────────
 
 def _sd():
@@ -136,14 +142,6 @@ def _sr():
     try:
         import speech_recognition as sr
         return sr
-    except ImportError:
-        return None
-
-
-def _el():
-    try:
-        import elevenlabs
-        return elevenlabs
     except ImportError:
         return None
 
@@ -427,12 +425,15 @@ class TtsEngine:
             with self._lock:
                 if config.elevenlabs_api_key:
                     try:
-                        self._say_elevenlabs(text, _on_ready_once, on_done)
+                        _say_elevenlabs_fn(
+                            text, _on_ready_once, on_done, self._notify,
+                            voice_id=_EL_VOICES.get(config.tts_voice, _DEFAULT_VOICE_ID),
+                            api_key=config.elevenlabs_api_key,
+                        )
                         return
                     except Exception as exc:
                         self._last_provider_error = _classify_elevenlabs_error(exc)
                         print(f"[tts] ElevenLabs FAILED, falling back to pyttsx3: {exc}")
-                        # If on_ready already fired, don't duplicate it in fallback.
                         if ready_called.is_set():
                             self._notify(on_done)
                             return
@@ -441,28 +442,14 @@ class TtsEngine:
             self._speaking.clear()
 
     def probe_elevenlabs_voice(self, voice_key: str, text: str = "Voice check.") -> None:
-        """Validate voice/provider health without committing playback in UI flow."""
-        if not config.elevenlabs_api_key:
-            return
-        el = _el()
-        if el is None:
-            return
-        voice_id = _EL_VOICES.get(voice_key, _DEFAULT_VOICE_ID)
-        client = el.ElevenLabs(api_key=config.elevenlabs_api_key)
-        try:
-            # Small non-streaming probe to surface auth/quota failures early.
-            for chunk in client.text_to_speech.convert(
-                voice_id=voice_id,
+        if config.elevenlabs_api_key:
+            _probe_el_voice_fn(
+                voice_key,
+                api_key=config.elevenlabs_api_key,
+                el_voices=_EL_VOICES,
+                default_id=_DEFAULT_VOICE_ID,
                 text=text,
-                model_id="eleven_multilingual_v2",
-                output_format="mp3_44100_128",
-            ):
-                if chunk:
-                    break
-        except Exception as exc:
-            err = _classify_elevenlabs_error(exc)
-            self._last_provider_error = err
-            raise err from exc
+            )
 
     def _notify(self, cb: Callable[[], None] | None) -> None:
         if cb is None:
@@ -472,150 +459,6 @@ class TtsEngine:
         except Exception as exc:
             if config.debug_mode:
                 print(f"[tts] callback error: {exc}")
-
-    def _say_elevenlabs(
-        self,
-        text: str,
-        on_ready: Callable[[], None] | None,
-        on_done:  Callable[[], None] | None,
-    ) -> None:
-        el = _el()
-        if el is None:
-            raise RuntimeError("elevenlabs package not installed")
-
-        voice_id = _EL_VOICES.get(config.tts_voice, _DEFAULT_VOICE_ID)
-        print(f"[tts] ElevenLabs → voice={config.tts_voice!r}  id={voice_id}")
-        client = el.ElevenLabs(api_key=config.elevenlabs_api_key)
-
-        stream_fn = getattr(client.text_to_speech, "stream", None)
-        if stream_fn is not None:
-            chunks = stream_fn(
-                voice_id=voice_id,
-                text=text,
-                model_id="eleven_multilingual_v2",
-                output_format="mp3_44100_128",
-            )
-            self._play_mp3_stream(chunks, on_ready, on_done)
-            return
-
-        # Non-streaming fallback (older EL SDK versions)
-        mp3_bytes = b"".join(
-            client.text_to_speech.convert(
-                voice_id=voice_id,
-                text=text,
-                model_id="eleven_multilingual_v2",
-                output_format="mp3_44100_128",
-            )
-        )
-        self._notify(on_ready)
-        self._play_mp3_bytes(mp3_bytes, on_done)
-
-    def _play_mp3_stream(
-        self,
-        chunks,
-        on_ready: Callable[[], None] | None,
-        on_done:  Callable[[], None] | None,
-    ) -> None:
-        """Write MP3 chunks to a temp file and play via Windows MCI as they arrive."""
-        import ctypes
-        import os as _os
-        import tempfile
-        import time
-
-        mci = ctypes.windll.winmm.mciSendStringW
-
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            tmp_path = f.name
-
-        alias   = f"jarvis_tts_{threading.get_ident()}"
-        opened  = False
-        playing = False
-
-        def _send(cmd: str) -> int:
-            return mci(cmd, None, 0, None)
-
-        def _try_start() -> bool:
-            nonlocal opened, playing
-            if opened:
-                return True
-            if _send(f'open "{tmp_path}" type mpegvideo alias {alias}') != 0:
-                return False
-            opened = True
-            if _send(f"play {alias}") != 0:
-                _send(f"close {alias}")
-                opened = False
-                return False
-            playing = True
-            self._notify(on_ready)
-            return True
-
-        def _wait_done() -> None:
-            if not opened:
-                return
-            status = ctypes.create_unicode_buffer(64)
-            for _ in range(600):    # 60 s safety cap
-                status.value = ""
-                if mci(f"status {alias} mode", status, 64, None) != 0:
-                    break
-                if status.value.lower() in {"stopped", "not ready"}:
-                    break
-                time.sleep(0.1)
-
-        try:
-            with open(tmp_path, "ab", buffering=0) as audio_file:
-                for chunk in chunks:
-                    if not chunk:
-                        continue
-                    audio_file.write(chunk)
-                    audio_file.flush()
-                    if not playing:
-                        _try_start()
-
-            if playing:
-                _wait_done()
-            else:
-                # No chunks were large enough to trigger playback start — play now.
-                self._notify(on_ready)
-                if _send(f'open "{tmp_path}" type mpegvideo alias {alias}') == 0:
-                    opened = True
-                    _send(f"play {alias} wait")
-        finally:
-            if opened:
-                _send(f"close {alias}")
-            try:
-                _os.unlink(tmp_path)
-            except OSError:
-                pass
-
-        self._notify(on_done)
-
-    def _play_mp3_bytes(
-        self,
-        mp3_bytes: bytes,
-        on_done: Callable[[], None] | None,
-    ) -> None:
-        """Play a complete MP3 buffer synchronously via Windows MCI."""
-        import ctypes
-        import tempfile
-        import os as _os
-
-        mci = ctypes.windll.winmm.mciSendStringW
-
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            f.write(mp3_bytes)
-            tmp_path = f.name
-
-        alias = f"jarvis_tts_bytes_{threading.get_ident()}"
-        try:
-            mci(f'open "{tmp_path}" type mpegvideo alias {alias}', None, 0, None)
-            mci(f"play {alias} wait", None, 0, None)
-            mci(f"close {alias}", None, 0, None)
-        finally:
-            try:
-                _os.unlink(tmp_path)
-            except OSError:
-                pass
-        self._notify(on_done)
 
     def _say_local(
         self,
