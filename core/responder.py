@@ -1,5 +1,0 @@
-"""Compatibility shim for moved responder module."""
-
-from core.responders.assembler import ResponseAssembler, responder
-
-__all__ = ["ResponseAssembler", "responder"]

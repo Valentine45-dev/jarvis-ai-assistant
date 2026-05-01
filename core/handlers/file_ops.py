@@ -249,13 +249,12 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found:
                 path = found
         raw_dest_str = (params.get("destination") or "").strip()
-        if (
-            raw_dest_str
-            and "/" not in raw_dest_str
-            and "\\" not in raw_dest_str
-            and _find_folder(raw_dest_str) is None
-        ):
-            dest = path.parent / raw_dest_str
+        if raw_dest_str and "/" not in raw_dest_str and "\\" not in raw_dest_str:
+            found_folder = _find_folder(raw_dest_str)
+            if found_folder:
+                dest = found_folder
+            else:
+                dest = path.parent / raw_dest_str
         if dest is None:
             return _err("No destination provided")
         try:

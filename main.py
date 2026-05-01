@@ -322,8 +322,6 @@ class JarvisWindow(QMainWindow):
         if idx == _SETTINGS_NAV_IDX:
             # Re-sync toggles whenever Settings page is shown.
             self._sync_session_flag_views()
-        if idx == _SETTINGS_NAV_IDX:
-            self._sync_session_flag_views()
 
     def _toggle_mic(self):
         if self._state == "listening":
@@ -562,7 +560,7 @@ class JarvisWindow(QMainWindow):
         # Cap history to avoid unbounded memory growth
         previous_cmd = self._runtime_ctx.get_previous_command(self._history)
         if len(self._history) >= _HISTORY_MAX:
-            self._history = self._history[-(  _HISTORY_MAX - 1):]
+            self._history = self._history[-(_HISTORY_MAX - 1):]
         self._history.append({
             "time": now, "you": display_cmd, "jarvis": "", "jTime": "",
             "intent": "", "conf": 0.0, "status": "pending",
