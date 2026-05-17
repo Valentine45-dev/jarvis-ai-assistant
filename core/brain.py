@@ -349,6 +349,22 @@ def ask_claude(
     ):
         result["requires_confirmation"] = False
 
+    # Diagnostic funnel — every parsed/fallback intent converges here.
+    if config.debug_mode:
+        print("\n" + "=" * 60)
+        print("🧠 JARVIS BRAIN — RAW CLAUDE RESPONSE")
+        print("=" * 60)
+        print(f"INPUT  : {raw_input!r}")
+        print(f"INTENT : {result.get('intent')}")
+        print(f"ACTION : {result.get('action')}")
+        print(f"PARAMS : {result.get('parameters')}")
+        print(f"CONF   : {result.get('confidence')}")
+        print(f"RESP   : {result.get('response')}")
+        print(f"HUD    : {result.get('hud_status')}")
+        print(f"CONFIRM: {result.get('requires_confirmation')}")
+        print(f"RAW    : {raw!r}")
+        print("=" * 60 + "\n")
+
     return result
 
 
