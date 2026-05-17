@@ -689,6 +689,11 @@ class BrowserSession:
         if not goal:
             return _err("find_and_act: empty goal")
 
+        # Kill switch — skip the LLM picker entirely when disabled by env.
+        import os
+        if os.getenv("JARVIS_BROWSER_USE_LLM_PICKER", "true").lower() == "false":
+            return self._find_legacy_fallback(goal, action, value)
+
         with self._lock:
             guard = self._not_ready()
             if guard:
