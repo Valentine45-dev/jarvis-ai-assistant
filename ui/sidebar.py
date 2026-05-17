@@ -30,6 +30,7 @@ NAV_ITEMS = [
     ("AUTOMATE", "ph.share-network",            False,  "Automation Workflows"),
     ("HISTORY",  "ph.clock-counter-clockwise", False,  "Command History"),
     ("CONFIG",   "ph.hexagon",                 False,  "System Configuration"),
+    ("TERMINAL", "ph.terminal-window",         False,  "JARVIS Terminal"),
 ]
 FOOTER_ITEMS = [
     ("DIAGNOSTICS", "ph.activity", False, "Diagnostics"),
@@ -162,7 +163,7 @@ class HudSidebar(QWidget):
 
     # Map each visible button position to the main.py QStackedWidget index.
     #   Stack order: 0 Dashboard, 1 Voice, 2 Automation, 3 History, 4 Settings
-    _NAV_TO_STACK = [0, 1, 2, 3, 4]   # SYSTEM, VOICE, AUTOMATE, HISTORY, CONFIG
+    _NAV_TO_STACK = [0, 1, 2, 3, 4, 5]   # SYSTEM, VOICE, AUTOMATE, HISTORY, CONFIG, TERMINAL
     _FOOTER_TO_STACK = [3]            # DIAGNOSTICS → History (secondary path)
 
     AVATAR_PX = 20

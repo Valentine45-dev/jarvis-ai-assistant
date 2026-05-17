@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import os
+import platform
+import re
 import shlex
+import shutil
 import subprocess
 import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from core.handlers.shared import _ok, _err
 
@@ -69,21 +79,459 @@ def _resolve_script_path(script_hint: str, cwd: str | None) -> Path | None:
     return None
 
 
+# ── CommandBlock — structured session memory ──────────────────────────────────
+
+@dataclass
+class CommandBlock:
+    id: str               = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    command: str          = ""
+    output: str           = ""
+    exit_code: int        = 0
+    duration_ms: int      = 0
+    cwd: str              = ""
+    timestamp: str        = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    ai_generated: bool    = False
+    explanation: str      = ""
+    fix_applied: bool     = False
+
+_BLOCK_STORE: list[CommandBlock] = []   # session memory, capped at 50
+
+
+def _store_block(block: CommandBlock) -> None:
+    """Append block to session store; evict oldest when over cap."""
+    _BLOCK_STORE.append(block)
+    if len(_BLOCK_STORE) > 50:
+        _BLOCK_STORE.pop(0)
+
+
+# ── Environment context ───────────────────────────────────────────────────────
+
+def _build_env_context() -> dict:
+    """Snapshot of the current shell environment — injected into all AI calls."""
+    def _git_branch() -> Optional[str]:
+        try:
+            r = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, text=True, timeout=3,
+            )
+            return r.stdout.strip() or None
+        except Exception:
+            return None
+
+    return {
+        "cwd":            os.getcwd(),
+        "os_version":     platform.version(),
+        "python_version": sys.version.split()[0],
+        "git_repo":       Path(".git").exists(),
+        "git_branch":     _git_branch(),
+        "installed_tools": [
+            t for t in ["git", "python", "node", "npm", "pip",
+                         "docker", "code", "uv", "cargo", "go", "java", "pwsh"]
+            if shutil.which(t)
+        ],
+        "last_3_blocks": [
+            {"cmd": b.command, "exit": b.exit_code, "ok": b.exit_code == 0}
+            for b in _BLOCK_STORE[-3:]
+        ],
+    }
+
+
+# ── Pre-execution danger detection ────────────────────────────────────────────
+
+_DANGER_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"rm\s+-rf",
+        r"del\s+/[sfqSFQ]",
+        r"format\s+[a-z]:",
+        r"shutdown\s+/[srhSRH]",
+        r"taskkill.{0,20}system",
+        r"reg\s+delete",
+        r"rd\s+/s\s+/q\s+[a-zA-Z]:\\",
+        r"diskpart",
+        r"bcdedit",
+        r"cipher\s+/w",
+        r"net\s+user.+/delete",
+        r"icacls.+/grant",
+        r"Remove-Item.+-Recurse.+-Force",
+    ]
+]
+
+
+def _danger_check(command: str) -> Optional[dict]:
+    """Return a needs_confirmation dict if the command matches a danger pattern, else None."""
+    for pat in _DANGER_PATTERNS:
+        if pat.search(command):
+            return {
+                "success": False,
+                "output": "",
+                "error": f"Dangerous command detected: {pat.pattern!r}. Confirm to proceed.",
+                "needs_confirmation": True,
+                "confirm_type": "danger",
+                "subject": command,
+            }
+    return None
+
+
+# ── Streaming execution ───────────────────────────────────────────────────────
+
+def _stream_execute(
+    args: list[str],
+    cwd: str | None,
+    timeout: int = 30,
+) -> tuple[str, int, int]:
+    """Run *args* via Popen, stream stdout+stderr line-by-line via Qt signals.
+
+    A reader thread drains the pipe so the main worker thread can wait() with a
+    hard timeout.  The Qt main thread is never touched — signals use auto-connect
+    (queued across threads).
+
+    Returns: (full_output, exit_code, duration_ms)
+    """
+    from core.signals import signals
+
+    output_lines: list[str] = []
+    t_start = time.monotonic()
+
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=cwd,
+            shell=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - t_start) * 1000)
+        try:
+            signals.terminal_done.emit(-1)
+        except Exception:
+            pass
+        return str(exc), -1, duration_ms
+
+    def _reader():
+        for raw in proc.stdout:
+            line = raw.rstrip("\n\r")
+            output_lines.append(line)
+            try:
+                signals.terminal_line_ready.emit(line)
+            except Exception:
+                pass
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+
+    reader.join(timeout=3)
+
+    if timed_out:
+        msg = f"⏱️ Command timed out after {timeout}s."
+        output_lines.append(msg)
+        try:
+            signals.terminal_line_ready.emit(msg)
+        except Exception:
+            pass
+
+    exit_code = proc.returncode if proc.returncode is not None else -1
+    duration_ms = int((time.monotonic() - t_start) * 1000)
+
+    try:
+        signals.terminal_done.emit(exit_code)
+    except Exception:
+        pass
+
+    return _truncate("\n".join(output_lines)), exit_code, duration_ms
+
+
+# ── AI intelligence layer ────────────────────────────────────────────────────
+
+_SHELL_KEYWORDS: frozenset[str] = frozenset([
+    "python", "python3", "pip", "pip3", "git", "cd", "dir", "ls", "npm",
+    "node", "npx", "uv", "code", "echo", "type", "copy", "move", "del",
+    "mkdir", "rmdir", "cls", "clear", "where", "which", "curl", "wget",
+    "cargo", "go", "java", "javac", "docker", "kubectl", "ssh", "scp",
+    "tar", "zip", "unzip", "powershell", "pwsh", "cmd", "wsl", "choco",
+    "winget", "reg", "sc", "net", "ipconfig", "ping", "tracert", "netstat",
+    "tasklist", "taskkill", "robocopy", "xcopy", "attrib", "icacls", "setx",
+    "set", "call", "start", "timeout", "find", "findstr", "sort", "more",
+    "fc", "comp", "cat", "grep", "awk", "sed",
+])
+
+
+def _looks_like_natural_language(command: str) -> bool:
+    """True if the command's first word is not a known shell keyword."""
+    if not command.strip():
+        return False
+    first = command.strip().split()[0].lower().rstrip(".,;:")
+    return first not in _SHELL_KEYWORDS
+
+
+def _nl_to_command(natural_language: str, env_ctx: dict) -> str | None:
+    """Convert natural language to a Windows shell command via Claude Haiku.
+    Returns the raw command string, or None on failure.
+    """
+    try:
+        import anthropic
+        from config.settings import config
+        if not config.anthropic_api_key:
+            return None
+        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        tools = ", ".join(env_ctx.get("installed_tools", []))
+        git   = (f"Git branch: {env_ctx.get('git_branch')}"
+                 if env_ctx.get("git_repo") else "Not a git repo")
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            timeout=10,
+            system=(
+                f"You are a Windows shell expert. "
+                f"OS: {env_ctx.get('os_version', 'Windows')}. "
+                f"Available tools: {tools}. "
+                f"CWD: {env_ctx.get('cwd', '.')}. {git}. "
+                "Respond with ONLY the exact PowerShell or CMD command to run. "
+                "No explanation. No markdown. No backticks. Just the raw command."
+            ),
+            messages=[{"role": "user", "content": natural_language}],
+        )
+        cmd = msg.content[0].text.strip().strip("`").strip()
+        return cmd if cmd else None
+    except Exception:
+        return None
+
+
+def _explain_output(block: CommandBlock) -> str | None:
+    """Ask Claude Haiku to summarise the result in JARVIS butler style.
+    Only fires when output > 100 chars. Returns 1-2 sentence string or None.
+    """
+    if len(block.output) <= 100:
+        return None
+    try:
+        import anthropic
+        from config.settings import config
+        if not config.anthropic_api_key:
+            return None
+        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        status = "succeeded" if block.exit_code == 0 else f"failed (exit {block.exit_code})"
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=128,
+            timeout=10,
+            system=(
+                "You are JARVIS — a sharp British AI butler reporting shell results. "
+                "Summarise in 1-2 sentences. Be specific: mention numbers, filenames, errors. "
+                "If success: report what was found or done. "
+                "If failure: say why in plain English and suggest the fix. "
+                "Never say 'the command'. No emojis. Just report."
+            ),
+            messages=[{"role": "user", "content": (
+                f"Command: {block.command}\nStatus: {status}\n"
+                f"Output:\n{block.output[:1500]}"
+            )}],
+        )
+        return msg.content[0].text.strip()
+    except Exception:
+        return None
+
+
+def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
+    """Ask Claude Sonnet to generate a safe fix for a failed command.
+    Runs fix automatically if auto_safe=True; requests confirmation otherwise.
+    Max 1 fix attempt per block — never retries the fix.
+    Returns a result dict or None if no fix is available.
+    """
+    import json as _json
+    try:
+        import anthropic
+        from config.settings import config
+        if not config.anthropic_api_key:
+            return None
+        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=256,
+            timeout=15,
+            system=(
+                "You are a Windows shell expert. A command failed. "
+                'Return JSON only — no prose, no markdown fences:\n'
+                '{"fix_command":"<exact command>","explanation":"<one sentence>","auto_safe":<bool>}\n'
+                "auto_safe=true ONLY for: installing a missing package, correcting a flag, "
+                "creating a missing directory. "
+                "auto_safe=false for anything touching system files, registry, "
+                "network config, or user accounts."
+            ),
+            messages=[{"role": "user", "content": (
+                f"Failed command: {block.command}\nExit code: {block.exit_code}\n"
+                f"Output:\n{block.output[:1500]}"
+            )}],
+        )
+        raw = re.sub(r"```(?:json)?", "", msg.content[0].text).strip().strip("`").strip()
+        fix_data  = _json.loads(raw)
+        fix_cmd   = fix_data.get("fix_command", "").strip()
+        explain   = fix_data.get("explanation", "")
+        auto_safe = bool(fix_data.get("auto_safe", False))
+        if not fix_cmd:
+            return None
+        # Danger-check the AI-generated fix before touching anything
+        if _danger_check(fix_cmd):
+            auto_safe = False
+        if auto_safe:
+            try:
+                fix_args = shlex.split(fix_cmd)
+            except Exception:
+                return None
+            out, exit_code, dur = _stream_execute(fix_args, cwd=cwd, timeout=60)
+            _store_block(CommandBlock(
+                command=fix_cmd, output=out, exit_code=exit_code,
+                duration_ms=dur, cwd=os.getcwd(),
+                ai_generated=True, fix_applied=True,
+            ))
+            if exit_code == 0:
+                return _ok(f"{explain} — fix applied automatically.")
+            return _err(f"Auto-fix also failed: {out}")
+        return {
+            "success": False, "output": "",
+            "error": f"{explain} Suggested fix: {fix_cmd}",
+            "needs_confirmation": True,
+            "confirm_type": "fix",
+            "subject": fix_cmd,
+        }
+    except Exception:
+        return None
+
+
+def _post_execute(block: CommandBlock, cwd: str | None) -> dict | None:
+    """Run fix (on failure) then explain. Returns override result dict or None."""
+    if block.exit_code != 0 and not block.fix_applied:
+        fix = _attempt_fix(block, cwd)
+        if fix:
+            block.fix_applied = True
+            return fix
+    explanation = _explain_output(block)
+    if explanation:
+        block.explanation = explanation
+        return _ok(explanation) if block.exit_code == 0 else _err(explanation)
+    return None
+
+
+# ── Multi-step agent ──────────────────────────────────────────────────────────
+
+_MULTISTEP_PATTERN = re.compile(
+    r"\b(set\s+up|install\s+and|create\s+and\s+run|configure\s+and|build\s+and|"
+    r"clean\s+up\s+and|initialize\s+and|setup\s+and|deploy\s+and)\b",
+    re.IGNORECASE,
+)
+
+_FAILURE_KEYWORDS = re.compile(
+    r"\b(error|exception|failed|cannot|traceback|not\s+found|access\s+denied|permission\s+denied)\b",
+    re.IGNORECASE,
+)
+
+
+def _plan_steps(goal: str, env_ctx: dict) -> list[str] | None:
+    """Break a multi-step goal into ordered shell commands via Claude Sonnet.
+    Returns list of command strings (max 8) or None on failure.
+    """
+    import json as _json
+    try:
+        import anthropic
+        from config.settings import config
+        if not config.anthropic_api_key:
+            return None
+        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        tools = ", ".join(env_ctx.get("installed_tools", []))
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            timeout=20,
+            system=(
+                "You are a Windows shell expert. Break the user's goal into ordered shell commands. "
+                f"Available tools: {tools}. CWD: {env_ctx.get('cwd', '.')}. "
+                "Return a JSON array of command strings only. Max 8 steps. "
+                "Each element must be a single, safe, executable command string. "
+                'Example: ["git status","pip install flask","python app.py"] '
+                "No explanations inside the array. No markdown."
+            ),
+            messages=[{"role": "user", "content": goal}],
+        )
+        raw   = re.sub(r"```(?:json)?", "", msg.content[0].text).strip().strip("`").strip()
+        steps = _json.loads(raw)
+        if not isinstance(steps, list):
+            return None
+        return [str(s).strip() for s in steps[:8] if str(s).strip()]
+    except Exception:
+        return None
+
+
+def _run_plan(steps: list[str], cwd: str | None) -> dict:
+    """Execute steps sequentially. Stop on first failure and explain it."""
+    from core.signals import signals
+    n = len(steps)
+    for i, cmd in enumerate(steps, 1):
+        # Header line so the terminal panel shows progress
+        try:
+            signals.terminal_line_ready.emit(f"── Step {i}/{n}: {cmd}")
+        except Exception:
+            pass
+        danger = _danger_check(cmd)
+        if danger:
+            return {**danger, "error": f"Step {i} blocked — {danger['error']}"}
+        try:
+            args = shlex.split(cmd)
+        except Exception as exc:
+            return _err(f"Step {i}: could not parse command: {exc}")
+        out, exit_code, duration_ms = _stream_execute(args, cwd=cwd, timeout=60)
+        block = CommandBlock(
+            command=cmd, output=out, exit_code=exit_code,
+            duration_ms=duration_ms, cwd=os.getcwd(), ai_generated=True,
+        )
+        _store_block(block)
+        if exit_code != 0:
+            explanation = _explain_output(block) or out
+            return _err(f"Step {i}/{n} failed: {explanation}")
+        # Catch tools that exit 0 but still print failure keywords
+        if _FAILURE_KEYWORDS.search(out):
+            explanation = _explain_output(block) or out
+            return _err(f"Step {i}/{n} may have failed: {explanation}")
+    plural = "s" if n != 1 else ""
+    return _ok(f"Done, sir — ran {n} step{plural}, all succeeded.")
+
+
+# ── Main handler ──────────────────────────────────────────────────────────────
+
 def _handle_code_execution(action: str, params: dict) -> dict:
     code = params.get("code", params.get("script_path", ""))
     cwd_raw = params.get("working_directory", None)
     cwd = _valid_cwd(cwd_raw)
 
+    # ── Danger check (runs before anything else, no exceptions) ───────────────
+    if code:
+        danger = _danger_check(str(code))
+        if danger:
+            return danger
+
     # ── PowerShell ────────────────────────────────────────────────────────────
     if action == "run_powershell":
         if not code:
             return _err("No PowerShell command provided")
+        t0 = time.monotonic()
         try:
             result = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code],
                 capture_output=True, text=True, timeout=60, cwd=cwd,
             )
             out = _truncate((result.stdout or result.stderr or "").strip())
+            _store_block(CommandBlock(
+                command=code, output=out, exit_code=result.returncode,
+                duration_ms=int((time.monotonic() - t0) * 1000), cwd=os.getcwd(),
+            ))
             return _ok(out) if result.returncode == 0 else _err(out)
         except subprocess.TimeoutExpired:
             return _err("PowerShell command timed out after 60s")
@@ -96,12 +544,17 @@ def _handle_code_execution(action: str, params: dict) -> dict:
     if action == "run_cmd":
         if not code:
             return _err("No CMD command provided")
+        t0 = time.monotonic()
         try:
             result = subprocess.run(
                 ["cmd.exe", "/c", code],
                 capture_output=True, text=True, timeout=60, cwd=cwd,
             )
             out = _truncate((result.stdout or result.stderr or "").strip())
+            _store_block(CommandBlock(
+                command=code, output=out, exit_code=result.returncode,
+                duration_ms=int((time.monotonic() - t0) * 1000), cwd=os.getcwd(),
+            ))
             return _ok(out) if result.returncode == 0 else _err(out)
         except subprocess.TimeoutExpired:
             return _err("CMD command timed out after 60s")
@@ -134,11 +587,16 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             cmd = ["uv", "add", package]
         else:
             return _err(f"Unknown package manager {manager!r}. Use pip, npm, or uv.")
+        t0 = time.monotonic()
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=120, cwd=cwd,
             )
             out = _truncate((result.stdout or result.stderr or "").strip())
+            _store_block(CommandBlock(
+                command=" ".join(cmd), output=out, exit_code=result.returncode,
+                duration_ms=int((time.monotonic() - t0) * 1000), cwd=os.getcwd(),
+            ))
             return _ok(out) if result.returncode == 0 else _err(out)
         except subprocess.TimeoutExpired:
             return _err("Package install timed out after 120s")
@@ -203,37 +661,68 @@ def _handle_code_execution(action: str, params: dict) -> dict:
         return _err("No code or command provided")
 
     if action == "run_python":
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True, text=True, timeout=30, cwd=cwd,
+        out, exit_code, duration_ms = _stream_execute(
+            [sys.executable, "-c", code], cwd=cwd, timeout=30,
         )
-        out = _truncate((result.stdout or result.stderr or "").strip())
-        return _ok(out) if result.returncode == 0 else _err(out)
+        block = CommandBlock(
+            command=code, output=out, exit_code=exit_code,
+            duration_ms=duration_ms, cwd=os.getcwd(),
+        )
+        _store_block(block)
+        override = _post_execute(block, cwd)
+        if override:
+            return override
+        return _ok(out) if exit_code == 0 else _err(out)
 
     if action in ("run_shell", "git_command", "npm_command"):
+        # ── Multi-step agent (run_shell only) ─────────────────────────────────
+        if action == "run_shell" and _MULTISTEP_PATTERN.search(code):
+            env_ctx = _build_env_context()
+            steps   = _plan_steps(code, env_ctx)
+            if steps:
+                return _run_plan(steps, cwd)
+
+        # NL → command translation (run_shell only, when it looks like natural language)
+        ai_generated = False
+        if action == "run_shell" and _looks_like_natural_language(code):
+            env_ctx = _build_env_context()
+            generated = _nl_to_command(code, env_ctx)
+            if generated:
+                danger = _danger_check(generated)
+                if danger:
+                    return danger
+                code = generated
+                ai_generated = True
         try:
             args = shlex.split(code) if isinstance(code, str) else code
-            result = subprocess.run(
-                args, capture_output=True, text=True,
-                timeout=60, cwd=cwd, shell=False,
-            )
-            out = _truncate((result.stdout or result.stderr or "").strip())
-            return _ok(out) if result.returncode == 0 else _err(out)
-        except subprocess.TimeoutExpired:
-            return _err("Command timed out after 60s")
         except Exception as exc:
-            return _err(str(exc))
+            return _err(f"Could not parse command: {exc}")
+        out, exit_code, duration_ms = _stream_execute(args, cwd=cwd, timeout=60)
+        block = CommandBlock(
+            command=code, output=out, exit_code=exit_code,
+            duration_ms=duration_ms, cwd=os.getcwd(), ai_generated=ai_generated,
+        )
+        _store_block(block)
+        override = _post_execute(block, cwd)
+        if override:
+            return override
+        return _ok(out) if exit_code == 0 else _err(out)
 
     if action == "run_script":
         p = _resolve_script_path(str(code), cwd_raw)
         if p is None:
             return _err(f"Script not found: {code}")
         run_cwd = cwd or str(p.parent)
-        result = subprocess.run(
-            [sys.executable, str(p)] if p.suffix == ".py" else [str(p)],
-            capture_output=True, text=True, timeout=60, cwd=run_cwd,
+        cmd_args = [sys.executable, str(p)] if p.suffix == ".py" else [str(p)]
+        out, exit_code, duration_ms = _stream_execute(cmd_args, cwd=run_cwd, timeout=60)
+        block = CommandBlock(
+            command=str(p), output=out, exit_code=exit_code,
+            duration_ms=duration_ms, cwd=run_cwd,
         )
-        out = _truncate((result.stdout or result.stderr or "").strip())
-        return _ok(out) if result.returncode == 0 else _err(out)
+        _store_block(block)
+        override = _post_execute(block, cwd)
+        if override:
+            return override
+        return _ok(out) if exit_code == 0 else _err(out)
 
     return _err(f"Unknown code action: {action}")

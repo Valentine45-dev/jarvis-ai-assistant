@@ -5,6 +5,18 @@ from __future__ import annotations
 from core.handlers.shared import _err, _set_page_cache
 
 
+def _is_vague_selector(selector: str) -> bool:
+    """A selector is 'vague' when it lacks CSS sigils that mark a precise locator.
+
+    Used by the click_element auto-routing heuristic: if the brain sent only loose
+    text (e.g. ``"Sign in button"``) instead of ``"#sign-in"`` / ``"button[type=…]"``,
+    prefer the snapshot-driven picker over the legacy selector chain.
+    """
+    if not selector:
+        return True
+    return not any(ch in selector for ch in "#.[:>")
+
+
 def _handle_browser_automation(action: str, params: dict) -> dict:
     from core.browser import browser
 
@@ -24,15 +36,47 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
         return browser.new_tab(url)
 
     if action == "click_element":
-        return browser.click_element(
-            selector=params.get("selector", ""),
-            text=params.get("text", ""),
-            x=params.get("x"),
-            y=params.get("y"),
-        )
+        goal     = (params.get("goal") or "").strip()
+        selector = (params.get("selector") or "").strip()
+        text     = (params.get("text") or "").strip()
+        x        = params.get("x")
+        y        = params.get("y")
+
+        # Phase 2 — explicit goal from the brain wins.
+        if goal:
+            result = browser.find_and_act(goal, "click")
+            if result.get("success"):
+                return result
+            # Hard miss after the internal fallback chain — give legacy a last shot
+            # if any precise hints were also provided.
+            if selector or text or (x is not None and y is not None):
+                return browser.click_element(selector=selector, text=text, x=x, y=y)
+            return result
+
+        # Phase 3 — vague selector + text → try the snapshot picker first.
+        if _is_vague_selector(selector) and text:
+            result = browser.find_and_act(text, "click")
+            if result.get("success"):
+                return result
+            return browser.click_element(selector=selector, text=text, x=x, y=y)
+
+        return browser.click_element(selector=selector, text=text, x=x, y=y)
 
     if action == "fill_form":
-        return browser.fill_form(params.get("fields", {}))
+        goal   = (params.get("goal") or "").strip()
+        value  = params.get("value", "")
+        fields = params.get("fields", {}) or {}
+
+        # Phase 2 — goal + value path.
+        if goal and value != "":
+            result = browser.find_and_act(goal, "fill", str(value))
+            if result.get("success"):
+                return result
+            if fields:
+                return browser.fill_form(fields)
+            return result
+
+        return browser.fill_form(fields)
 
     if action in ("extract_text", "read_page"):
         selector = params.get("selector", "")

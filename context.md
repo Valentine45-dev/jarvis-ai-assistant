@@ -1,1044 +1,325 @@
-# JARVIS Project Handoff
-**Developer:** Malakai V. Weah  
-**Project path:** `C:\Users\Dell Latitude Touch\Desktop\jarvis-project`  
-**Stack:** Python 3.14, PyQt5, Claude API (Sonnet 4), ElevenLabs TTS, Google STT, Playwright  
-**Package manager:** `uv`  
-**Run command:** `uv run python main.py`
+# JARVIS — Project Context
 
-**Brain prompt:** `CLAUDE.md` (or `Claude.md` on case-insensitive systems) — loaded by `core/brain.py`
+**Developer:** Malakai V. Weah
+**Workspace:** `c:\Users\Lenovo\Documents\jarvis-project`
+**Stack:** Python 3.11+, PyQt5 HUD, Anthropic Claude (intent router), ElevenLabs (TTS), Google SpeechRecognition (STT), Playwright (browser), Tesseract (OCR), psutil/pycaw (system), SQLite (history), Vapi (optional cloud assistant binding)
+**Package manager:** `uv` (lockfile in `uv.lock`)
+**Run:** `uv run python main.py`
+**Brain prompt (canonical):** `Claude.md` — loaded verbatim by `core/brain.py`. Every routing rule, intent definition, confirmation policy, and @tag mapping in the prompt is also enforced in Python.
+**Product/voice spec:** `PRODUCT.md` defines the brand personality ("Precise, Commanding, Inevitable"), target user, and anti-references.
+**Design workflow:** `IMPECCABLE_SKILL_GUIDE.md` describes the `/impeccable …` design loop used to keep UI surfaces aligned with `PRODUCT.md`.
 
-### Session 2026-04-27 (Claude Code) — Voice pipeline split: audio_pipeline.py + voice.py facade
-
-Split monolithic `core/voice.py` (~515 lines) into:
-- `core/audio_pipeline.py` — `AudioCapture`, `SttEngine`, `TtsEngine`, `SttError`, `_EL_VOICES`
-- `core/voice.py` — thin `VoiceEngine` facade (~150 lines); same public API; overlap guard added
-
-New features inside the split:
-- **Overlap guard**: `listen()` refuses to open mic if `TtsEngine.is_speaking` is True
-- **Typed STT errors**: `SttError` enum (NO_SPEECH / NETWORK / TIMEOUT / DEVICE)
-- **Ambient noise calibration**: `AudioCapture.calibrate_threshold()` samples room noise and adapts threshold
-- **Guaranteed stream cleanup**: `AudioCapture.capture()` always closes the sounddevice stream in `try/finally`
-- **`is_speaking` property**: `VoiceEngine.is_speaking` → `TtsEngine._speaking.is_set()` (threading.Event)
-
-No external API changes — `executor.py` and `main.py` import paths unchanged.
-
-| File | Change |
-|------|--------|
-| `core/audio_pipeline.py` | **New file** — all audio engine internals |
-| `core/voice.py` | Rewritten as thin facade (~150 lines, was ~515) |
-| `context.md` | Voice Pipeline section updated with split details |
+This document is the single source of truth for what is in the repo and what each module does. It replaces the older session-log style context.
 
 ---
 
-### Session 2026-04-27 (Claude Code) — Bug fixes: auto-confirm bypass + Win+J global hotkey
+## 1. High-level architecture
 
-**All 9 TESTS.txt tests now pass.** Two bugs were found and fixed during the test run.
-
-#### Bug 1 — Auto-confirm did not bypass executor-level confirmation (Test 2)
-
-**Root cause:** `_on_brain_result` short-circuits the Claude-level `requires_confirmation` flag
-when `_auto_confirm` is ON (passes `confirmed=True` to `dispatch`). But `delete_file` (and
-`create_file`, `rename_file`, etc.) use a **second, separate confirmation path**:
-`request_confirmation()` inside `_handle_file_operation` sets `needs_confirmation` on the result,
-which `_finish_execute` always showed as the confirm card — regardless of `_auto_confirm`.
-
-**Fix — `main.py` `_finish_execute`:** Added a short-circuit before the confirm-card block:
-```python
-if exec_out.get("needs_confirmation") and self._auto_confirm:
-    resolved = resolve_confirmation("yes")
-    self._on_confirmation_resolved(resolved)
-    return
 ```
-Now both confirmation layers (brain-level and executor-level) respect the auto-confirm flag.
+                ┌─────────────────────────────────────────┐
+ user voice ──► │ wake_word ──► voice (STT) ──► main.py   │
+ user text  ──► │                                          │
+                │   ┌──────────────────────────────────┐  │
+                │   │ brain.py  (Claude intent router) │  │
+                │   └──────────────────────────────────┘  │
+                │                  │                      │
+                │                  ▼                      │
+                │   ┌──────────────────────────────────┐  │
+                │   │ executor.py + core/handlers/*    │  │
+                │   │  → OS, browser, files, code,     │  │
+                │   │    workflows, reminders, weather │  │
+                │   └──────────────────────────────────┘  │
+                │                  │                      │
+                │                  ▼                      │
+                │   ┌──────────────────────────────────┐  │
+                │   │ responders/ + personality.py     │  │
+                │   │  → spoken response + HUD updates │  │
+                │   └──────────────────────────────────┘  │
+                │                  │                      │
+                │   voice (TTS) ◄──┘                      │
+                │   PyQt HUD (ui/*) ◄── core/signals.py   │
+                └─────────────────────────────────────────┘
+```
 
-#### Bug 2 — Win+J summon hotkey only worked while JARVIS was focused (Test 5)
-
-**Root cause:** `QShortcut(QKeySequence("Meta+J"))` with `Qt.ApplicationShortcut` only fires
-when the Qt application itself has focus. When the user switches to another window (browser,
-Notepad, etc.) JARVIS loses focus and the shortcut stops working.
-
-**Fix — `main.py`:** Added Windows `RegisterHotKey` API call (via `ctypes`) in `__init__` to
-register Win+J as a **system-wide** hotkey. Added `nativeEvent` override to catch `WM_HOTKEY`
-(0x0312) messages and call `_summon_window()`. Added `UnregisterHotKey` in `closeEvent`.
-The existing `QShortcut` is kept as a fallback (catches the case before `RegisterHotKey` fires).
-`getattr(self, "_win_hotkey_id", None)` used in `nativeEvent` guard because Qt calls
-`nativeEvent` during window construction before `__init__` sets the attribute.
-
-| File | Change |
-|------|--------|
-| `main.py` | `_finish_execute`: auto-confirm bypass for executor `needs_confirmation` |
-| `main.py` | `__init__`: `RegisterHotKey(MOD_WIN | VK_J)` system-wide hotkey registration |
-| `main.py` | `nativeEvent`: catches `WM_HOTKEY` → `_summon_window()` |
-| `main.py` | `closeEvent`: `UnregisterHotKey` on shutdown |
+Every cross-thread message flows through the single `JarvisSignals` instance in `core/signals.py`. Blocking work (Claude API, ElevenLabs streaming, RTT probes, mic capture, code execution, wake-word listener) runs off the GUI thread.
 
 ---
 
-### Session 2026-04-27 — Architecture hardening, background threads, live telemetry, workflow UI
+## 2. Top-level files
 
-**Changes shipped in this session — quick reference:**
-
-| File | What changed |
-|------|--------------|
-| `main.py` | Phase 1: `_PendingConfirmation` dataclass, history `status` field, `_HISTORY_MAX`, `_TTS_MAX_CHARS`, amber auto-confirm banner, history persistence startup/save/clear, `import threading` |
-| `main.py` | Phase 2: `_exec_done` signal, `_execute_result` forks multi-step workflows to daemon thread, `_on_exec_done`, `_finish_execute` split |
-| `main.py` | Phase 3: `Win+J` global hotkey → `_summon_window()` |
-| `core/brain.py` | Token guard: `_infer_max_output_tokens` requires both creation verb AND file extension for 16k |
-| `core/browser.py` | `_not_ready()` auto-restarts once via `_recover()` before returning an error |
-| `core/executor.py` | `_PendingConfirmation` dataclass (typed, UUID id), replaces bare `_PENDING` dict |
-| `core/history_store.py` | **New** — SQLite history persistence (`data/session_history.db`, WAL, thread-safe) |
-| `ui/dashboard.py` | `_UplinkCard`: live TX/RX via `psutil.net_io_counters()` every 2 s, feeds sparkline |
-| `ui/automation.py` | `+ NEW` button in library header, `_NewWorkflowDialog`, `_create_workflow()` method |
-| `ui/history.py` | `history_cleared = pyqtSignal()`, emitted from `_on_clear()` |
-| `.gitignore` | Added `data/session_history.db`, `data/session_history.json` |
-
----
-
-## How to Test — Session 2026-04-27 Changes
-
-Run JARVIS first: `uv run python main.py`
+| File | Purpose |
+|---|---|
+| `main.py` | Application entry point. Builds the `QMainWindow`, `HudSidebar`, `TopBar`/`BottomBar`, six pages (`Dashboard`, `Voice`, `Automation`, `History`, `Settings`, `Terminal`) inside a `QStackedWidget`, command palette, popovers, global hotkeys, and wires `voice_engine` ↔ `brain` ↔ `executor` ↔ UI. Owns the master state machine (`idle`/`listening`/`thinking`/`speaking`), the confirmation flow, the in-memory session history, and the SQLite-backed `history_store`. |
+| `Claude.md` | Canonical brain system prompt — full intent definitions, action lists, parameter schemas, confidence rules, response style, HUD label conventions, @tag overrides, executor safeguards. **Treated as a contract**; changes here must be mirrored in `core/brain.py` and the relevant handler(s). |
+| `README.md` | Quickstart, feature overview, requirements, setup instructions. |
+| `PRODUCT.md` | Brand personality, target persona (power user), anti-references (Cortana, generic chatbots), core design principles. Drives the UI voice and look. |
+| `IMPECCABLE_SKILL_GUIDE.md` | Internal design workflow: `/impeccable shape`, `craft`, `critique`, `audit`, `polish`. |
+| `context.md` | **This file.** Project-wide context document. |
+| `pyproject.toml` | Project metadata + primary dependencies (anthropic, elevenlabs, PyQt5, playwright, pyautogui, pytesseract, sounddevice, speechrecognition, vapi-server-sdk). |
+| `requirements.txt` | Categorised dependency list with optional extras (livekit-agents for streaming voice, PyAudio fallback for STT, etc.). |
+| `uv.lock` | Pinned dependency tree for `uv`. |
+| `.python-version` | Python version pin for tooling (pyenv / uv). |
+| `.env.example` | Template for `.env`. Documents `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `VAPI_API_KEY`, `OPENWEATHER_API_KEY`, `CLAUDE_MODEL`, `WAKE_WORD`, `USER_NAME`, `OPENWEATHER_DEFAULT_CITY`, `JARVIS_DEFAULT_CREATE_PARENT`, debug flags. |
+| `.env` | **Local secrets — never committed.** API keys + model overrides. |
+| `.gitignore` | Standard Python + project ignores. |
 
 ---
 
-### 1 — History persists across restarts
+## 3. `config/` — runtime configuration
 
-**What it tests:** `core/history_store.py` + SQLite at `data/session_history.db`.
-
-```
-1. Run JARVIS. Issue any command (e.g. "What time is it?").
-2. Close JARVIS normally (X button or "Close JARVIS").
-3. Re-launch with `uv run python main.py`.
-4. Open the History view (sidebar → HISTORY).
-5. Your previous command should appear in the list.
-```
-
-Expected: history survives across restarts. The DB file `data/session_history.db` will be created on first run (gitignored).
+| File | Function |
+|---|---|
+| `config/settings.py` | `AppConfig` dataclass + module-level `config` singleton. Loaded from `config/jarvis.json` (created on save) with `.env` always overlayed on top so API keys cannot leak into JSON. Fields: API keys, `claude_model`, `wake_word`, `user_name` (default `"Valentine"`), `tts_voice`/`tts_speed`, `mic_sensitivity`/`noise_gate`/`mic_device`, session flags (`mic_muted`, `tts_muted`, `auto_confirm`, `dim_mode`, `wake_word_enabled`), `theme`, `weather_default_city`. Provides `from_env()`, `load()`, `save()` (omits sensitive keys). |
+| `config/jarvis.json` | Generated at runtime when Settings → APPLY_CFG is pressed. Not committed. |
 
 ---
 
-### 2 — Auto-confirm banner (amber warning)
+## 4. `data/` — persisted runtime data and seed constants
 
-**What it tests:** persistent visual warning when auto-confirm is active.
-
-```
-1. Click the sliders icon in the TopBar (Quick Settings popover).
-2. Toggle AUTO-CONFIRM on.
-3. An amber banner should appear between the TopBar and the content area:
-   "⚠  AUTO-CONFIRM ACTIVE — DESTRUCTIVE ACTIONS WILL EXECUTE WITHOUT PROMPT"
-4. Toggle AUTO-CONFIRM off → banner disappears.
-```
+| File | Function |
+|---|---|
+| `data/intents.py` | Legacy intent name + quick-action seed constants (`INTENTS`, `QUICK_ACTIONS`, `RESPONSES`). Mostly used for UI iconography. |
+| `data/mock.py` | Placeholder mock data (`MOCK_HISTORY`, `MOCK_AUTOMATIONS`) for offline UI experiments. The live HUD does **not** seed transcripts from this. |
+| `data/workflows.json` | User-defined workflows persisted by `core/automation.workflow_library`. Each record: `id`, `name`, `trigger`, `enabled`, `last_run`, `steps[]` (list of natural-language strings or structured `{intent, action, parameters}` dicts). |
+| `data/session_history.db` | SQLite database created on first run by `core/history_store.py`. Stores command/response/intent/confidence per turn. |
 
 ---
 
-### 3 — Background workflow execution (UI stays responsive)
+## 5. `core/` — backend brain, executor, and infrastructure
 
-**What it tests:** `_execute_result` forks `automation_task`+`run_workflow`+`steps` to a daemon thread.
+### 5.1 Brain + memory
 
-```
-1. Type a multi-step command, e.g.:
-   "Open Notepad and take a screenshot"
-   — or —
-   "Search YouTube for Iron Man and search Google for Python"
-2. While JARVIS processes:
-   - The status label should read "Running workflow — please wait…"
-   - The window should NOT freeze — you can still click the sidebar, scroll, etc.
-3. After execution, the HUD, transcript, and history should update normally.
-```
+| File | Function |
+|---|---|
+| `core/brain.py` | Wraps the Anthropic Claude Messages API. (1) Normalises the user input and strips leading `@tags`, mapping each to a canonical intent via `TAG_INTENT_MAP`. (2) Builds the `context` block (`os`, `user_name`, `active_window`, `clipboard`, `previous_command`, `tag_override`). (3) Sends `Claude.md` as the system prompt. (4) Parses the strict JSON reply (`intent`, `action`, `parameters`, `confidence`, `response`, `hud_status`, `requires_confirmation`). (5) Enforces tag overrides (override wins, +0.05 confidence cap 1.0). (6) Produces post-execution narration via `core/personality.py`. (7) Falls back to `{"intent": "unknown"}` on parse/API errors so the rest of the app keeps running. |
+| `core/memory.py` | Rolling conversation window for Claude. Trims oldest entries to stay under the token budget. `inject_outcome(...)` records the executor result back into the transcript so follow-ups have context. |
+| `core/workflow_nlu.py` | Deterministic NLU bypass for "create a routine/workflow that does X, Y, Z" phrasing. Extracts name + step list and returns a fully formed `automation_task → create_workflow` dict, so unambiguous multi-line creates do not depend on Claude. |
+| `core/personality.py` | Maps `(intent, action, outcome)` to randomised, on-brand JARVIS phrasings (British butler tone, varied vocabulary, `"sir"` cadence). Generates confirmation questions and shortens output for speech. |
 
-If you had the old code, multi-step workflows would lock the Qt event loop (the window would be unresponsive until done). With this change, everything stays live.
+### 5.2 Executor and shared helpers
 
----
+| File | Function |
+|---|---|
+| `core/executor.py` | Central dispatcher. Takes the parsed dict from `brain.py`, applies the confirmation guard (or `_auto_confirm` bypass), routes to the appropriate handler, exposes `resolve_confirmation(answer)` for the UI confirm flow, registers/clears reminders, validates reminder-scheduled actions (`_validate_reminder_run`, `_format_run_summary`), and re-exports every handler so other modules can `from core.executor import dispatch, resolve_confirmation, _active_reminders`. |
+| `core/signals.py` | Module-level `JarvisSignals` `QObject` singleton (`signals`). All cross-thread communication channels (`status_changed`, `error_occurred`, `terminal_line_ready`, `terminal_done`, `workflow_library_changed`, reminder events, etc.) live here so non-Qt code can emit safely. |
+| `core/history_store.py` | Thin SQLite wrapper around `data/session_history.db`. Persists session history across restarts and exposes load/append/clear helpers consumed by `main.py` and `ui/history.py`. |
+| `core/net_telemetry.py` | Network metrics utilities used by the bottom bar. `probe_internet_rtt()` (ICMP with TCP-:443 fallback, rotating resolvers, platform-aware `ping` flags), `_parse_icmp_time_ms()`, `smooth_rtt_ema()`, `ThroughputSampler` (psutil-based ↑↓ B/s), `format_rate_bps()`. |
+| `core/vapi_client.py` | Optional Vapi integration. Registers/syncs a JARVIS assistant configuration (LLM = Claude, TTS = ElevenLabs voice, STT) so the same brain can be reached over web/phone if desired. |
 
-### 4 — UPLINK real TX/RX throughput
+### 5.3 Voice pipeline (`audio_pipeline.py` + `voice.py` facade)
 
-**What it tests:** `_UplinkCard._tick_net()` via `psutil.net_io_counters()`.
+| File | Function |
+|---|---|
+| `core/audio_pipeline.py` | Low-level audio engine. `AudioCapture` (sounddevice mic stream with VAD + ambient noise calibration + guaranteed `try/finally` cleanup), `SttEngine` (Google SpeechRecognition, returns typed `SttError` enum: `NO_SPEECH`/`NETWORK`/`TIMEOUT`/`DEVICE`), `TtsEngine` (ElevenLabs streaming with pyttsx3 fallback, `is_speaking` threading.Event), `TtsProviderError` + `TtsProviderErrorKind` (`QUOTA`/`AUTH`/`NETWORK`/`UNKNOWN`), `_classify_elevenlabs_error()`, `_EL_VOICES` registry. |
+| `core/voice.py` | Thin `VoiceEngine` facade over the audio pipeline. Public API: `say(text)`, `listen()`, `switch_tts_voice(voice, validate_provider=True, persist=True)` (probes ElevenLabs first, rolls back on quota/auth errors), `set_mic_muted()`, `set_tts_muted()`, `is_speaking` property. Owns the overlap guard — `listen()` refuses to open the mic while TTS is speaking. Uses `VoiceBridge` (Qt object) so worker threads can emit signals safely. |
+| `core/tts_elevenlabs.py` | ElevenLabs-specific helpers: streaming MP3 playback through Windows MCI (`mciSendString`) for low-latency speech, voice probing for `switch_tts_voice`, and provider error classification. |
+| `core/wake_word.py` | Always-on background listener. Uses sounddevice + SpeechRecognition (or the lightweight CMU sphinx fallback) to detect the configured wake word ("jarvis"). On detection, emits a signal that triggers `voice_engine.listen()` in `main.py`. |
 
-```
-1. On the Dashboard (default view), look at the bottom-right panel: UPLINK_STATUS.
-2. TX (Mb/s) and RX (Mb/s) should show real numbers (initially near 0 if idle).
-3. To see them change: say "Open YouTube" or start a download in any app.
-4. Within 2 seconds, the RX number should spike and the sparkline should update.
-```
+### 5.4 OS control + browser
 
-Old value: hardcoded "452.1" / "1208.4" — frozen decorative. New value: real sampled throughput.
+| File | Function |
+|---|---|
+| `core/computer_control.py` | Cross-platform OS primitives consumed by the handlers. `type_text`, `press_key`, mouse `move`/`click`/`right_click`/`scroll`/`drag` (pyautogui), `screenshot`, `ocr_screen` (Tesseract via pytesseract), `set_volume` (pycaw on Windows), `set_clipboard`/`get_clipboard`, `lock_screen` (Windows `LockWorkStation` via ctypes; OS-specific equivalents elsewhere). Every function returns the standard `{success, output, error}` envelope. |
+| `core/browser.py` | Persistent Playwright Chrome session. Singleton `browser` with `start()`/`stop()` (lifetime = JARVIS lifetime), `navigate(url)`, `click_element(selector | text | x,y)`, `fill_form({selector_or_label_or_placeholder: value})`, `read_page()` (title + URL + body up to 4 kB), `extract_content(selector)`, `screenshot_page()`/`screenshot_element(selector)`, `new_tab(url=None)`, `close_tab(match | url_contains | title_contains)`. Also owns advanced browsing: `snapshot()` builds a numbered Playwright accessibility snapshot, `find_and_act(goal, action, value)` asks Haiku (`claude-haiku-4-5-20251001`) to choose a `ref_N`, validates it against `_ref_map`, then acts by `get_by_role(role, name=raw_name)`. Smart-picker failure always falls back to the legacy click/fill chain. |
+| `core/automation.py` | `workflow_library` reads/writes `data/workflows.json`. Methods: `add`, `remove`, `rename`, `get`, `list_all`, `set_enabled`, `mark_run`. Emits `signals.workflow_library_changed` so `AutomationView` refreshes automatically. |
 
----
+#### Advanced Browser Automation
 
-### 5 — Win+J global summon hotkey
+The browser layer now supports an accessibility-tree + LLM picker for vague web actions:
 
-**What it tests:** `Meta+J` QShortcut → `_summon_window()`.
+1. `browser.snapshot()` calls Playwright `aria_snapshot()` (or `locator("body").aria_snapshot()` on older versions) and flattens the YAML-ish tree into prompt-safe lines like `button "Sign in" [ref_12]`.
+2. Interactive roles (`button`, `link`, `textbox`, `combobox`, `checkbox`, `radio`, `tab`, `switch`, etc.) are emitted before passive nodes. Output is capped by `_MAX_SNAPSHOT_NODES` and accessible names are truncated by `_NAME_TRUNCATE` to reduce prompt size and prompt-injection surface.
+3. `self._ref_map` stores both `"name"` (truncated prompt display) and `"raw_name"` (full accessible name for locator attempts), plus `"role"`.
+4. `browser.find_and_act(goal, action, value="")` wraps the snapshot in `<accessibility_tree>...</accessibility_tree>` and asks Haiku (`claude-haiku-4-5-20251001`) to return strict JSON: `{"ref": <integer>, "reason": "<short reason>"}`.
+5. `_parse_haiku_ref()` accepts integer `12`, string `"12"`, and string `"ref_12"`, then `find_and_act()` validates the number exists in `_ref_map`.
+6. Actions use Playwright `get_by_role(role, name=raw_name)` exact then loose matching. Fill actions share `_fill_locator()` (`click` -> `Ctrl+A` -> `Delete` -> `press_sequentially`) so SPA input handlers fire reliably.
+7. Every failure path (empty snapshot, missing Anthropic key, timeout/rate limit/API error, malformed JSON, unknown ref, locator miss) falls back to the legacy text/selector fill/click chain rather than failing the command outright.
 
-```
-1. Launch JARVIS.
-2. Click on any other window (e.g. a browser, Notepad) so JARVIS loses focus.
-3. Press Windows key + J.
-4. JARVIS should come to the foreground and be activated.
-```
+### 5.5 `core/handlers/` — intent implementations
 
-Note: `Meta` = Windows key in Qt on Windows. This only works while JARVIS is running (it's an in-app shortcut, not a system-level hotkey daemon).
+Each handler matches one or more intent names from `Claude.md`. All return `{success, output, error, needs_confirmation?}` (see `shared._ok`/`_err`).
 
----
+| File | Intents / actions handled |
+|---|---|
+| `core/handlers/__init__.py` | Package marker (empty). |
+| `core/handlers/shared.py` | Common helpers: `_ok(...)`/`_err(...)` envelopes, `_PendingConfirmation` dataclass + `request_confirmation(label, action, payload)`/`resolve_confirmation(answer)` for the "ask the user first" flow, an in-process cache for the last `browser.read_page()` output (so follow-up "summarise" queries can hit the cache). |
+| `core/handlers/paths.py` | Filesystem path resolver. For relative paths it first searches under `Path.home()` (common locations, then a bounded walk pruning `node_modules`/`.git`/etc., shallowest match wins, Documents preferred). For new paths it roots under `JARVIS_DEFAULT_CREATE_PARENT` (`documents` \| `desktop` \| `downloads` \| `home`, default Documents). Also generates suggested save paths for screenshots and stripped-trailing-`.keep` fallbacks. |
+| `core/handlers/app_launcher.py` | `open_app` (`open_browser`, `open_vscode`, `open_terminal`, `open_file_manager`, `open_spotify`, `open_url`, `open_app_generic`), `close_app`/`force_quit`. Supports Windows aliases/AppIds/protocols, `subprocess`, `webbrowser`, and delegation to `core.browser` when the persistent Chrome session is preferred. |
+| `core/handlers/input_control.py` | `type_text` (`type_text`, `type_paste`, `press_key`) and `control_mouse` (`move_mouse`, `click`, `double_click`, `right_click`, `scroll`, `drag`). Thin pass-through to `core/computer_control.py`. |
+| `core/handlers/system.py` | `system_control` — `volume_up`/`down`/`mute` (step or absolute via `level`), `brightness_up`/`down`, `screenshot`, `lock_screen`, `wifi_toggle`/`bluetooth_toggle` (Windows PowerShell), `shutdown`/`restart`/`sleep` (each goes through `request_confirmation`). Distinguishes `sleep` (suspend) from `shutdown` (power-off) per `Claude.md`. |
+| `core/handlers/file_ops.py` | `file_operation` — `create_file`/`create_directory`, `read_file`, `delete_file` (confirmed), `rename_file` (`path` + `new_name`), `move_file`, `copy_file`, `list_directory`, `search_files` (recursive when `pattern="*"`). Streams progress to the terminal via `signals.terminal_line_ready`. Path-resolves via `paths.py`. UI-level confirmation is used for create_file/create_directory (one prompt, not two). |
+| `core/handlers/code_exec.py` | `code_execution` — `run_python`, `run_shell`, `run_powershell` (`powershell.exe`), `run_cmd` (`cmd.exe /c`), `run_script`, `git_command`, `npm_command`, `install_package` (pip/npm/uv), `run_background` (detached PID-returning launch), `kill_process` (by PID or partial name; confirmed). Detects dangerous shell patterns and asks before running. Uses Claude Haiku for natural-language → command translation and error explanation. Holds command output blocks (`_BLOCK_STORE`) so multi-step plans can reference earlier results. |
+| `core/handlers/browser_handler.py` | `browser_automation` — `navigate`, `click_element`, `fill_form`, `read_page`, `extract_text`, `screenshot`, `new_tab`, `close_tab`. Starts the persistent browser on demand. `click_element` routes explicit `goal` to `browser.find_and_act(goal, "click")`; vague selector + text uses the smart picker first, then legacy fallback. `fill_form` routes `goal` + `value` to `find_and_act(goal, "fill", value)`; normal `fields` dict behavior remains unchanged. |
+| `core/handlers/screen_handler.py` | `read_screen` — `ocr_full`, `ocr_region`, `ocr_active_window`, `find_element`. Delegates to `core.computer_control.ocr_screen`. |
+| `core/handlers/automation_handler.py` | `automation_task` — `run_workflow` (resolves a saved `task_name` from `workflow_library` **or** runs inline `steps[]`), `create_workflow`, `list_workflows`, `remove_workflow` (confirmed), `rename_workflow`. Multi-step execution yields back to the UI between steps (`_yield_ui`) and resumes automatically after each in-step confirmation card is answered. Safety filter blocks dangerous nested steps. |
+| `core/handlers/reminders.py` | `reminder_task` — `set_reminder` (`message`, `delay_seconds` ≥ 5, `repeat`, optional scheduled action validated against an allow-list), `cancel_reminder`, `list_reminders`. `threading.Timer`-based registry exposed as `executor._active_reminders` for the status popover. Fires `signals.status_changed` when a reminder triggers. |
+| `core/handlers/weather.py` | `weather` → `get_current_weather`. Formats the snapshot returned by `core/integrations/weather.py`. |
+| `core/handlers/meta.py` | `jarvis_meta` — `tell_time`, `tell_date`, `status_report` (CPU/RAM via psutil + battery when sensor present), `list_voices`, `change_voice` (calls `voice_engine.switch_tts_voice`), `who_are_you`, `tell_joke`, `conversational`, `help`, `quit_application`/`close_jarvis` (graceful TTS-then-exit). |
 
-### 6 — Create Workflow UI
+### 5.6 `core/controllers/` — UI-facing coordination
 
-**What it tests:** `_NewWorkflowDialog` + `+ NEW` button in Automation view.
+| File | Function |
+|---|---|
+| `core/controllers/__init__.py` | Re-exports the controller classes used by `main.py`. |
+| `core/controllers/command_controller.py` | Parses incoming command strings, detects repeat phrases (`"do that again"`), and recognises the internal `__run_workflow_id__:<id>` token emitted by `AutomationView` ▶ buttons so it can bypass Claude and call the workflow directly. |
+| `core/controllers/confirmation_controller.py` | Standardised confirm/cancel prompts, display response strings, and HUD status labels for the confirmation flow. |
+| `core/controllers/response_composer.py` | Composes the final spoken response by combining Claude's `response` field with optional executor follow-ups (success summary, error explanation) produced by `ResponseAssembler`. |
+| `core/controllers/runtime_context.py` | Tracks recent runtime context (previous command, last Python file path, last working directory) and packs it into the `context` block sent to Claude so follow-up commands like *"run it"* resolve correctly. |
+| `core/controllers/session_flags.py` | Syncs and persists session toggle state (mic mute, TTS mute, auto-confirm, dim mode, wake word enabled) across the topbar popover, the settings page, and `config/jarvis.json`. |
 
-```
-1. Navigate to Automation (sidebar → AUTOMATION).
-2. In the WORKFLOW LIBRARY panel header, click "+ NEW".
-3. A dialog appears with two fields:
-   - WORKFLOW NAME  (e.g. "Morning Routine")
-   - TRIGGER PHRASE (e.g. "run morning routine")
-4. Fill them in and click OK.
-5. The new workflow should appear immediately in the library list.
-6. The execution log should show: "[SYSTEM] Workflow 'Morning Routine' created."
-7. The workflow starts with 0 steps (skeleton). Run it via voice: "Run morning routine"
-   — it will complete instantly with nothing to do (add steps via CLAUDE.md / voice later).
-```
+### 5.7 `core/responders/` — spoken response assembly
 
----
+| File | Function |
+|---|---|
+| `core/responders/__init__.py` | Re-exports `ResponseAssembler`. |
+| `core/responders/assembler.py` | `ResponseAssembler` turns each executor result into a structured `{primary_tts, follow_tts}` pair, branching on intent/action and success/failure. Pulls phrasings from `core/personality.py` and uses `utils.py` for compaction. |
+| `core/responders/utils.py` | Speech-formatting helpers: `filename`, `domain`, `count_ok_steps`, `first_sentence`, `compact_path_for_speech`, `compact_url_for_speech`, `speech_compact`, `tts_safe_output`, `traceback_summary`, plus tag-sets `_OUTPUT_IS_RESPONSE` / `_SUPPRESS_FOLLOW` that mark intents where the raw output already is the spoken reply (e.g. `tell_time`) or where a follow-up would be redundant. |
 
-### 7 — History clear syncs to DB
+### 5.8 `core/integrations/` — external services
 
-**What it tests:** `history_cleared` signal + `main._on_history_cleared()`.
-
-```
-1. Run JARVIS and issue a few commands.
-2. Navigate to History view → click "CLEAR HISTORY".
-3. The list should empty.
-4. Restart JARVIS — the history should still be empty (DB was cleared too).
-```
-
----
-
-### 8 — TTS truncation guard
-
-**What it tests:** `_TTS_MAX_CHARS = 800` in main.py.
-
-```
-1. Say: "Read what's on this page" (while browser is open on a content-heavy page).
-2. JARVIS should speak a truncated version of the page (ending with "…") rather than
-   reading thousands of characters (which would timeout or burn ElevenLabs quota).
-3. The transcript panel shows the FULL text; only the TTS clip is truncated.
-```
-
----
-
-### 9 — Claude token guard
-
-**What it tests:** `_infer_max_output_tokens` in `brain.py` — only uses 16k when creating a file.
-
-```
-- "Create a Python file called utils.py" → uses 16k output tokens (content needed)
-- "What is my utils.py file doing?" → uses standard 1024 tokens (read question, no content)
-- "What file should I create?" → standard tokens (no creation verb + extension)
-```
-
-No UI indicator for this — just cost/speed. Verify in `core/brain.py` logs if needed.
+| File | Function |
+|---|---|
+| `core/integrations/__init__.py` | Package marker. |
+| `core/integrations/weather.py` | OpenWeather client. Reads `config.openweather_api_key` + `config.weather_default_city`, calls the current-weather endpoint via `urlopen`, parses the payload, and returns a `{location, country, description, condition, temp_c, feels_like_c, humidity, wind_mps}` snapshot. |
 
 ---
 
-### Session 2026-04-26 — Post-action follow-up (normal commands, not only timers)
+## 6. `ui/` — PyQt5 HUD
 
-- **Goal:** For **immediate** commands, the user hears **Claude’s `response` first** (primary line), then a **short JARVIS-style “done” line** after the first audio clip **finishes** — same *tone/pools* as timer completions (`ack_scheduled_action`), e.g. *“There you go — it’s open, sir.”* / *“…results are up, sir.”* **Multi-clause** workflows (e.g. *open Chrome and search X*) get the follow-up phrased for the **last successful step** when possible.
-- **`core/personality.py`:** **`action_speech_pair(..., last_step=None)`** returns **`(primary: str, follow: str | None)`**. **Full listings / OCR / `read_page` / code output** use **`_NO_TRIM`** and stay **one TTS** (no chaser, so the body isn’t trailed by a redundant *“all set”*). **`build_response(...)`** joins **`primary` + `follow`** for display strings where a single field is still useful.
-- **`core/executor.py`:** On successful **`automation_task` + `run_workflow`**, the result dict may include **`last_step_intent`** and **`last_step_action`** (from the last **successful** step) so the follow-up line matches that intent/action, not the generic automation label.
-- **`core/voice.py`:** **`say(text, on_ready=…, on_done=…)`** — **`on_done`** after playback **ends** (stream + non-stream MCI paths, **pyttsx3** fallback). If **TTS is muted**, **`on_ready`** and **`on_done`** still fire in order so the UI does not hang.
-- **`main.py`:** First clip: **`on_ready` → `_tts_ready` → `update_last_jarvis(primary)`** (unchanged). If **`follow`**: **`on_done`** (worker thread) **`emit`s `_action_followup_tts` → `Qt.QueuedConnection` → `_on_action_followup_tts`**, which **`append_jarvis_scheduled`**, merges **`jarvis` in `_history`**, refreshes the History card, and **`voice_engine.say(follow)`**. **`_transcript_update_token`** invalidates a pending follow-up if a **new** command runs first. **Action reminders** (`_on_reminder_action`) still call **`ack_scheduled_action`** for their **single** completion line.
-- **`ui/voice.py`:** **`append_jarvis_continuation(...)`** appends a second JARVIS row on the Voice timeline without duplicating the user line.
-- **Removed (superseded):** speaking **`run_workflow`** step text via **`_flatten_workflow_output_for_tts`** as the *only* TTS — the primary is again Claude’s short **`response`**; facts remain in executor **`output` / UI**, not a long flatten read aloud.
+### 6.1 Theme and shared widgets
 
----
+| File | Function |
+|---|---|
+| `ui/__init__.py` | Package marker. |
+| `ui/theme.py` | Single source of truth for colour tokens (Mark-LXXXV cyan `#00E5FF` over `#080A0A`), font role registry (Space Grotesk / Inter / Roboto Mono), sidebar/topbar/bottombar widths, semantic tokens (`TEXT_MUTED`, `IDLE_CYAN`, `BG_PANEL`), global QSS (`app_stylesheet`, `tooltip_qss`), font loader (`load_jarvis_fonts`), logo helpers (`jarvis_logo_pixmap`, `jarvis_logo_icon`). |
+| `ui/helpers.py` | Reusable layout factories: `PanelFrame`, `MetricCard`, `MetricCell`, `QuickActionBtn` with hover-glow animations. |
+| `ui/widgets.py` | The big shared-widget toolbox. `_mono()` font helper, `_panel_header()` factory, `GlassPanel` re-export, `ModuleIDLabel`, `StatusPip` (active/standby/error pulse), `SegmentedBar`, `ScanLineOverlay`, `LineChartWidget`, `ArcReactorWidget` (Mark-LXXXV reactor: dashed outer ring, armor band, spokes, glowing core with state-coloured pulse), compat aliases (`OrbWidget`, `SparklineWidget`), `AnimatedLabel`, `WaveformStrip`, `ConfidenceGauge`, `ToggleSwitch`, `MicButton`, `GreetingCard`, `TypingIndicator`, `_TagHighlighter` + `_TagLineEdit` (`@tag` highlight + autocomplete popup, Enter = submit, Shift+Enter = newline), `CommandBar`, `HudStatusLabel`, `LastActionStrip`, `ToastNotification`, `ConfirmationBar`. |
 
-## What Was Built
+### 6.2 Chrome (sidebar + bars + popovers + palette)
 
-JARVIS (Just A Rather Very Intelligent System) — an Iron Man-style voice AI desktop assistant with a full PyQt5 HUD, Claude API brain, ElevenLabs voice, and real OS/browser control.
+| File | Function |
+|---|---|
+| `ui/sidebar.py` | `HudSidebar` — fixed 128-px column with `STARK_OS / MARK_LXXXV` brand, six nav items (`SYSTEM`, `VOICE`, `AUTOMATE`, `HISTORY`, `CONFIG`, `TERMINAL`) using Phosphor icons (`qtawesome ph.*`), and a `DIAGNOSTICS` footer. Emits `nav_changed(int)` mapped to `QStackedWidget` indices. Paints its own right-edge glow so it lines up pixel-for-pixel with the topbar's bottom glow underline. |
+| `ui/bars.py` | `TopBar` (logo + `HUD_STATUS_V4.2` brand, live `CPU` / `MEM` / `UPTIME`, Wi-Fi arcs, phone-style battery glyph with charge bolt, three trailing icon buttons that emit `settings_clicked` / `terminal_clicked` / `broadcast_clicked`, `battery_alert(message, kind)` signal at 20 % and full charge). `BottomBar` (`SYSTEM ONLINE` pill, `PING …ms` via `_RttWorkerThread` + EMA smoothing, `NET ↑/↓` via `ThroughputSampler`, command counter, current view name). Also exposes `draw_glow_underline` / `draw_glow_right_edge` reused by the sidebar. |
+| `ui/popovers.py` | Two anchored `Qt.Popup` dropdowns. `QuickSettingsPopover` (toggle rows for `MUTE_MIC`, `MUTE_TTS`, `AUTO_CONFIRM` (warned), `DIM_MODE`, `WAKE_WORD`; `OPEN FULL SETTINGS →` footer) with `sync_state(...)` and `show_below(anchor)`. `SystemStatusPopover` (read-only live health: Claude API, ElevenLabs TTS, Google STT, Browser session, Active reminders, Wake word) — refreshes on every open. |
+| `ui/command_palette.py` | `CommandPalette` — full-window modal overlay opened via Ctrl+K or the topbar terminal icon. Centered glass frame with `_TagLineEdit`, recent-command chips (`_RecentChip`, click to refill), Esc/click-outside to dismiss, dim backdrop. |
 
-### Session 2026-04-26 — Top bar battery + Wi‑Fi
+### 6.3 Views (one per stacked page)
 
-- **File:** `ui/bars.py`
-- **Battery:** Mobile-style **glyph** (rounded body, right terminal, fill level) plus **`NN%`** text immediately to the right, placed after **UPTIME** in the center stat strip. **Fill colour:** low (<20%) **amber/orange**; on **AC** **emerald**; otherwise **HUD cyan** (`CYAN` from `ui/theme.py`). When **AC / charging** (`power_plugged`), a small **white lightning bolt** is drawn **on top**, centered on the upper edge of the battery (overlaps the outline slightly), like phone status bars. **Source:** `psutil.sensors_battery()`. The whole block is **hidden** when the OS reports no battery (typical **desktop** tower).
-- **Wi‑Fi:** Custom **3-arc + dot** icon in the same strip; **shown only** when a **data-capable** Wi‑Fi path is detected: **(1)** a wireless-like interface (name matches `wi-fi` / `wlan` / `wireless` / `wlp` / etc.) is **up** and has a **non–link-local IPv4**, or **(2)** on **Windows** `netsh wlan show interfaces` matches `State : connected` (covers naming quirks). **Hidden** on Ethernet-only or offline.
-- **Update cadence:** same **1s** `QTimer` as MEM/UPTIME (`TopBar._tick`).
+| File | Function |
+|---|---|
+| `ui/dashboard.py` | `DashboardView` (stack index 0). Three columns: `_SysLogPanel` (live `TranscriptPanel` rendered through `_TypewriterProxy` for animated user/JARVIS typing), `_CenterPanel` (`ArcReactorWidget` + `StateLabel` reflecting `idle`/`listening`/`thinking`/`speaking`/`error`/`wake`), `_RightTelemetry` (`_CpuCard` with live psutil chart + threshold, `_MemCard`, `_UplinkCard` with TX/RX), plus a centered `_CommandStrip` containing the mic button, voice waveform, and `CommandBar`. Paints its own dotted grid + radial halo background and re-positions the toast notification on resize. |
+| `ui/voice.py` | `VoiceView` (stack index 1). VOICE_CORE: page header, `_StatusStrip` (mic state, router, pipeline, last confidence), main body splits into `_TranscriptTimeline` (HTML rich-text history with SYS/USER/JARVIS lines) and `_CommandInspector` (`StateLabel`, `WaveformStrip`, large `_PageMicButton` with pulse ring, intent/action/confidence/status fields). Bottom `EXECUTION LOG` (`TerminalLog`). Exposes `set_state`, `update_transcript`, `set_execution`, `set_pending`/`clear_pending`. |
+| `ui/views/automation/view.py` | `AutomationView` (stack index 2). AUTOMATION_CORE: workflow library list (left) + step breakdown (right) + execution log (bottom). Add/edit/delete dialogs, ▶ run buttons emit `__run_workflow_id__:<id>` tokens for `command_controller`. Re-renders on `signals.workflow_library_changed`. |
+| `ui/views/automation/components.py` | `WorkflowRow` (pip + name + trigger + step count + ON/OFF toggle + ▶ run + ✕ delete), `StepBreakdown` (right panel showing meta + numbered step list), `step_label()` helper. |
+| `ui/views/automation/dialogs.py` | `GlassDialog` base (frameless draggable JARVIS-themed modal), `NewWorkflowDialog` (used for both new + edit — name, trigger, multi-line steps editor with live counter), `ConfirmDeleteDialog` (amber warning). |
+| `ui/views/automation/__init__.py` | Re-exports the automation view package. |
+| `ui/automation.py` / `ui/automation_components.py` / `ui/automation_dialogs.py` | **Compatibility shims** that re-export the symbols from `ui/views/automation/*`. Kept so older imports do not break. |
+| `ui/history.py` | `HistoryView` (stack index 3). COMMAND_LOG: three `_StatCard`s (`TOTAL COMMANDS`, `AVG CONFIDENCE`, `SESSION UPTIME` — uptime ticks independently), `_FilterBar` with debounced search, `_LogTable` (scrollable `_LogRow` list with intent + confidence colouring), `_IntentBreakdown` (top intents by frequency via `Counter`). `CLEAR HISTORY` emits `history_cleared`. |
+| `ui/settings.py` | `SettingsView` (stack index 4). SYSTEM_CONFIG: `_HealthStrip` (Anthropic/ElevenLabs/Browser pills with live refresh), API key inputs (masked, `.env` only), model + voice + theme combos, debug toggle, session flags (mic/TTS/auto-confirm/dim/wake-word), mic sensitivity slider, TTS speed slider, noise-gate toggle, mic input device picker (from sounddevice). `APPLY_CFG` calls `config.save()` and triggers `voice_engine.switch_tts_voice(...)` with rollback on provider failure. Emits per-flag signals so `main.py` and `QuickSettingsPopover` stay in sync. |
+| `ui/views/__init__.py` | Package marker for the view subpackages. |
 
-### Session 2026-04-26 — Dashboard directive field (height cap + scroll) + `press_key` aliases
+### 6.4 Components (reusable surfaces)
 
-- **`ui/widgets.py` (`_TagLineEdit`):** Multi-line directive field **stops growing** after a small cap (**`_H_MAX` = 108px**), then **overflow scrolls** (`ScrollBarAsNeeded` when content exceeds the cap). **`QTextEdit.WidgetWidth`** line wrap (was `NoWrap`). **`resizeEvent`** calls `_reflow_height` so wrapped line count updates when the field is resized. **`contentHeightChanged`** emits **`self.height()`** after layout.
-- **`ui/dashboard.py` (`_InputBlock`):** Input card height **capped** (`min(..., 160)` for `INPUT_H`, down from 220) to match the editor behaviour. **Bug fix:** **`_CommandStrip`** only called `setFixedHeight` once in `__init__`; when the block grew, the strip stayed short and layout broke. **`_on_input_editor_height`** now sets **`parent().setFixedHeight(self.height())`** so the strip tracks the block whenever the editor height changes.
-- **`core/computer_control.py`:** **`_normalize_key_token()`** maps natural names (e.g. **`windows` → `win`**, **`winkey` → `win`**, **`lwin`/`rwin` → `winleft`/`winright`**) before **`press_key`** calls PyAutoGUI **`hotkey`** / **`press`**, so STT/brain output like `windows+m` works. **Win+M** (minimise all) needs the brain to route **`type_text` + `press_key`** with a combo such as `win+m`, not **`control_mouse`**; phrasing *“click Win+M”* can mis-route to mouse — prefer *press* / *send* or **`@type`**.
-
-### Session 2026-04-26 — Tooltips (readability) + bottom bar PING + NET speed
-
-- **`ui/theme.py`:** **`tooltip_qss()`** — global **`QToolTip`** QSS: readable **`on_surface`** text on **`surface_container`** background, cyan border, 11px, padding. **`main.py`:** set **`QPalette.ToolTipBase` / `ToolTipText`**, then **`app.setStyleSheet(tooltip_qss())`** (Fusion’s defaults were nearly **black-on-black** for tooltips).
-- **`ui/dashboard.py`:** Directive field tooltip shortened to **two lines** (`\n`): *Enter — send* / *Shift+Enter — new line* (narrower bubble).
-- **`core/net_telemetry.py` (new):** **`icmp_ping_ms`**, **`tcp_connect_rtt_ms`**, **`probe_internet_rtt()`** (rotating ICMP hosts `1.1.1.1` / `8.8.8.8` / `1.0.0.1` / `9.9.9.9`, then **TCP `1.1.1.1:443`** if ICMP fails); **`smooth_rtt_ema`**, **`format_rate_bps`**, **`ThroughputSampler`** ( **`psutil.net_io_counters()`** delta → bytes/s up+down, all interfaces).
-- **`ui/bars.py` (`BottomBar`):** **`PING NNms`** (EMA-smoothed; **`—`** after two consecutive failed probes to avoid flicker) via **`_RttWorkerThread`** ( **`QThread`**, does not block UI); refresh loop ~**2.5s**. **`NET ↑… ↓…`** (K/s or M/s) via **`QTimer` (1s)**. Tooltips describe ICMP/TCP and total interface throughput. **`_stop_rtt_thread()`** idempotent — **`QApplication.aboutToQuit`** + **`main.JarvisWindow.closeEvent`**.
-- **`ui/theme.py`:** **`BOTBAR_H` 38 → 40** to fit the new labels.
-- **`main.py`:** Calls **`_botbar._stop_rtt_thread()`** in **`closeEvent`** before **`browser.stop()`**.
-- **`tests/test_net_telemetry.py`:** Non-network unit tests for **`format_rate_bps`**, **`smooth_rtt_ema`**, **`_parse_icmp_time_ms`**, **`ThroughputSampler`**.
-
-### Session 2026-04-26 — Action reminders (`set_reminder` + `run`)
-
-- **Goal:** Reminders are not only **notify** (toast / `REMINDER: …`); the model can attach **`parameters.run`** = one **`{ intent, action, parameters }`** step that **`dispatch()`** runs when the timer fires (Qt main thread via **`signals.reminder_action`**).
-- **`core/executor.py`:** **`_is_schedulable_reminder_action`**, **`_validate_reminder_run`**, **`_format_run_summary`**. Registry **`_reminder_meta`** (message, run, schedule_confidence) + **`_active_reminders[id]`** timers; cancel by **message** (all matches); list shows IDs. **Blocked** from scheduling: `file_operation`, `code_execution`, `automation_task`, nested `reminder_task`, `close_app`, `type_text`, `control_mouse`, power/sleep/force-kill, etc. **Allowed** example families: `open_app`, `search_web`, safe `system_control`, `browser_automation` (navigate, read_page, …), `read_screen`, read-only `jarvis_meta`.
-- **`core/signals.py`:** **`reminder_action.emit(dict)`** — **`main._on_reminder_action`** → **`dispatch(..., confirmed=True)`**, transcript **`append_jarvis_scheduled`**, TTS, history, toasts.
-- **`ui/components/transcript.py`:** **`append_jarvis_scheduled`**, **`_render`** skips empty **`YOU:`** line.
-- **`tests/test_reminder_scheduled.py`:** Unit tests for **`_validate_reminder_run`** (no network).
-- **`CLAUDE.md`:** `set_reminder` + **`run`** + **`schedule_confidence`** documented in **`reminder_task`** section.
+| File | Function |
+|---|---|
+| `ui/components/__init__.py` | Package marker. |
+| `ui/components/panels.py` | `GlassPanel` — semi-transparent rectangle with cyan corner brackets, hand-painted border, swap-able fill colour. Base for every card/panel in the app. |
+| `ui/components/transcript.py` | `InlineConfirmCard` (pulsing dashed border, `[CONFIRM]` + `[CANCEL]` HUD buttons, random wait line for TTS), `TerminalLog` (read-only QTextEdit with blinking block cursor), `TranscriptPanel` (the conversation view — rows of `[time] YOU:` / `[time] JARVIS:` with intent/conf tag, "load more / show less" for long responses, embedded `InlineConfirmCard`). |
+| `ui/components/terminal.py` | `TerminalPanel` (stack index 5). JARVIS Shell v2 — header, output `QTextEdit` with colour-coded lines (stdout cyan, errors red, success green, system warning amber, command echo white), `❯` prompt input with Up/Down history navigation, Ctrl+L to clear, emits `command_submitted("@code <text>")` so input flows through the standard code-execution intent. Consumes `signals.terminal_line_ready` + `signals.terminal_done`. |
+| `ui/components/typewriter.py` | `_TypewriterProxy` — wraps `TranscriptPanel` so user speech types at 20 ms/char, JARVIS responses at 25 ms/char, with animated `Thinking.../../../` placeholder while the brain is working. Forwards every other attribute to the underlying panel. |
 
 ---
 
-## What JARVIS can do (capability list)
+## 7. `tests/` — verification harness
 
-This is the **authoritative “what it does now”** summary (executor + brain + UI). Destructive or sensitive actions go through **confirmation** where noted.
+A mix of pytest-style unit tests and interactive runners. Run individual tests via `uv run python tests/<file>.py` or `uv run pytest tests/`.
 
-### Brain, memory, and routing
-- **Claude** returns a **single JSON** command per user utterance: `intent`, `action`, `parameters`, `confidence`, `response`, `hud_status`, `requires_confirmation`.
-- **“I'm unable to process that request.” (unknown, ~0%)** comes from **`core/brain._fallback`**, not from normal **`intent: "unknown"`** routing. Typical causes: **invalid JSON** from the model (e.g. **unescaped newlines** or quotes inside `create_file`’s `content` string), **JSON truncated** (former **`max_tokens=1024`** was too small for long `content`), prose before/without a parseable object, or **API errors** (auth, rate limit). **Fixes in code:** `brain.py` uses higher **`max_tokens`** for file-like prompts, **extracts the first balanced `{...}`** if the model prefaces with text, and **`CLAUDE.md`** instructs strict JSON escaping for **`create_file`**. **Restart the app** after changing **`CLAUDE.md`** (system prompt is cached in-process).
-- **`@tags`** in the command bar (e.g. `@browser`, `@files`, `@system`) override intent; see `CLAUDE.md` for the full map.
-- **Conversation memory** (`core/memory.py`) — rolling window (~8k tokens est.), pairs trimmed together.
-- **STT** normalisation (whitespace / punctuation) before routing.
-
-### Voice and UI shell
-- **Voice:** Google STT (mic) → command; **ElevenLabs TTS** (with **pyttsx3** fallback), streaming + transcript **typewriter** sync; mic/TTS **mute** toggles; **`Thinking...`** state while work is in progress.
-- **HUD:** Dashboard (transcript, arc reactor, telemetry, gauge), **Voice**, **Automation**, **History**, **Settings**; **TopBar** (CPU / MEM / UPTIME, **battery** + **Wi‑Fi** when available, Quick Settings, **Command palette** / **Ctrl+K**, System Status); **toasts**; **inline confirm card** (cyan CONFIRM / red CANCEL).
-- **Command palette** — text commands + `@` tags, recent history.
-- **Main directive field (bottom bar):** **Enter** sends the command (same as the ↵ control); **Shift+Enter** inserts a **newline** for multi-line text. The editor is `QTextEdit` subclass `_TagLineEdit` in `ui/widgets.py` (emits `contentHeightChanged` for layout); the dashboard input card resizes with line count in `_InputBlock` (`ui/dashboard.py`). **Tooltip (two lines):** *Enter — send* / *Shift+Enter — new line*; app-wide **QToolTip** contrast via `tooltip_qss()` + palette in `main.py`.
-- **Bottom status bar `BottomBar`:** **`SYSTEM ONLINE`**, **`PING …ms`**, **`NET ↑… ↓…`** (live throughput), command count, current view. See `core/net_telemetry.py` + `ui/bars.py`.
-- **Quick Settings** — mic mute, TTS mute, **auto-confirm** (session-only: skips the *UI* hold; executor registries still apply for dangerous pairs).
-
-### Confirmation model (two layers)
-1. **Brain `requires_confirmation`** — used for high-risk intents (e.g. shutdown, delete file, `force_quit`, sleep, etc. per `CLAUDE.md` + `_CONFIRMATION_REQUIRED_ACTIONS` in `executor.py`).
-2. **Executor `needs_confirmation`** — mid-flight prompts with a **stored callback** (`request_confirmation`), e.g. **create file** (shows resolved **file** and **folder** path), screenshot when save folder is missing, etc. User must **Confirm** in the transcript card (or answer yes/no in voice when a pending action exists).
-
-**Sleep vs shutdown (routing):** natural language should map *sleep / suspend / standby / sleep mode* → `system_control` + **`sleep`**, and *shut down / power off* → **`shutdown`**. **Sleep, shutdown, and restart** all require **confirmation** before running.
-
-**Create file:** always shows **“Are you sure you want to create this file in this folder, sir?”** (variants in `personality.py`) plus **File:** and **Folder:** lines; if the folder does not exist, the prompt notes that it will be created on confirm. Keep **`requires_confirmation`: `false` in JSON** for `create_file` so the model does not double-prompt; the **executor** owns the confirm UI.
-
-### Open / close applications (`open_app`, `close_app`)
-- Open **browser** (Chrome / Firefox / Edge), **VS Code**, **terminal**, **file manager**, **Spotify**, **URL** (default or Playwright session), or **generic** app by name.
-- **Close** an app; **force quit** a process (with confirmation). Windows uses `taskkill` with correct flags when applicable.
-
-### Web search (`search_web`)
-- **Google**, **YouTube**, **GitHub**, **Stack Overflow**, **Wikipedia**, or generic **web search** — builds the right query URL; if the **Playwright** session is up, uses **`browser.navigate(url)`** (same Chrome JARVIS controls), otherwise falls back to **`webbrowser.open(url)`** (default browser). *Note: Google may show the `google.com/sorry` interstitial on automated Chrome; use `search_web` vs workflows that only `navigate` the Playwright window accordingly.*
-
-### Input automation (`type_text`, `control_mouse`)
-- **Type** text, **paste**-style, or **press keys** (including combos, e.g. `ctrl+c`). Implementation: `executor` → `_handle_type_text` → **`press_key`** in `core/computer_control.py` (PyAutoGUI). Natural language like *press Enter*, *Ctrl+V*, *tab* should route to `type_text` with **`action`: `press_key`** and **`parameters.key`** (see `CLAUDE.md` for allowed key names). **Clicks** on screen pixels or UI are **`control_mouse`** (e.g. `click`); that path does **not** replace keyboard input — ask the brain to use the right intent so STT/NL does not conflate *click* (mouse) with *press a key* (keyboard).
-- **Mouse:** move, click, double-click, right-click, **scroll**, **drag** (coordinates per `computer_control` / PyAutoGUI).
-
-### System control (`system_control`)
-- **Volume** up / down / **mute**; optional **absolute level** (0–100) when the model supplies `level` (see `CLAUDE.md`).
-- **Screenshot** to disk (path resolution, optional **region**); may ask to create a **missing folder** (executor confirmation).
-- **Lock** screen.
-- **Sleep**, **shut down**, **restart** — **confirmed**; Windows uses **`shutdown.exe`** from `%SystemRoot%\System32` for shutdown/restart, and the existing sleep path (e.g. `rundll32` + power profile on Windows).
-- *Planned/extended in schema:* brightness, WiFi/BT toggles — only if implemented in `executor` / `computer_control` (check code before advertising beyond volume/lock/screenshot/sleep/restart/shutdown).
-
-### File operations (`file_operation`)
-- **Relative path resolution:** first segment is resolved as a **folder name** under **`Path.home()`**: fast checks (Documents, Desktop, etc.), then a **bounded `os.walk`** of the user profile (depth cap, prunes e.g. `node_modules`, `.git`, large AppData paths). If no folder matches, new paths are rooted under **`JARVIS_DEFAULT_CREATE_PARENT`** in `.env` (`documents` \| `desktop` \| `downloads` \| `home`; default **Documents**), **not** the JARVIS process CWD. Implementation: **`core/executor.py`** (`_find_folder`, `_resolve_file_operation_path`, etc.).
-- **create_file** — **path confirmation** in UI (file + folder + note if folder will be created), then write.
-- **read_file** — read text (with optional fuzzy locate by filename).
-- **delete_file** — **requires_confirmation** (brain or registry).
-- **move_file** / **copy_file**
-- **list_directory**
-- **search_files** (glob under a base path)
-
-### Code execution (`code_execution`)
-- **run_python** — `python -c` (timeout bounded).
-- **run_shell** — command via argument list, **`shell=False`** (no shell injection).
-- **run_script** — run a script file.
-- **git_command** / **npm_command** — same execution path as shell, parsed with `shlex`.
-
-### Browser automation — Playwright (`browser_automation`)
-- Persistent **Chrome** session: **navigate**, **click** (selector / text / x,y, with **search** fallbacks including **Enter** on the search field when the submit button is stale), **fill_form**, **read_page** (see below), **extract** by selector, **screenshot** (page or element), **new_tab**, **close_tab** (optional **`url_contains` / `title_contains` / `match`** to close a **specific** tab, not only the active one).
-- **`read_page`:** returns a **tab header** (document **title** + **URL**) and then **visible body text** (up to 4k chars of content). If no text is extractable (e.g. empty / blocked page), the header is still returned with a short note. **`personality._NO_TRIM`** includes **`read_page`** so the HUD/TTS is not hard-truncated to ~100 characters.
-
-### Read screen / OCR (`read_screen`)
-- **OCR** full screen, **region**, or as wired in `computer_control` (Tesseract must be on **PATH**).
-
-### Reminders (`reminder_task`)
-- **set_reminder** (delay floor **5s** in executor), **cancel_reminder**, **list_reminders** (threading **Timer** + metadata).
-- **Action reminders:** optional **`parameters.run`** = one schedulable step; when the timer fires, **`reminder_action`** → **`main._on_reminder_action`** runs **`dispatch`** (see **`CLAUDE.md`** allowlist). Message-only timers still emit **`status_changed`**: `REMINDER: …`.
-
-### JARVIS meta (`jarvis_meta`)
-- **tell_time**, **tell_date**, **status_report** (CPU, memory, **battery** when `sensors_battery()` is available), **conversational** (can use page cache); other actions (theme, help, etc.) are defined in **`CLAUDE.md`** for the model — wire-up in `executor` may be partial; trust **`CLAUDE.md`** + `personality.say` for what is spoken.
-
-### Automation (`automation_task`)
-- **list_workflows**, **create_workflow**, **remove_workflow** (with confirmation), **rename_workflow**, **run_workflow** from JSON `data/workflows.json` via `WorkflowLibrary`. Dangerous step types are **blocked** in library validation (see `_DANGEROUS_STEPS` / `_BLOCKED_INTENTS`).
-- **UI `+ NEW` button** in the Automation page WORKFLOW LIBRARY panel — opens a minimal dialog (name + trigger phrase) to create a skeleton workflow directly from the UI without a voice command.
-
-### Unknown
-- **unknown** — safe fallback; no action.
-
-### Vapi
-- **Optional** — `vapi_client.py` can sync assistant definition; desktop audio still uses local ElevenLabs.
-
----
-
-## Session notes — docs sync (2026-04-26)
-
-- **Sleep vs shutdown:** Prompt + executor treat **`sleep`** and **`shutdown`** as distinct `action`s; both require user **confirmation** before execution.
-- **Create file:** **Executor-level** confirmation with **full path visibility** (file + folder); merged with “create missing folder” into one confirm step.
-- This **`context.md`** section + **`README.md`** updated to list capabilities in one place.
-
----
-
-## Session work — 2026-04-26 (path resolution, browser read, UI mocks, skills, product notes)
-
-Handoff of **what was implemented and decided** in that session (may span multiple local commits). Use this when onboarding or avoiding repeated mistakes.
-
-### File paths (`core/executor.py`)
-
-- **`_find_folder(name)`** — Resolves a folder **by name** for the first segment of relative paths: shortcuts (`documents`, `desktop`, …), then one-level scan under common roots, then **profile-wide** exact directory-name match via **`_find_all_exact_name_in_profile`** (depth cap **`_HOME_WALK_MAX_DEPTH`**, prunes dir names and path fragments to skip huge trees).
-- **Disambiguation:** **`_pick_best_of_matches`** — shallowest path wins; paths under **Documents** preferred among ties.
-- **`_resolve_file_operation_path`** — If the first segment is not found, builds under **`_default_create_parent()`** from **`JARVIS_DEFAULT_CREATE_PARENT`** (see **`.env.example`**) instead of the project CWD.
-- **Lint fix:** `_HOME_PRUNE_PATH_FRAGMENTS` — avoid invalid **raw** strings ending in `\` (use escaped normal strings).
-- **Docs:** **`CLAUDE.md` / `Claude.md`** — path resolution and env var; **`search_web` execution** note was discussed (user may have **reverted** default-browser-only search; **verify `executor._handle_search_web`** in tree).
-
-### Browser (`core/browser.py`)
-
-- **`read_page`:** prepends **document title** and **URL** of the **Playwright** tab, then **page content**; succeeds with tab info even when body text is empty (instead of a hard error that triggered “couldn’t extract anything useful” for questions like *which page are you on?*).
-- No separate `page_info` action in the **current** design — **check `executor` + `personality.py`** if that was added then removed.
-
-### Personality (`core/personality.py`)
-
-- **`_NO_TRIM`** extended with **`("browser_automation", "read_page")`** so long `read_page` output is not collapsed to a tiny snippet for TTS/HUD.
-
-### UI — no mock seed (`main.py`, `ui/dashboard.py`, `ui/history.py`, `data/mock.py`)
-
-- **SYS_LOG_BUFFER** starts **empty** (no fake boot log JSON / kernel lines in **`dashboard._SysLogPanel`**).
-- **Session history** no longer pre-filled from **`MOCK_HISTORY`**; **History** view initial load uses **empty** list, not **`MOCK_HISTORY_FULL`**.
-- **`data/mock.py`:** `MOCK_HISTORY` / `MOCK_HISTORY_FULL` as **empty** lists; optional **`MOCK_AUTOMATIONS`** kept as sample data only.
-
-### Cursor: `/learn` skill (optional)
-
-- **Path:** **`.cursor/skills/learn/SKILL.md`** (project). **Default `.gitignore` ignores `.cursor/`** — to version the skill, use **`git add -f .cursor/skills/learn/SKILL.md`** or a gitignore exception.
-- **Intent:** user **`/learn <topic>`** → **deep research** (sources) → **write** `context/learnings/<slug>.md` for durable project memory.
-
-### Architecture notes (conversation, not all code)
-
-- **Claude API key** is used in **`core/brain.py`** only; **`core/executor.py`** and **`core/computer_control.py`** do **not** call Anthropic — they consume the **JSON** from the brain. **Strong JSON** = prompt + validation + allowlists, not “wire the API into every module.”
-- **File / search in executor** uses **Python** (`pathlib`, `os.walk`, etc.); **shell** is only where **`code_execution` → `run_shell`** (or similar) is intentional.
-- **Google `google.com/sorry`:** Playwright-driven **Google search** can hit “unusual traffic” — product fix discussed was **`webbrowser.open` + `google.com/search` for `search_web`**; confirm **`_handle_search_web`** in repo if that stuck after user revert.
-
-### Git
-
-- Example commit groupings for this batch were suggested in chat (core vs UI, optional `git add -f` for the learn skill). **Use `git status`** before committing.
-
----
-
-## Project Structure
-
-```
-jarvis-project/
-├── main.py                  # Entry point — JarvisWindow, Qt signal bridge, state machine
-├── CLAUDE.md                # Brain config v2.1 — 14 intent categories, @TAG routing, JSON schema
-├── .env                     # API keys (never committed)
-├── pyproject.toml           # Dependencies (uv)
-├── core/
-│   ├── brain.py             # Claude API connector, @tag routing, STT normalisation
-│   ├── memory.py            # Rolling conversation history (8k token window)
-│   ├── automation.py        # WorkflowLibrary (JSON) — load/save workflows, step validation
-│   ├── executor.py          # Intent dispatch — handlers, dispatch() + confirmation registry
-│   ├── computer_control.py  # OS control — mouse, keyboard, OCR, clipboard, volume
-│   ├── net_telemetry.py     # HUD: ICMP/TCP RTT, psutil throughput helpers
-│   ├── browser.py           # Playwright Chrome session — navigate, click, fill, read, tabs
-│   ├── voice.py             # ElevenLabs TTS (streaming) + Google STT
-│   ├── signals.py           # Qt signal hub
-│   └── vapi_client.py       # Vapi assistant config sync
-├── ui/
-│   ├── dashboard.py         # Main HUD — SYS_LOG_BUFFER, arc reactor, telemetry
-│   ├── bars.py              # TopBar, BottomBar
-│   ├── sidebar.py           # Nav sidebar
-│   ├── voice.py             # Voice view
-│   ├── history.py           # History view
-│   ├── settings.py          # Settings view
-│   ├── automation.py        # Automation / workflow library view
-│   ├── command_palette.py  # Global modal — Ctrl+K, @tags, recent commands
-│   ├── popovers.py          # QuickSettingsPopover, SystemStatusPopover (TopBar)
-│   ├── components/          # transcript (incl. inline confirm), typewriter, panels
-│   ├── widgets.py           # Shared widgets
-│   └── theme.py             # Colors, fonts
-├── config/
-│   └── settings.py          # AppConfig — loads .env, never writes API keys to disk
-├── data/
-│   ├── mock.py              # Empty `MOCK_HISTORY` stubs; optional `MOCK_AUTOMATIONS` samples (not used by main)
-│   ├── intents.py           # Intent definitions
-│   └── workflows.json      # Named workflow library (user-editable / UI-backed)
-└── tests/
-    ├── test_computer_control.py   # 6 tests: clipboard, keyboard, screenshot, OCR, mouse, volume
-    ├── test_executor.py           # 15 tests: open/close app, web search, file ops, mouse, meta, reminders
-    ├── test_browser.py            # 15 tests: navigate, click, fill, read, screenshot, tabs
-    ├── test_net_telemetry.py      # Unit: format_rate, EMA, ICMP parse, throughput sampler
-    └── test_reminder_scheduled.py # Unit: _validate_reminder_run for action reminders
-```
-
-### Intent quick reference (14 categories)
-
-| Intent | @Tag | What it does (short) |
+| File | Style | What it verifies |
 |---|---|---|
-| `open_app` | `@app` | Launch apps, open URLs (browser or Playwright) |
-| `close_app` | — | Close app; force quit (with confirm) |
-| `search_web` | `@search` | Query URLs — Playwright **navigate** if session up, else default browser (see capability text) |
-| `type_text` | `@type` | Type text, paste, key combos |
-| `control_mouse` | `@mouse` | Move, click, scroll, drag |
-| `system_control` | `@system` | Screenshot, volume, lock, **sleep** / **shutdown** / **restart** (with confirm) |
-| `file_operation` | `@files` | **Create** (path confirm in UI), read, delete (confirm), move, copy, list, search |
-| `code_execution` | `@code` | Python, shell, script, **git** / **npm** commands |
-| `browser_automation` | `@browser` | Playwright: navigate, click, fill, read, tabs, screenshots |
-| `read_screen` | `@screen` | OCR (Tesseract) |
-| `automation_task` | `@automate` | Workflows: list, run, create, remove, rename |
-| `reminder_task` | `@remind` | Set / cancel / list reminders; optional **scheduled action** via `run` |
-| `jarvis_meta` | `@jarvis` | Time, date, status, **conversational**; other meta in `CLAUDE.md` |
-| `unknown` | — | No action; graceful fallback |
+| `tests/test_browser.py` | Interactive menu | Manual smoke tests for every `core.browser` method: start, navigate (with/without scheme, bad URL), read_page, extract_content, click by selector/text, fill_form, screenshot_page, new_tab, close_tab, stop. |
+| `tests/test_executor.py` | Interactive menu | Live executor calls for every major intent: open_app/close_app, search_web (Google + YouTube), file CRUD (with confirm flow), mouse right-click/scroll/drag, jarvis_meta tell_time / tell_date / status_report, reminder_task with a 10 s sleep. |
+| `tests/test_computer_control.py` | Interactive menu | Clipboard, keyboard, screenshot, OCR, mouse move, volume up/down. |
+| `tests/test_net_telemetry.py` | pytest unit | `format_rate_bps`, `smooth_rtt_ema`, `_parse_icmp_time_ms`, `ThroughputSampler` first-sample sentinel. |
+| `tests/test_reminder_scheduled.py` | pytest unit | `_validate_reminder_run` allow-list + `_format_run_summary` text. |
+| `tests/test_voice_switch.py` | unittest | `_classify_elevenlabs_error` quota detection + `voice_engine.switch_tts_voice` rollback when the provider probe raises. |
+| `tests/test_workflow_nlu.py` | unittest | `parse_create_workflow_command` for multi-line routines, non-creation rejection, and Windows-path + after-clause handling. |
+| `tests/test_weather.py` | pytest + monkeypatch | `get_current_weather` payload parsing, `_handle_weather` success + unknown-action + missing-key cases. |
 
 ---
 
-## Key Architecture Decisions
+## 8. `assets/` — visual references and brand mark
 
-### Signal Flow
-```
-User input → _process_cmd() → ask_claude_async() → _brain_result_ready signal
-→ _on_brain_result() → _execute_result()
-    ├─ (single-intent or non-workflow) → dispatch(result) → _finish_execute(...)
-    └─ (automation_task + run_workflow + steps) → daemon Thread → dispatch(result)
-                                                   → _exec_done.emit(payload)
-                                                   → _on_exec_done() → _finish_execute(...)
-
-_finish_execute():
-→ voice_engine.say(primary, on_ready=λ: _tts_ready.emit(), on_done=λ: _action_followup_tts.emit when follow)
-→ ElevenLabs streams → on_ready() → _tts_ready → transcript.update_last_jarvis(primary)
-→ (after first clip ends) on_done() → _action_followup_tts → append_jarvis_scheduled + say(follow)
-```
-When there is **no** follow-up line, behaviour matches the old single-clip path (`on_done` omitted).
-For **multi-step workflows**, `dispatch()` runs in a daemon thread so the Qt event loop stays live.
-The `_exec_done` signal (Qt signal, thread-safe) bridges the result back to the main thread.
-
-### Thread Safety
-- All worker→UI updates go through `pyqtSignal` — never direct widget access from threads
-- `BrowserSession` uses `threading.RLock` to serialize all Playwright calls
-- `ConversationMemory` uses `threading.Lock` on all mutations
-
-### TTS/Transcript Sync
-- `voice_engine.say(text, on_ready=…, on_done=…)` — event-driven; `on_done` when playback **finishes** (for chaining a **second** line)
-- `on_ready()` fires when ElevenLabs first audio chunk is ready to play
-- Transcript typewriter for **primary** still starts on `on_ready` — the **follow-up** is appended (scheduled-style row) when `on_done` runs, then spoken in a second clip
-
-### Conversation Memory
-- `core/memory.py` — `ConversationMemory` class
-- Rolling 8,000 token window (estimated as `len(text) // 4`)
-- Trims oldest (user, assistant) pairs together — never splits a pair
-- Only stores `cleaned_text` — no stale per-call metadata (clipboard, active_window)
-- `add_exchange()` only called on successful Claude parse — no orphaned messages
-
----
-
-## UI Features
-
-### SYS_LOG_BUFFER (Transcript)
-- `_TypewriterProxy` wraps `TranscriptPanel` — JARVIS responses type character by character at 25ms/char
-- **"Thinking..." animation** — dots cycle `Thinking.` → `Thinking..` → `Thinking...` every 500ms while waiting for ElevenLabs
-- Mock history guard — existing entries don't animate
-- Cancel-on-new-message — stale animations stop immediately
-- Intent/confidence suffix `(intent, X%)` appended after full text finishes
-
-### Arc Reactor Orb States
-| State | Meaning |
+| Path | Function |
 |---|---|
-| `idle` | STANDBY |
-| `listening` | Mic active, capturing voice |
-| `thinking` | Claude API call in flight |
-| `responding` | ElevenLabs fetching audio |
-| `speaking` | Audio playing + typewriter running |
+| `assets/jarvis_logo.svg` | Hex reactor mark; used by `jarvis_logo_pixmap()` for the window icon and topbar logo. |
+| `assets/reference/jarvis_main_hud.html` | Reference design for the Dashboard. |
+| `assets/reference/jarvis_execute_command_center.html` | Reference design for the Voice page. |
+| `assets/reference/jarvis_network_telemetry.html` | Reference design for telemetry surfaces. |
+| `assets/reference/jarvis_system_diagnostics.html` | Reference design for diagnostics. |
+| `assets/reference/system_telemetry_settings.html` | Reference design for Settings. |
 
-### HUD Telemetry
-- CPU — live chart + segmented bar (1s poll, psutil)
-- **MEM_ALLOC** (`ui/dashboard.py` — class **`_MemCard`**) — label is HUD shorthand for **system RAM in use**, not a per-process malloc debug view. **Data:** `psutil.virtual_memory()` every **2s** — **used GB** (header), **%** of total, **used / total GB** (detail line), **8-segment bar** = `mem.percent`. Same thing you see in Task Manager “Memory” as overall utilisation: how much physical RAM is currently **used** by the OS and programs (vs sitting free or cached).
-- UPLINK — TX/RX display + sparkline
-- Session uptime — fills over 4-hour session
+Use these HTML mocks as the visual ground truth when running the `/impeccable …` workflow from `IMPECCABLE_SKILL_GUIDE.md`.
 
 ---
 
-## Browser Automation (Playwright)
+## 9. Runtime flow (one command, end to end)
 
-`core/browser.py` — `BrowserSession` singleton
-
-- **Persistent Chrome session** — one window, one tab reference, lives for JARVIS lifetime
-- `browser.start()` called on JARVIS startup (background daemon thread)
-- `browser.stop()` called on `closeEvent` + `SIGINT`/`SIGTERM`
-- All methods return `{success: bool, output: str, error: str}`
-
-### Methods
-```python
-browser.navigate(url)                          # goto URL, wait domcontentloaded
-browser.click_element(selector, text, x, y)   # CSS selector → text → coordinates
-browser.fill_form(fields)                      # CSS selector → label → placeholder
-browser.read_page()                            # extracts main/article/body text (4k cap)
-browser.extract_content(selector)             # inner text of specific element
-browser.screenshot_page(path)                 # full page screenshot
-browser.screenshot_element(selector, path)    # element screenshot
-browser.new_tab(url)                           # open new tab, navigate
-browser.close_tab()                            # close active tab, switch to previous
-browser.is_ready                              # public property (not _ready)
-```
-
-### Install Requirements
-```bash
-uv add playwright
-python -m playwright install chrome
-```
+1. **Input arrives.** Wake-word listener (`core/wake_word.py`) → `voice_engine.listen()` (STT) **or** the user types in `CommandBar`/`CommandPalette`/`TerminalPanel`.
+2. **Pre-routing.** `command_controller` checks for repeat phrases or `__run_workflow_id__:` tokens. `workflow_nlu.parse_create_workflow_command` short-circuits unambiguous routine creation.
+3. **Brain.** `core/brain.py` strips `@tags` → builds the context block → sends to Claude with `Claude.md` as the system prompt → parses the strict JSON → applies tag override → returns the routed intent dict.
+4. **State → "thinking".** `main.py` updates HUD via `signals.status_changed` so the reactor pulses, the Voice page shows `PROCESSING`, and the topbar logs the directive.
+5. **Confirmation gate.** If `requires_confirmation` and not `auto_confirm`, `ConfirmationBar` / `InlineConfirmCard` is shown; `executor.resolve_confirmation(answer)` resumes or cancels.
+6. **Executor.** `core/executor.dispatch(...)` routes to the matching `core/handlers/*` function. Handlers may stream output lines through `signals.terminal_line_ready` and exit codes through `signals.terminal_done`.
+7. **Advanced browser action (only for browser clicks/fills).** `core/handlers/browser_handler.py` may route vague `click_element` / `fill_form` requests into `browser.find_and_act(...)`: snapshot accessibility tree -> Haiku picks a validated `ref_N` -> Playwright acts by role/name -> legacy click/fill fallback if anything fails.
+8. **Response composition.** `ResponseAssembler` (`core/responders/assembler.py`) + `core/personality.py` build a structured `{primary_tts, follow_tts}` reply, compacted for speech by `core/responders/utils.py`.
+9. **State → "speaking".** `voice_engine.say(...)` streams ElevenLabs MP3 through MCI (with pyttsx3 fallback). The overlap guard prevents the mic from re-opening mid-speech.
+10. **Persist.** Entry appended to in-memory history and `core/history_store.py` (SQLite). `HistoryView` refreshes; `BottomBar.increment_commands()` ticks.
+11. **State → "idle".** Reactor settles, status pill returns to `STANDBY`.
 
 ---
 
-## OS Control (computer_control.py)
+## 10. Cross-cutting patterns
 
-All functions return `{success, output, error}`. All deps lazy-imported.
-
-```python
-# Keyboard
-type_text(text, delay=0.02)
-press_key("ctrl+c")           # hotkey combos supported
-
-# Mouse  
-move(x, y)
-click(x, y, button="left")
-double_click(x, y)
-right_click(x, y)
-scroll(direction, amount)
-drag(from_x, from_y, to_x, to_y)
-
-# Screen
-screenshot(path, region)
-ocr_screen(region)            # requires Tesseract binary in PATH
-
-# System
-set_volume("volume_up")       # volume_up / volume_down / volume_mute
-lock_screen()                 # Windows ctypes
-
-# Clipboard
-get_clipboard()
-set_clipboard(text)
-```
-
-### Tesseract (for OCR)
-```bash
-# Download and install from:
-# https://github.com/UB-Mannheim/tesseract/releases
-# v5.4.0.20240606.exe — check "Add to PATH" during install
-tesseract --version           # verify
-```
+- **One source of truth for prompt.** `Claude.md` defines every intent, action, parameter, confirmation rule, and HUD label. Python guards in handlers enforce the same rules so a misbehaving model cannot bypass safety (e.g. reminder allow-list, danger detection in `code_exec`, confirmation gates for destructive ops).
+- **Two-tier confirmation.** Some actions (`shutdown`, `restart`, `sleep`, `delete_file`, `force_quit`, `kill_process`, `remove_workflow`) set `requires_confirmation: true` in the JSON; others (`create_file`, `create_directory`) confirm in-app via `request_confirmation` only. `auto_confirm` short-circuits both paths.
+- **Threading discipline.** All blocking work lives off the GUI thread. Cross-thread communication uses **only** the `signals` singleton in `core/signals.py`. Worker threads never touch QWidgets directly.
+- **Single state machine.** `main.py._set_state("idle"|"listening"|"thinking"|"speaking")` fans out to `DashboardView`, `VoiceView`, `BottomBar`, and `ArcReactorWidget.set_state`. Every UI surface reads the same state.
+- **Style discipline.** `ui/theme.py` is the only place colours/fonts/sizing are defined. `ui/widgets._mono()` and `_panel_header()` are the only sanctioned font/header factories. The topbar glow underline + sidebar right-edge glow are painted with identical parameters so they read as one continuous border.
+- **Brand fidelity.** `PRODUCT.md` rules out chat-bubble UI, generic-assistant phrasing, and rounded corners. The arc reactor, hex logo, segmented armor band, and `STARK_OS / MARK_LXXXV` brand are non-negotiable visual anchors. Spoken responses follow the British-butler tone from `Claude.md`.
+- **Path resolution discipline.** Relative paths always resolve under the user's profile, never the JARVIS process CWD. Default create parent is configurable via `JARVIS_DEFAULT_CREATE_PARENT`. Path resolver is centralised in `core/handlers/paths.py`.
+- **Advanced browsing is fail-soft.** The accessibility-tree/Haiku picker is an enhancement for vague browser clicks/fills, not a replacement for selectors. It treats page text as untrusted, validates returned refs against `_ref_map`, uses `raw_name` for locator attempts, and falls back to legacy selector/text logic on any failure.
+- **Fail-soft everywhere.** Every handler returns `{success, output, error}`; brain failures fall back to `{"intent": "unknown"}`; voice provider failures roll back to the previous voice; browser failures surface to the Settings health strip without crashing the app; status popover wraps every subsystem probe so one failure cannot stop the others rendering.
 
 ---
 
-## Voice Pipeline
+## 11. Where to make common changes
 
-### File split (session 2026-04-27)
-
-The original monolithic `core/voice.py` (~515 lines) was split into two files:
-
-| File | Role |
-|------|------|
-| `core/audio_pipeline.py` | Internal engines: `AudioCapture`, `SttEngine`, `TtsEngine`, `SttError`, `_EL_VOICES` |
-| `core/voice.py` | Thin facade: `VoiceEngine` + `voice_engine` singleton. All audio work delegates to pipeline. |
-
-**Why:** `voice.py` had grown into a 500-line monolith mixing mic capture, VAD, Google STT,
-ElevenLabs streaming, MCI playback, and pyttsx3 fallback. No external API changed —
-`executor.py` still does `from core.voice import _EL_VOICES` (re-exported); `main.py`
-still imports `voice_engine` with the same `say()` / `listen()` signatures.
-
-**Overlap guard (new):** `VoiceEngine.listen()` now refuses to open the mic if `is_speaking`
-is True, preventing mic pickup of JARVIS's own TTS output:
-```python
-if self._tts.is_speaking:
-    if on_error is not None:
-        on_error("JARVIS is speaking — please wait.")
-    return
-```
-
-**Typed STT errors (new):** `SttEngine.recognise()` raises `_SttErrorExc(SttError.X)` with
-human-readable messages instead of bare exceptions. `VoiceEngine._listen_thread` catches
-`_SttErrorExc` and routes the `.message` to `on_error`.
-
-**Ambient noise calibration (new in `AudioCapture`):** `calibrate_threshold(duration, sensitivity)`
-samples RMS for `duration` seconds then returns `max(base * 0.30, ambient * 2.0)` so the
-threshold adapts to the current room noise floor rather than using a static formula.
-
-### TTS (ElevenLabs)
-- Streams MP3 chunks via `client.text_to_speech.stream()`
-- Plays via Windows MCI (`mciSendStringW`) — no extra audio deps
-- Free tier: `mp3_44100_128` format, `eleven_multilingual_v2` model
-- Fallback: `pyttsx3` (Windows SAPI) if ElevenLabs fails
-- `TtsEngine._speaking` (threading.Event) set **before** acquiring `_lock` so overlap guard sees True immediately
-
-**Voice IDs (13 voices):**
-- `male-british` → George, `male-american` → Adam, `female-british` → Rachel
-- `male-broadcast` → Daniel, `male-resonant` → Brian, `male-smooth` → Eric
-- `male-gravelly` → Callum, `male-casual` → Chris, `male-australian` → Charlie
-- `female-professional` → Sarah, `female-british-clear` → Alice, `female-british-warm` → Lily, `female-american` → Matilda
-
-### STT (Google)
-- `AudioCapture.capture()` → sounddevice mic, RMS VAD, guaranteed stream cleanup in `finally`
-- `SttEngine.recognise()` → SpeechRecognition → Google STT free tier
-- `audioop` replacement with `struct.unpack` (Python 3.14 compatibility)
-- `SttError` enum: `NO_SPEECH`, `NETWORK`, `TIMEOUT`, `DEVICE`
-
----
-
-## Security Fixes Applied
-
-| Fix | Detail |
+| You want to… | Edit |
 |---|---|
-| `shell=False` | `executor.py` — `shlex.split()` always runs, no Windows shell injection |
-| `.gitignore` | `config/jarvis.json`, `.env`, `data/session_history.json` protected |
-| `config.save()` strips keys | `anthropic_api_key`, `vapi_api_key`, `elevenlabs_api_key` never written to disk |
-| `requires-python = ">=3.11"` | Better wheel compatibility |
-| `taskkill /F /IM` | Force quit correctly uses `/F /IM` not just `/F` |
-| `browser.is_ready` | Public property instead of `browser._ready` direct access |
+| Add a new intent | (1) Append to `Claude.md` definitions. (2) Add a handler in `core/handlers/<name>.py`. (3) Register it in `core/executor.py` `dispatch`. (4) Add response templates in `core/personality.py` and (if needed) `core/responders/assembler.py`. (5) Add a `tests/test_<name>.py` case. |
+| Add a new `@tag` | Update `TAG_INTENT_MAP` in `core/brain.py` **and** the `@Tag → Intent Reference` table in `Claude.md`. |
+| Change the HUD colour palette | `ui/theme.py` `COLORS` + the semantic aliases (`PRIMARY`, `CYAN`, `IDLE_CYAN`, …). |
+| Add a new page to the stack | Build a `QWidget` view in `ui/`, add a sidebar entry in `ui/sidebar.NAV_ITEMS`, extend `_NAV_TO_STACK`, append it to the `QStackedWidget` in `main.py`. |
+| Add a new system status pill | `ui/popovers.py` `SystemStatusPopover._row_*` + a probe in `refresh()`. |
+| Persist a new user preference | Add a field to `AppConfig` in `config/settings.py`, expose a control in `ui/settings.py`, mirror through `core/controllers/session_flags.py`, and (if relevant) `ui/popovers.QuickSettingsPopover`. |
+| Change voice behaviour | `core/voice.py` + `core/audio_pipeline.py` + `core/tts_elevenlabs.py`. Voice registry lives in `_EL_VOICES`. |
+| Change advanced browser element picking | `core/browser.py` (`snapshot`, `_parse_haiku_ref`, `find_and_act`, `_exec_click_by_role`, `_exec_fill_by_role`) and `core/handlers/browser_handler.py` (routing heuristics for `goal`, vague selectors, and fill values). Keep legacy fallback intact. |
+| Add a workflow safety rule | `core/handlers/automation_handler.py` (dangerous step filter) + `core/handlers/reminders._validate_reminder_run` (scheduled action allow-list). |
 
 ---
 
-## .env Required Keys
+## 12. Glossary
 
-```dotenv
-ANTHROPIC_API_KEY=sk-ant-...
-ELEVENLABS_API_KEY=...
-VAPI_API_KEY=...              # optional — Vapi assistant config sync
-CLAUDE_MODEL=claude-sonnet-4-20250514
-```
-
----
-
-## Dependencies
-
-```bash
-uv add anthropic elevenlabs playwright pyautogui pytesseract pyperclip pyttsx3 \
-       sounddevice SpeechRecognition numpy psutil PyQt5
-```
+- **HUD** — Heads-Up Display; the PyQt window itself.
+- **Reactor** — The Mark-LXXXV arc reactor widget at the center of the Dashboard. Its colour reflects the current state.
+- **Intent / action / parameters** — The three-part contract Claude returns. Intent = category (`open_app`), action = specific behaviour (`open_browser`), parameters = action-specific kwargs.
+- **Pending confirmation** — A handler that returned `needs_confirmation=True`. Resolved by `core/handlers/shared.resolve_confirmation("yes"|"no")` driven from the UI confirm card.
+- **`@tag`** — User-typed prefix (e.g. `@browser do X`) that forces a specific intent regardless of NLP inference. Stripped before reaching Claude; intent override carried in `context.tag_override`.
+- **`__run_workflow_id__:<id>`** — Internal token emitted by the automation ▶ button so the command_controller can dispatch the workflow directly without re-running Claude.
+- **Glass panel** — The standard cyan-bracketed semi-transparent rectangle used for every card and modal.
+- **STARK_OS / MARK_LXXXV** — Brand strings in the sidebar identifying this iteration of the system.
 
 ---
 
-## Vapi Integration
-
-`core/vapi_client.py` — registers JARVIS assistant on Vapi's platform on startup.
-
-- Configures: Claude Sonnet LLM, ElevenLabs George voice, Deepgram nova-2 STT
-- Persists `vapi_assistant_id` in `config/jarvis.json` — reuses on next startup
-- Desktop audio uses ElevenLabs directly (Vapi WebRTC is browser-only)
-- Vapi role: portable assistant definition for future web/phone deployments
-
----
-
-## What's Remaining
-
-| Item | Status |
-|---|---|
-| `ANTHROPIC_API_KEY` in `.env` | ⚠️ Required for brain routing to work |
-| `core/automation.py` + `data/workflows.json` | ✅ Workflow library, executor + Automation UI |
-| End-to-end voice test | ⏳ Pending API key (when keys missing) |
-| GitHub push | ⏳ Pending — repo: `github.com/Valentine45-dev/jarvis-ai-assistant` |
-| `core/browser.py` Playwright thread hardening | 🔮 V2 — dedicated browser thread + queue (browser crash auto-restart now handled by `_not_ready()` → `_recover()`) |
-| Phase 1 UX audit — confirm bar, history clear, auto-confirm banner | ✅ Shipped 2026-04-27 |
-| History status field written on every dispatch | ✅ Shipped 2026-04-27 |
-| History persistence (SQLite) | ✅ `core/history_store.py` shipped 2026-04-27 |
-| Phase 2 — background workflow execution | ✅ `_exec_done` + daemon thread shipped 2026-04-27 |
-| Phase 3 — UPLINK real TX/RX | ✅ `_UplinkCard._tick_net()` shipped 2026-04-27 |
-| Phase 3 — Win+J summon hotkey | ✅ `Meta+J` QShortcut shipped 2026-04-27 |
-| Phase 3 — Create Workflow UI | ✅ `+ NEW` button + `_NewWorkflowDialog` shipped 2026-04-27 |
-| Phase 3 — Settings “Test Connection” per-API | ⏳ Not built — single APPLY button; no per-key test |
-| Phase 4 — Voice page stat card (cmd count, avg confidence) | ⏳ Not built |
-| Phase 4 — Keyboard navigation (sidebar, history rows) | ⏳ Accessibility debt |
-| Wake-word / continuous listen loop | ⏳ Not built — System Status popover shows “coming soon” |
-
----
-
-## End-to-End Test (do this after adding API key)
-
-```
-1. "What time is it?"          → jarvis_meta → tell_time
-2. "Open github.com"           → browser_automation → navigate (Playwright Chrome)
-3. "Search YouTube for Iron Man" → search_web → youtube
-4. "Take a screenshot"         → system_control → screenshot (saved to Desktop)
-5. "Remind me in 30 seconds to push to GitHub" → reminder_task → set_reminder
-```
-
-All 5 passing = JARVIS fully operational. 🤖
-
----
-
-## What we did — UI/UX audit session (2026-04-26)
-
-This section records work from a Cursor session: understanding the app, then a structured **architect-first** review of **bad or risky UI/UX** across all HUD pages. No code was required for that phase; the output was a blueprint and a phased fix list.
-
-### How the app is structured (condensed)
-
-- **Entry:** `main.py` — `JarvisWindow` with `QStackedWidget` for five views: Dashboard, Voice, Automation, History, Settings.
-- **Shell:** `HudSidebar` (nav indices 0–4) + `TopBar` + `BottomBar`; global toasts on `DashboardView.toast`.
-- **Flow:** User command → `ask_claude_async` → `_on_brain_result` → if `requires_confirmation`, hold in `_pending_result` and wait for `ConfirmationBar` signals; else `_execute_result` → `dispatch` → TTS + HUD updates.
-- **Output users see:** Dark HUD (`#0d1516`), cyan accent, Roboto Mono + Space Grotesk, glass panels, arc reactor, telemetry, transcripts, toasts. Secondary pages (Voice, Automation, History, Settings) share grid backgrounds and large `*_CORE` titles.
-
-### What the audit was
-
-- **Method:** Follow the **architect-first** skill (modification mode): intercept what exists, classify complexity, decompose by surface, failure audit, phase ordering with Phase 1 = non-breaking safety foundation.
-- **Scope:** All primary surfaces — global chrome, Dashboard, Voice, Automation, History, Settings, sidebar, top/bottom bars, quick settings popover.
-- **Not in scope for that pass:** implementing fixes (user approval / separate task).
-
-### Highest-severity issues identified
-
-| Area | Issue |
-|------|--------|
-| **Confirm flow** | `ConfirmationBar` on the dashboard was not surfaced in the layout (compat widgets `setVisible(False)`), while `main.py` still wired confirm/cancel. Destructive flows expecting confirmation could be unusable; Voice page text referred to “confirm on dashboard” inconsistently. |
-| **Auto-confirm** | Quick Settings “auto-confirm” bypasses confirmation for destructive actions — needs stronger UX (e.g. two-step, persistent indicator) if kept. |
-| **History** | History rows could show success styling even when executor failed, if `status` was never written from `exec_out`. “Clear history” only cleared the view, not the backing list in `main`. |
-| **Trust / telemetry** | Some labels read as live (uplink TX/RX, “ROUTER/PIPELINE”, “SYSTEM ONLINE”) but were static or not wired to real health — risk of false confidence when debugging. |
-| **Accessibility** | Small caps text, low-contrast secondaries, tiny hit targets, no keyboard path on custom sidebar/rows — document as debt if shipping beyond personal use. |
-
-The full audit also listed per-page items (e.g. Automation: no “create workflow” UI, cramped controls; Settings: single APPLY for all sections, no test connection; etc.) and proposed **phases** — Phase 1 safety/truth, Phase 2 feedback, Phase 3 findability, Phase 4 a11y/polish.
-
-### If you continue this work
-
-- Treat **Phase 1** in that blueprint as the first implementation pass: confirm bar visibility + wiring, auto-confirm safety, real `status` in history, clear-history ↔ `main` sync, and either remove or wire “decorative” status labels.
-- Re-read `main.py` and `ui/dashboard.py` for `confirm_bar` / `LeftColumn` before changing layout — APIs may have shifted after this handoff was written.
-
-### Note on “what GPT said”
-
-If a separate model was asked the same “bad UI/UX” question, the structured answer above is the one aligned to **this** repo and the **architect-first** steps. Use this file as the project record; reconcile any third-party summary against the code.
-
----
-
-## What we did — features & UI (2026-04-26)
-
-This section records **implementation work** from the same iteration: workflow library, safety hardening, Voice/TopBar UX, and supporting modules. It complements the audit section above (audit = analysis; this = what shipped in code). The subsections below include the **step-by-step Voice build**, **TopBar before/after**, **Quick Settings / Command Palette / System Status** tables, the **architect-first meta-audit** cross-reference, and **git** notes so the narrative is not only in chat history.
-
-### Automation — JSON workflow library & executor
-
-- **`data/workflows.json`** — Named workflows persisted on disk; edited by the app and/or by hand (valid structure expected).
-- **`core/automation.py` — `WorkflowLibrary`** — Load/save, list workflows, add/update/delete/rename, toggle enabled, run by name. Step lists validated against blocked/dangerous patterns (phased rollout across “Phase 1–3” safety work).
-- **`core/executor.py`** — `automation_task` runs library workflows; **`dispatch()`** is the **authoritative confirmation gate**: `_CONFIRMATION_REQUIRED_ACTIONS` (and related registries) so `requires_confirmation: false` in a bad payload cannot bypass destructive steps. Return semantics fixed so a failed step does not report overall success.
-- **`ui/automation.py`** — Library UI: list rows, play/toggle/delete/rename, step breakdown, execution log; toasts and layout improvements (e.g. log size, non-overlapping toasts relative to CPU strip).
-
-### Voice engine — mic / TTS mute (`core/voice.py`)
-
-- **`set_mic_muted` / `set_tts_muted`** (and properties) on **`VoiceEngine`**.
-- **`say()`** — If TTS muted, skips audio but still calls **`on_ready`** so transcript / typewriter / reveal paths do not stall.
-- **`listen()`** — If mic muted, short-circuits with an error path suitable for the HUD.
-- **Mic hot → mute** — `main.py` can reset the UI to **idle** if the user mutes while listening so the state does not stick on “LISTENING”.
-
-### Voice page — detailed build & layout (`ui/voice.py` + `main.py`)
-
-**Build order in code:** page mic + **“awaiting”** state maps → embed mic in **`_CommandInspector`** → Phase 2 **`set_last_result` / `set_action` / `set_status` / `reset`** on the inspector → **`VoiceView`**: `set_execution`, `set_pending`, `clear_pending` → wire **`main._on_brain_result` / `_execute_result` / cancel** to those APIs.
-
-- **`_PageMicButton`** — ~**96px** circular **`QPushButton`** in the **inspector body** (between waveform and detail text); **`pressed_toggled`** custom signal (avoids shadowing **`QPushButton.clicked`** in subclasses). **`VoiceView`** re-emits **`mic_toggled`** for the same pipeline as the Dashboard mic.
-- **“awaiting”** — Extra state in maps so **pending brain confirmation** uses **amber** / `StatusPip` **“standby”** instead of looking idle.
-- **`_CommandInspector`** — **`set_last_result(intent, conf)`**, **`set_action`**, **`set_status(..., kind=)`** (ok / fail / pending / idle), **`reset`**. **`set_state()`** syncs the page mic + hint (e.g. “CLICK TO ACTIVATE”, “LISTENING — CLICK TO STOP”).
-- **`VoiceView.set_execution(intent, action, conf, success, error=None)`** — On dispatch: success → green **EXECUTED**; failure → red **FAILED — …** (error truncated in the one-line status; full error in tooltip is still optional debt).
-- **`VoiceView.set_pending(...)`** — When **`requires_confirmation`**: **AWAITING USER CONFIRMATION** on the inspector; forces **status strip** to **awaiting** so a preceding `_set_state("idle")` does not flash **STANDBY** during a real hold. Timeline can append a **[SYS] Confirmation required** system line for the intent/action.
-- **`VoiceView.clear_pending()`** — On cancel: **CANCELLED**; restores from the view’s internal `_state` so you do not keep amber “awaiting” after **`_set_state("idle")`**.
-
-**Wiring in `main.py` (illustrative)**
-
-- Pending: `set_pending(intent, result.get("action", ""), conf, resp or "Awaiting confirmation, sir.")`
-- After dispatch: `set_execution(intent, result.get("action", ""), conf, bool(exec_out.get("success")), exec_out.get("error"))`
-- Cancel path: `clear_pending()`
-
-**State table (Voice inspector)**
-
-| Phase | What you see |
-|--------|----------------|
-| Idle | “AWAITING INPUT”; neutral mic; **CLICK TO ACTIVATE** |
-| Listening | Cyan / pulse; **LISTENING — CLICK TO STOP** |
-| `requires_confirmation` | Amber **AWAITING USER CONFIRMATION**; strip can show “paused”; [SYS] line possible |
-| Executor success | Green **EXECUTED** |
-| Executor failure | Red **FAILED —** \<short error\> |
-| User cancels | Red **CANCELLED**; log can record cancel |
-
-**Design decisions**
-
-- **Mic in inspector** — Treated as the “command panel” control; header-only alternative rejected as cramped.
-- **`pressed_toggled`** — Explicit name vs reusing `clicked` to avoid signal override bugs on subclasses.
-- **`set_pending` overrides strip** — On purpose: global **idle** after brain result must not look like a clean standby while a confirmation is still pending.
-- **`clear_pending` uses local `_state`** — Avoids stale “awaiting” after global idle.
-
-**Not built in that voice batch (roadmap)**
-
-- Session stat card (command count, avg confidence, session uptime on-page).
-- Quick voice suggestion chips (Dashboard-style, voice-focused).
-
-**Layout fix (execution log was too small)**
-
-- **Before:** `setFixedHeight(110)` on the log (~5 lines) while the body took the rest.
-- **After:** Remove fixed height; **`setMinimumHeight(170)`**; stretch **3 : 1** (body : log) so the log **grows** with the window. Transcript + “active command” still dominate, but the log is never ~5 lines only.
-
-| Window (approx.) | Exec log (approx.) | Body column (approx.) |
-|------------------|--------------------|------------------------|
-| 1280×800 | ~170px (~10 lines) | ~457px |
-| 1440×900 | ~180px | ~539px |
-| 1920×1080 | ~225px | ~674px |
-| 2560×1440 | ~315px | ~944px |
-
-### TopBar — from decorative to functional
-
-**Before** — The three right-hand icons in **`_TOPBAR_ICONS`** (Phosphor: sliders, terminal, broadcast) had **no** `clicked` wiring — tooltips only (ported from reference HTML as chrome).
-
-**Agreed build order** — (1) **Quick Settings** popover, (2) **Command palette** + **Ctrl+K**, (3) **Broadcast** as **System Status** (Option C) — **not** a fake wake-word toggle and **not** a half-built continuous STT loop until ready.
-
-| Icon | Shipped behavior |
-|------|------------------|
-| **Sliders** | **`QuickSettingsPopover`** — see table below. |
-| **Terminal** | **`CommandPalette`** — full-window dim + centered input; see below. |
-| **Broadcast** | **`SystemStatusPopover`** — live-ish rows, refresh on open; wake-word row = honest **“coming soon”**. |
-
-**`QuickSettingsPopover` (`ui/popovers.py`)** — `Qt.Popup` + frameless; **`show_below(anchor)`**; **`sync_state(mic, tts, auto_confirm)`** on open.
-
-| Toggle | Wired to | Notes |
-|--------|-----------|--------|
-| MUTE MIC | `voice_engine.set_mic_muted()` | Can force idle if was listening; toast |
-| MUTE TTS | `voice_engine.set_tts_muted()` | No audio; **`on_ready` still runs** |
-| AUTO-CONFIRM | `JarvisWindow._auto_confirm` | **Session-only**, not persisted. Skips **UI** confirmation hold; **`dispatch` / `_CONFIRMATION_REQUIRED_ACTIONS` still enforce backend rules.** |
-| OPEN FULL SETTINGS | `sidebar.goto(4)` | Same as clicking Settings in the nav |
-
-**`CommandPalette` (`ui/command_palette.py` + `main.py`)** — Child of main window, **`resizeEvent`** on **`JarvisWindow`** keeps overlay full-window. **Terminal** icon and **Ctrl+K**; **`command_submitted` → `_process_cmd`**; hide palette before dispatch. **Recents:** newest from **`self._history`**, deduped, cap **5**, refresh on each open. Reuses **`_TagLineEdit`** for `@` tags. **Deferred:** last-intent JSON panel, keyboard nav in recents, fuzzy catalog.
-
-**`SystemStatusPopover` (`ui/popovers.py`)** — `_StatusRow` + **`StatusPip`**, defensive **try/except** per row, **“AS OF …”** timestamp. **Bug found in QA:** `browser.is_ready` is a **`@property`** — must be **`if browser.is_ready:`**, not `is_ready()` (else `'bool' object is not callable` on that row).
-
-**Shared**
-
-- **`ui/bars.py`** — **`settings_clicked` / `terminal_clicked` / `broadcast_clicked`**, **`icon_button("settings" \| "terminal" \| "broadcast")`** for anchors.
-- **`ui/sidebar.py`** — **`goto(nav_idx)`** delegates to the same path as a real nav click.
-- **`main.py`** — **`_show_quick_settings`**, **`_toggle_palette` + `_on_palette_command`**, **`_show_system_status`**; broadcast no longer a “coming next” **toast** for the icon (that text is **stale** in any old audit).
-
-### Misc UX fixes in the same window of work
-
-- **Toast position** — Adjusted so toasts do not sit on top of the CPU/telemetry readout (layout/order fix on the dashboard strip).
-- **TopBar** — Terminal and broadcast are **no longer** dead “coming next” toasts; they open the palette and system status, respectively (align any external audit that still claims “2 of 3 stubs” — **stale**).
-
-### Architect-first: Claude’s UI/UX audit + second-opinion meta-audit (same session, analysis only)
-
-- **Claude** produced a long **JARVIS HUD — UI/UX Audit Blueprint**: global **G1–G10**, Dashboard **D1+**, Voice **V1+**, Automation, History, Settings, Sidebar, TopBar, Bottom Bar; **Step 4 failure audit**; **phased fix list** (F1+). Themes: **Dashboard `confirm_bar` / compat widgets** hidden while **`main.py`** still wires confirm/cancel; **auto-confirm** as a **footgun**; **History** “clear” and **success pip**; **decorative** uplink/ROUTER/bottom “SYSTEM ONLINE”; a11y and keyboard debt.
-- **Meta-audit (code-verified)** — **S10** “API keys written plaintext by `config.save()`” is **false** — **`config.save()` strips** `anthropic_api_key`, `vapi_api_key`, `elevenlabs_api_key`; keys live in **`.env`**. **TB1** “two of three TopBar icons are stubs / coming-next toasts” is **stale** — **Command palette** and **System status** ship. **Additions** the first audit underplayed: long **`automation_task`** on the **UI thread** can **freeze** the HUD; no **running** spinner on workflow rows; error **toasts** vs info duration; unbounded in-memory `_history`.
-- **Revised fix priority (summary)** — Phase 1: confirmation surfaces + **history** truth + **clear** + auto-confirm hardening + **honest** telemetry. Phase 2: **background workflow run**, settings test connection, **scanline** implement vs remove. **Not** a priority: responsive collapse below 1280 if the product stays desktop-only.
-
-The full G/D/V/A/H/S/TB issue tables are **not** copied here — keep the original export in your issue tracker, and re-verify against `main.py` and the `ui/` tree before implementation.
-
-### Git — example `git add` / `commit` (that session)
-
-Example **`git status`**: modified `core/voice.py`, `main.py`, `ui/bars.py`, `ui/sidebar.py`, `ui/voice.py`, `ui/widgets.py`; new `ui/command_palette.py`, `ui/popovers.py`; `context.md` if tracked.
-
-```powershell
-cd "c:\Users\Dell Latitude Touch\Desktop\jarvis-project"
-git add core/voice.py main.py ui/bars.py ui/sidebar.py ui/voice.py ui/widgets.py ui/command_palette.py ui/popovers.py
-# optional: git add context.md
-# optional: add core/executor.py, core/automation.py, ui/automation.py, ui/dashboard.py, data/workflows.json if bundled
-```
-
-Example message: `feat(ui): topbar popovers, command palette, voice inspector, mic/TTS mutes`
-
-### Files most touched in this work (for git / review)
-
-- `main.py`, `core/voice.py`, `core/executor.py`, `core/automation.py`, `ui/voice.py`, `ui/bars.py`, `ui/sidebar.py`, `ui/automation.py`, `ui/widgets.py` (and/or `ui/dashboard.py` for toast/telemetry), **`ui/popovers.py`**, **`ui/command_palette.py`**, `data/workflows.json` (as applicable).
-
-### Keyboard shortcut
-
-- **Ctrl+K** — Toggles the command palette on the main window via `QShortcut`.
-
----
-
-## Session 2026-04-26 (Cursor agent chat) — Windows apps, paths, multi-step, browser
-
-This section records **this chat** so future sessions can rely on it without re-reading the thread.
-
-### Windows app resolution & launch (`core/executor.py`)
-
-- Tighter **stem/alias** rules so product names (e.g. **VS Code** vs **Codex**) are not conflated; **`Get-StartApps`** and **`shell:AppsFolder` (COM/Shell.Application)** are merged in **`_get_all_startapp_rows()`** for broader UWP coverage. **PATH** resolution runs **after** those GUI-oriented sources so a CLI on PATH (e.g. `claude`) does not win over a real desktop entry.
-- **UWP AUMID** via **`_WIN_APPID_PREFIX`** and **`os.startfile` / `explorer`** for `shell:AppsFolder\` + AppUserModelId. **Registered `ms-*` URL protocols** via **`_WIN_PROTO_PREFIX`**: **HKCR** enumeration with **`winreg`**, not PowerShell (unreliable multiline `‑Command`); the **`URL Protocol` string is a value on the progid key**, not a `URL Protocol\` subkey — we use **`QueryValueEx`**. Protocol launch + **fallback to `ms-…:`** if AppId launch fails. **`_score_query_vs_url_protocol`** improved for e.g. **Microsoft Store**; cache TTL for protocol list.
-- Voice alias **`adams` → `male-american`**.
-
-### Path expansion & file ops (`core/executor.py`)
-
-- **`_expand_path_string()`** — **`os.path.expandvars`** then **`Path.expanduser`** so model paths with **`%USERNAME%` / `%USERPROFILE%`** resolve. Used in **`_resolve_screenshot_path`**, **`_safe_path`**, **`_resolve_file_operation_path`**.
-- **`move_file`:** if destination is a **single segment** and **`_find_folder("downloads")`** (etc.) **resolves**, do **not** replace resolved **`dest`** with **`path.parent / "Downloads"`**; only when **`_find_folder` is `None`** treat the string as a **new filename in the same folder** as the source.
-
-### JARVIS meta & automation UX (`core/executor.py`, `core/personality.py`, `CLAUDE.md`)
-
-- **`status_report`:** appends **battery** via **`psutil.sensors_battery()`** when a sensor exists (laptops), alongside **CPU and memory** (see `tests/test_executor.py` help text if updated).
-- **`automation_task` + TTS (updated since this note was written):** see **“Post-action follow-up”** at the top of this file — primary line is **Claude’s `response`**, follow-up is **`ack_scheduled_action`-style** using **`last_step_intent` / `last_step_action`** from the executor. The old **flatten step output into one long spoken line** approach was **removed** in favour of that two-beat flow.
-- **`CLAUDE.md`:** new **absolute rule** and **§7** routing: **two requests in one message** → **`automation_task` + `run_workflow` + `steps`**, not **`unknown`**. **Example** (voice + file search, voice + status). **Addendum v2.2** aligned. **`close_tab` / `url_contains` / `match` params** in browser section.
-
-### Playwright browser (`core/browser.py`)
-
-- **`_SEARCH_INPUT_SELECTORS`** (shared) for search **inputs**; **`_SEARCH_SUBMIT_SELECTORS`**, **`_try_search_role_buttons()`**, **`_try_submit_search_by_enter()`** (focus search field, **Enter**) when CSS selectors (e.g. **`button#search-icon-legacy`**) go stale. **`_click_by_visible_text`**, and if a **selector** fails but **`text`** is also in params, try **text** path.
-- **`close_tab`:** optional **`title_contains`**, **`url_contains`**, **`match`**; **`_find_page_to_close`**, **`_score_page_for_keywords`** (URL +10, title +5). With **no** filter, behaviour unchanged: **active tab** only. **`core/executor.py`** maps **`url_match`**, **`tab`**, **`target`**, etc.
-
-### Files commonly edited in this chat
-
-- `core/executor.py`, `core/browser.py`, `core/personality.py`, `CLAUDE.md`, `tests/test_executor.py` (minor).
-
-### After changing `CLAUDE.md`
-
-- **Restart** the app — the brain **caches** the system prompt for the process lifetime.
-
----
-
-## Session 2026-04-26 (Cursor) — Onboarding read + directive UX + `press_key` hardening
-
-This section records a single Cursor session: repo orientation (`CLAUDE.md`, `context.md`, core layout), a product question about **Win+M**, and the **code changes** that followed.
-
-### Codebase orientation (no code changes)
-
-- **Flow:** `main.py` → `ask_claude_async` (`core/brain.py`, loads **`CLAUDE.md` / `Claude.md`**) → parsed JSON → `dispatch` (`core/executor.py`) → per-intent handlers, **`core/browser.py`**, **`core/computer_control.py`**, etc.
-- **Handoff doc:** this file; brain contract is **`CLAUDE.md`**.
-
-### Win+M — will JARVIS do it?
-
-- **Execution path:** `type_text` → **`press_key`** → **`core/computer_control.press_key`**, which uses **PyAutoGUI** `hotkey(...)` for `+`-separated combos. The **Windows** key is present in PyAutoGUI as **`win`**.
-- **Caveat:** If the user says *“click the Windows key + M”*, the model may return **`control_mouse` / `click`** instead of **`press_key`**. Chords should be described as *press* / *send* or use **`@type`**, and **`CLAUDE.md`** already steers **keys** to **`type_text`**, **clicks** to **`control_mouse`**.
-
-### Implemented changes (files + behaviour)
-
-| Area | File | What changed |
-|------|------|----------------|
-| Directive field | `ui/widgets.py` | `_TagLineEdit`: cap height ~108px; vertical **scrollbar when needed**; `WidgetWidth` wrap; `resizeEvent` → `_reflow_height`. |
-| Input strip | `ui/dashboard.py` | `_InputBlock._on_input_editor_height`: tighter **INPUT_H** cap; **sync `_CommandStrip` height** to the block. |
-| Keyboard | `core/computer_control.py` | **`_normalize_key_token`**: aliases for Windows-key wording before **`hotkey`/`press`**. |
-
-### UX issue addressed
-
-- **Problem:** **Shift+Enter** added many newlines; the bottom directive area **grew without bound** and could push the UI out of the window; **`_CommandStrip` did not grow** with **`_InputBlock`**, so layout was inconsistent.
-- **Intent:** The field should **grow only a little**, then **scroll**; the **strip** should **always match** the input block height.
-
-### Follow-ups (optional, not done here)
-
-- If **`CLAUDE.md`** should explicitly call out **Win+…** / “do not use click for key chords”, add a one-line **routing** note and restart the app so the cached system prompt reloads.
-
----
-
-## Session 2026-04-26 (Cursor) — QToolTip contrast + bottom bar PING & network throughput
-
-### Tooltips (earlier in same iteration)
-
-- **Problem:** `QToolTip` text was **very low contrast** (dark on black) and the directive **hint was one long line**.
-- **Changes:** `ui/theme.py` — **`tooltip_qss()`**; **`main.py`** — `QPalette.ToolTipBase` / `ToolTipText` + **`app.setStyleSheet(tooltip_qss())`**. `ui/dashboard.py` — `setToolTip` for `_TagLineEdit` uses a **line break** so the box is not overly wide.
-
-### Bottom bar: PING + NET
-
-- **Where:** `ui/bars.py` — class **`BottomBar`** (between stretch and `N COMMANDS`), styled with shared **`_BOT_TELEM`**.
-- **PING:** **`core/net_telemetry.probe_internet_rtt()`** per background cycle: one **ICMP** attempt to a **rotating** public host (avoids per-host cache bias), then **TCP connect** to **`1.1.1.1:443`** if ICMP fails. **UI thread never blocks** — work runs in **`_RttWorkerThread`** ( **`QThread`** ), result delivered via **`pyqtSignal`**. Display: **`smooth_rtt_ema(..., alpha=0.35)`**; after **2** failed probes in a row, show **`PING —`**. ~**2.5s** between samples (sleep in thread loop).
-- **NET speed:** Not a “speed test” to the internet — it is **aggregate interface throughput**: **`ThroughputSampler`** uses **`psutil.net_io_counters()`** deltas / **1s** `QTimer` for **total bytes sent and received** (all NICs, includes loopback). Shown as **`NET ↑<rate> ↓<rate>`** with **`format_rate_bps`** (B/s, K/s, M/s).
-- **Lifecycle:** `BottomBar` registers **`QApplication.instance().aboutToQuit → _stop_rtt_thread`**, and **`main.JarvisWindow.closeEvent`** also calls **`_botbar._stop_rtt_thread()`** (idempotent with **`_rtt_stopped`**) before **`browser.stop()`**.
-- **Layout:** `ui/theme.BOTBAR_H` increased from **38** to **40** pixels.
-
-### Files
-
-| File | Role |
-|------|------|
-| `core/net_telemetry.py` | ICMP parse + subprocess ping (Windows/macOS/Linux flags), TCP RTT, EMA, throughput, formatting |
-| `ui/bars.py` | `BottomBar` labels, `_RttWorkerThread`, timers, shutdown |
-| `ui/theme.py` | `tooltip_qss()`, `BOTBAR_H` |
-| `main.py` | Tool palette + tooltip QSS; `closeEvent` → stop RTT thread |
-| `ui/dashboard.py` | Two-line directive tooltip text |
-| `tests/test_net_telemetry.py` | Fast unit tests (no live network) |
-
----
-
-## CV/Portfolio Description
-
-> **JARVIS** — Iron Man-style voice AI desktop assistant (Python, PyQt5)  
-> Built a full-stack desktop AI assistant featuring a custom HUD with arc reactor orb, real-time telemetry, and SYS_LOG_BUFFER transcript with typewriter animation. Integrated Claude API (Sonnet 4) for natural language intent routing across 14 intent categories (e.g. apps, files, system, browser, automation, reminders). Implemented ElevenLabs streaming TTS with event-driven audio/transcript synchronisation, Google STT for voice input, and a Playwright Chrome session for browser automation (navigate, click, fill forms, read page content). Architecture uses PyQt5 signal bridge for thread-safe worker→UI communication, rolling conversation memory (8k token window), and a modular executor pattern separating intent routing from OS execution.  
-> **Stack:** Python · PyQt5 · Claude API · ElevenLabs · Playwright · PyAutoGUI · Pytesseract · Google STT · Vapi
+*Maintained by Malakai V. Weah. Keep this file in sync with `Claude.md`, `PRODUCT.md`, and the actual file tree — it is the orientation document every new contributor (human or agent) reads first.*

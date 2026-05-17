@@ -19,6 +19,8 @@ class JarvisSignals(QObject):
     error_occurred = pyqtSignal(str)
     confirmation_required = pyqtSignal(dict)
     workflow_library_changed = pyqtSignal()
+    terminal_line_ready = pyqtSignal(str)   # one stdout/stderr line from a running command
+    terminal_done = pyqtSignal(int)         # exit code when the process finishes
 
 
 signals = JarvisSignals()

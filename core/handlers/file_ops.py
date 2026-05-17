@@ -7,6 +7,16 @@ from pathlib import Path
 
 from core.handlers.shared import _ok, _err, request_confirmation
 from core.handlers.paths import _resolve_file_operation_path, _find_folder
+from core.signals import signals
+
+
+def _emit_to_terminal(text: str, success: bool = True, command: str | None = None) -> None:
+    """Stream file-op output to the terminal panel, optionally prefixed with the command."""
+    if command:
+        signals.terminal_line_ready.emit(f"❯ {command}")
+    for line in text.splitlines():
+        signals.terminal_line_ready.emit(line)
+    signals.terminal_done.emit(0 if success else 1)
 
 
 def _strip_llm_path_placeholders(p: Path) -> Path:
@@ -158,14 +168,22 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found:
                 path = found
             else:
-                return _err(f"File not found: {path.name}")
+                result = _err(f"File not found: {path.name}")
+                _emit_to_terminal(result["output"], success=False)
+                return result
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-            return _ok(content[:2000])
+            result = _ok(content[:2000])
+            _emit_to_terminal(f"── {path.name} ──\n{content[:2000]}", command=f"read {path.name}")
+            return result
         except PermissionError:
-            return _err(f"Permission denied reading: {path.name}")
+            result = _err(f"Permission denied reading: {path.name}")
+            _emit_to_terminal(result["output"], success=False)
+            return result
         except Exception as exc:
-            return _err(str(exc))
+            result = _err(str(exc))
+            _emit_to_terminal(result["output"], success=False)
+            return result
 
     if action == "delete_file":
         if not path.exists():
@@ -278,29 +296,46 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found_dir:
                 path = found_dir
             else:
-                return _err(f"Directory not found: {raw_path or path}")
+                result = _err(f"Directory not found: {raw_path or path}")
+                _emit_to_terminal(result["output"], success=False)
+                return result
         try:
             entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
             lines   = []
             for p in entries[:50]:
-                icon = "📁" if p.is_dir() else "📄"
+                icon = "[DIR] " if p.is_dir() else "[FILE]"
                 lines.append(f"{icon} {p.name}")
             summary = f"{path.name}/ — {len(lines)} items:\n" + "\n".join(lines)
-            return _ok(summary)
+            result = _ok(summary)
+            _emit_to_terminal(summary, command=f"ls {path}")
+            return result
         except PermissionError:
-            return _err(f"Permission denied: {path}")
+            result = _err(f"Permission denied: {path}")
+            _emit_to_terminal(result["output"], success=False)
+            return result
         except Exception as exc:
-            return _err(str(exc))
+            result = _err(str(exc))
+            _emit_to_terminal(result["output"], success=False)
+            return result
 
     if action == "search_files":
         pattern = params.get("pattern", "*")
         base    = path if path.is_dir() else Path.home()
         try:
-            results = [str(p) for p in base.rglob(pattern)][:30]
-            if not results:
-                return _ok("No matching files found.")
-            return _ok("\n".join(Path(r).name for r in results))
+            matches = [p for p in base.rglob(pattern)][:30]
+            if not matches:
+                result = _ok("No matching files found.")
+                _emit_to_terminal("No matching files found.")
+                return result
+            lines = [f"{'[DIR] ' if p.is_dir() else '[FILE]'} {p}" for p in matches]
+            header = f"── {len(lines)} result(s) for '{pattern}' in {base.name}/ ──"
+            body = "\n".join(lines)
+            result = _ok("\n".join(p.name for p in matches))
+            _emit_to_terminal(f"{header}\n{body}", command=f"find '{pattern}' in {base.name}/")
+            return result
         except Exception as exc:
-            return _err(str(exc))
+            result = _err(str(exc))
+            _emit_to_terminal(result["output"], success=False)
+            return result
 
     return _err(f"Unknown file action: {action}")

@@ -44,6 +44,7 @@ from ui.voice import VoiceView
 from ui.views.automation.view import AutomationView
 from ui.history import HistoryView
 from ui.settings import SettingsView
+from ui.components.terminal import TerminalPanel
 from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
 from config.settings import config
@@ -70,7 +71,7 @@ _HISTORY_MAX = 500
 _TTS_MAX_CHARS = 800
 
 class JarvisWindow(QMainWindow):
-    VIEW_NAMES = ["Dashboard", "Voice", "Automation", "History", "Settings"]
+    VIEW_NAMES = ["Dashboard", "Voice", "Automation", "History", "Settings", "Terminal"]
 
     # Thread-bridge signals: worker threads → Qt main thread (always safe to emit)
     _brain_result_ready  = pyqtSignal(object)        # dict from brain.py
@@ -154,6 +155,11 @@ class JarvisWindow(QMainWindow):
         self._settings_view.dim_mode_changed.connect(self._on_dim_toggled)
         self._settings_view.wake_word_changed.connect(self._on_wake_word_toggle)
         self._stack.addWidget(self._settings_view)
+
+        self._terminal_view = TerminalPanel()
+        self._terminal_view.command_submitted.connect(self._process_cmd)
+        self._stack.addWidget(self._terminal_view)
+
         right_lay.addWidget(self._stack, 1)
 
         self._botbar = BottomBar()
