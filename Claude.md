@@ -635,12 +635,31 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 
 ```json
 { "topic": "string — REQUIRED. What the document is about. The handler asks Sonnet to write the content based on this." }
+{ "doc_type": "string — REQUIRED for create_docx. One of: report | academic | memo | letter | resume | legal. Drives the document's structural formatting (font, margins, spacing, structure). See detection table below. Default: 'report'." }
 { "path": "string — optional. Save location. Default: Documents/<slug>_<timestamp>.<ext>. The handler corrects the extension automatically." }
-{ "style": "string — optional. e.g. 'report', 'memo', 'pitch deck', 'casual', 'academic'. Default: 'professional, modern, well-formatted'." }
+{ "style": "string — optional FREE-FORM. e.g. 'punchy', 'casual', 'formal', 'concise', 'modern', 'minimal'. Controls TONE of prose and ACCENT colour preference only. Does NOT override doc_type structural rules." }
 { "slide_count": "int — optional, create_pptx only. Default 6." }
 ```
 
 **Do NOT include a `content` parameter.** That is for `file_operation.create_file`. `document_creation` generates its own content via Sonnet and the bundled SKILL.md.
+
+**`doc_type` detection — choose the closest match by user phrasing:**
+
+| User says (examples) | `doc_type` |
+|---|---|
+| *"a report on X"*, *"write me a report"*, *"business doc about Y"*, *"workplace document"* | `report` |
+| *"essay on X for my class"*, *"academic paper"*, *"thesis chapter"*, *"APA paper"*, *"MLA"*, *"Harvard style"* | `academic` |
+| *"memo to the team"*, *"internal memo about X"*, *"company memo"* | `memo` |
+| *"letter to X"*, *"cover letter"*, *"formal correspondence"*, *"business letter"* | `letter` |
+| *"resume"*, *"CV"*, *"job application document"*, *"my resume for X role"* | `resume` |
+| *"contract"*, *"legal brief"*, *"agreement document"*, *"NDA"* | `legal` |
+
+Ambiguous? Default to `report`. **Do not emit `doc_type` values outside the six above** — the handler downgrades unknowns to `report`.
+
+**`doc_type` vs `style` — separate concerns:**
+- `doc_type` is *structural* (font, margins, spacing, alignment). Exactly one of the six fixed values above.
+- `style` is *tonal* (voice, mood, accent colour preference). Free-form text.
+- Example: *"write a punchy memo about Q4 sales"* → `doc_type: "memo"`, `style: "punchy"`.
 
 **HUD Label:** `DOCUMENT`
 **Confirmation:** `false` — read-only generation; nothing destructive. (The handler refuses overwrite by default; user picks a new name if the file exists.)
@@ -653,7 +672,7 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 {
   "intent": "document_creation",
   "action": "create_docx",
-  "parameters": { "topic": "renewable energy in Africa", "style": "report" },
+  "parameters": { "topic": "renewable energy in Africa", "doc_type": "report" },
   "confidence": 0.95,
   "response": "Drafting that report now.",
   "hud_status": "DOCUMENT",
@@ -667,9 +686,51 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 {
   "intent": "document_creation",
   "action": "create_docx",
-  "parameters": { "topic": "Q4 sales", "style": "memo" },
+  "parameters": { "topic": "Q4 sales", "doc_type": "memo" },
   "confidence": 0.97,
   "response": "On it — drafting the Q4 sales memo.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Write a punchy resume for a senior frontend engineer role"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_docx",
+  "parameters": { "topic": "senior frontend engineer role", "doc_type": "resume", "style": "punchy" },
+  "confidence": 0.95,
+  "response": "On it — drafting your frontend resume.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Draft a legal contract template for a freelance services agreement"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_docx",
+  "parameters": { "topic": "freelance services agreement", "doc_type": "legal" },
+  "confidence": 0.94,
+  "response": "Drafting the contract — black-on-white, formal layout.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Write an APA essay about quantum entanglement for my physics class"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_docx",
+  "parameters": { "topic": "quantum entanglement", "doc_type": "academic" },
+  "confidence": 0.96,
+  "response": "Drafting the APA essay now.",
   "hud_status": "DOCUMENT",
   "requires_confirmation": false
 }
