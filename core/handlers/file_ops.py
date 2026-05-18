@@ -23,6 +23,7 @@ _SEARCH_RESULTS_CAP     = 200
 _SEARCH_TIME_BUDGET_S   = 30.0
 _BATCH_DELETE_MAX       = 1000
 _REPLACE_PREVIEW_CTX    = 50    # chars of context shown before/after first match
+_FIND_LINE_MAX_LEN      = 200   # truncate very long matched lines in grep output
 
 # Extension → friendly type label for file_info. Anything not listed shows just the suffix.
 _EXT_TYPE_HINTS: dict[str, str] = {
@@ -44,7 +45,7 @@ _EXT_TYPE_HINTS: dict[str, str] = {
     ".sh": "Shell script", ".ps1": "PowerShell script",
 }
 
-# Recursive walks (search_files, future find_in_files) skip these noisy trees.
+# Recursive walks (search_files, find_in_files) skip these noisy trees.
 _SEARCH_PRUNE_DIRS: frozenset[str] = frozenset({
     "__pycache__", ".git", "node_modules", ".venv", ".mypy_cache",
     ".pytest_cache", "dist", "build", ".tox", ".idea", ".vscode",
@@ -931,5 +932,109 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             return _ok(base_msg)
 
         return request_confirmation(prompt, _do_batch_delete)
+
+    if action == "find_in_files":
+        pattern_raw = params.get("pattern", "")
+        if not isinstance(pattern_raw, str) or pattern_raw == "":
+            return _err("Missing 'pattern' (content to search for)")
+
+        glob_pat       = (params.get("glob") or "").strip()
+        use_regex      = bool(params.get("regex", False))
+        case_sensitive = bool(params.get("case_sensitive", False))
+
+        # Decision A: default to Path.cwd() when no path provided.
+        if not raw_path:
+            base = Path.cwd()
+        elif path.exists():
+            base = path
+        else:
+            found_dir = _find_folder(raw_path)
+            if found_dir:
+                base = found_dir
+            else:
+                return _err(f"Path not found: {raw_path}")
+
+        flags = 0 if case_sensitive else re.IGNORECASE
+        if use_regex:
+            try:
+                matcher = re.compile(pattern_raw, flags)
+            except re.error as exc:
+                return _err(f"Invalid regex: {exc}")
+        else:
+            matcher = re.compile(re.escape(pattern_raw), flags)
+
+        def _iter_files():
+            if base.is_file():
+                yield base
+                return
+            for root, dirs, files in os.walk(str(base), topdown=True):
+                dirs[:] = [d for d in dirs if d.lower() not in _SEARCH_PRUNE_DIRS]
+                for name in files:
+                    if glob_pat and not fnmatch.fnmatch(name, glob_pat):
+                        continue
+                    yield Path(root) / name
+
+        cmd_label = (
+            f"grep {pattern_raw!r} in {base.name or base}/"
+            + (f" --glob {glob_pat}" if glob_pat else "")
+            + (" --regex" if use_regex else "")
+        )
+        signals.terminal_line_ready.emit(f"❯ {cmd_label}")
+
+        deadline       = time.monotonic() + _SEARCH_TIME_BUDGET_S
+        matches: list[tuple[Path, int]] = []
+        files_with_matches: set[Path]   = set()
+        files_skipped_binary = 0
+        truncated_reason: str | None = None
+
+        try:
+            for fp in _iter_files():
+                if time.monotonic() > deadline:
+                    truncated_reason = f"time budget ({int(_SEARCH_TIME_BUDGET_S)}s) exceeded"
+                    break
+                if _is_probably_binary(fp):
+                    files_skipped_binary += 1
+                    continue
+                try:
+                    with fp.open("r", encoding="utf-8", errors="replace") as fh:
+                        for lineno, line in enumerate(fh, start=1):
+                            if matcher.search(line):
+                                clean = line.rstrip("\r\n")
+                                if len(clean) > _FIND_LINE_MAX_LEN:
+                                    clean = clean[:_FIND_LINE_MAX_LEN] + "…"
+                                matches.append((fp, lineno))
+                                files_with_matches.add(fp)
+                                signals.terminal_line_ready.emit(f"{fp}:{lineno}: {clean}")
+                                if len(matches) >= _SEARCH_RESULTS_CAP:
+                                    truncated_reason = f"result cap ({_SEARCH_RESULTS_CAP})"
+                                    break
+                            if time.monotonic() > deadline:
+                                truncated_reason = (
+                                    f"time budget ({int(_SEARCH_TIME_BUDGET_S)}s) exceeded"
+                                )
+                                break
+                except (PermissionError, OSError):
+                    continue
+                if truncated_reason:
+                    break
+        except Exception as exc:
+            signals.terminal_done.emit(1)
+            return _err(str(exc))
+
+        if truncated_reason:
+            signals.terminal_line_ready.emit(f"[partial: {truncated_reason}]")
+        signals.terminal_done.emit(0)
+
+        if not matches:
+            tail = f" in {glob_pat} files" if glob_pat else ""
+            return _ok(f"No matches for {pattern_raw!r}{tail}.")
+
+        n         = len(matches)
+        m         = len(files_with_matches)
+        partial_t = f" (partial: {truncated_reason})" if truncated_reason else ""
+        return _ok(
+            f"{n} match{'es' if n != 1 else ''} for {pattern_raw!r} "
+            f"across {m} file{'s' if m != 1 else ''}{partial_t}."
+        )
 
     return _err(f"Unknown file action: {action}")

@@ -358,6 +358,19 @@ _P: dict[tuple, dict] = {
             "No match found.",
         ],
     },
+    ("file_operation", "find_in_files"): {
+        "ok": [
+            "{o}",
+            "Grepped — {o}",
+            "Here's the hit count, Valentine: {o}",
+            "Done scanning. {o}",
+        ],
+        "err": [
+            "Search failed — {e}",
+            "Couldn't grep that. {e}",
+            "Nothing turned up.",
+        ],
+    },
     ("file_operation", "move_file"): {
         "ok": [
             "Moved it.",

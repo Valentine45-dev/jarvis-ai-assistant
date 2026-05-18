@@ -47,6 +47,7 @@ _OUTPUT_IS_RESPONSE: frozenset = frozenset({
     ("file_operation",     "file_info"),
     ("file_operation",     "list_directory"),
     ("file_operation",     "search_files"),
+    ("file_operation",     "find_in_files"),
     ("reminder_task",      "list_reminders"),
     ("automation_task",    "list_workflows"),
     ("jarvis_meta",        "status_report"),
@@ -279,6 +280,13 @@ def smart_error(intent: str, action: str, error: str, params: dict) -> str:
             return f"Couldn't move {label} to {dest!r}." if dest else f"Move failed. {short_e}"
         if action == "search_files":
             return f"Nothing found." + (f" {short_e}" if short_e else "")
+        if action == "find_in_files":
+            pat = params.get("pattern", "")
+            return (
+                f"Couldn't grep {pat!r}." + (f" {short_e}" if short_e else "")
+                if pat else
+                f"Search failed." + (f" {short_e}" if short_e else "")
+            )
         if action == "replace_in_file":
             find_t = params.get("find", "")
             return (
