@@ -647,7 +647,7 @@ When the user gives no colour direction and the doc_type allows colour, pick a p
 
 ## Section C — Document type standards
 
-Phase 2.5 ships **REPORT** only. Other types are accepted by the handler but currently fall back to REPORT defaults until their blocks land (Phase 2.6 / 2.7).
+Standards blocks below cover **REPORT**, **ACADEMIC**, **MEMO**, and **LETTER**. **RESUME** and **LEGAL** ship in Phase 2.7 — until then they fall back to REPORT for resume and to ACADEMIC's zero-colour Times-Roman block for legal (closest safe approximation).
 
 ### REPORT (workplace / business)
 
@@ -669,10 +669,73 @@ Phase 2.5 ships **REPORT** only. Other types are accepted by the handler but cur
 
 Universal rules also apply (font hierarchy, contrast, white space — see Phase 2.7 when it ships).
 
-### Other doc_types (placeholder until Phase 2.6 / 2.7)
+### ACADEMIC (school paper / essay / thesis chapter)
 
-If the handler injects `doc_type: "academic" | "memo" | "letter" | "resume" | "legal"` and you don't see a dedicated block above, apply REPORT standards with one modification:
-- For `academic` and `legal`: drop all colour and use Times New Roman 12pt throughout. This preserves the *most important* rule (no colour for those types) until their full standards arrive.
+Default to APA-style unless the user names MLA, Chicago, or Harvard (Section A handles that override). Academic is **zero-colour** — every `run.font.color.rgb` is `RGBColor(0, 0, 0)`. No accent palette, no decorative rules, no shaded table headers.
+
+| Aspect | Standard |
+|---|---|
+| Body font | Times New Roman 12pt, every run, no exceptions |
+| Heading 1 (sections like "Introduction", "Methods", "References") | Times New Roman 13pt bold, black, left-aligned. Section numbering is acceptable (`1. Introduction`) but not required for APA. |
+| Heading 2 (subsections) | Times New Roman 12pt bold italic, black, left-aligned |
+| Document title | Times New Roman 16pt bold, black, centred. On its own page (or top of page 1 for short papers). |
+| Margins | 1 inch all sides |
+| Line spacing | Double (`WD_LINE_SPACING.DOUBLE`, or `MULTIPLE` with `2.0`) for body AND references |
+| Alignment | LEFT (never JUSTIFY). Title is CENTER. |
+| Body colour | Pure black `#000000` everywhere |
+| Paragraph indent | First-line indent of 0.5 inch (`first_line_indent = Inches(0.5)`) on body paragraphs. No indent on the first paragraph after a heading. |
+| Structure | Title page (title + author + institution + date, all centred) → page break → Abstract (single paragraph, no indent) → page break → Introduction → Body sections → Conclusion → page break → References |
+| Page numbers | Header, right-aligned, Arabic. Footer page numbers are also acceptable. |
+| References | Hanging indent: `left_indent = Inches(0.5)`, `first_line_indent = Inches(-0.5)`. Double-spaced. Alphabetical by first author surname. |
+| In-text citations | `(Author, Year)` for APA; `(Author Page)` for MLA. Reference list format matches the chosen style. |
+| Tables | Simple black borders, white fill only. Header row bold black on white — never coloured fill. |
+
+Forbidden in academic: any colour beyond black; bullet-point lists for body content (use full prose paragraphs); decorative rules; coloured table headers; sans-serif fonts.
+
+### MEMO (internal business communication)
+
+Short, dense, action-oriented. Max 2 pages. No cover page, no table of contents, no abstract.
+
+| Aspect | Standard |
+|---|---|
+| Body font | Calibri 11pt |
+| Heading | Calibri 12pt bold, primary palette colour. Use sparingly — memos rarely need more than 1-2 section headings. |
+| Document title | Calibri 18pt bold, primary palette colour, top of page 1. Text: `MEMORANDUM` (all caps). |
+| Header block | Four-row mini-table (or aligned paragraphs) at the top: `TO:` / `FROM:` / `DATE:` / `RE:` (or `SUBJECT:`). Label column bold Calibri 11pt, value column Calibri 11pt normal. A thin horizontal rule (0.75pt, primary accent) separates the header block from the body. |
+| Margins | 1 inch all sides |
+| Line spacing | Single (`WD_LINE_SPACING.SINGLE`) |
+| Alignment | LEFT body. Header block label column left, value column left. |
+| Body colour | Pure black `#000000` |
+| Accent colour | One colour from Section B palette (or HR blue `#0066CC` as default). Used only for the title, header rule, and any subheading. Body text stays black. |
+| Structure | Header block (TO/FROM/DATE/RE) → optional one-line context paragraph → 2-5 short body paragraphs → "Action items" or "Next steps" closing section (often a short bulleted list) |
+| Page numbers | None for ≤2-page memos. Add footer centre page numbers only if longer. |
+| Tables | Use only when comparing options or summarising data. Same REPORT styling but smaller — 10pt content. |
+
+Memos prize brevity. Sonnet should target 1 page of content unless the topic genuinely requires more.
+
+### LETTER (formal business correspondence)
+
+Full block format — everything left-aligned. No indents on paragraphs. Single line within paragraphs, blank line between.
+
+| Aspect | Standard |
+|---|---|
+| Body font | Calibri 12pt OR Times New Roman 12pt (use Calibri unless the user signals a traditional tone) |
+| Document title | None. Letters have no title. |
+| Margins | 1 inch all sides |
+| Line spacing | Single within paragraphs. `space_after = Pt(12)` between paragraphs (creates the blank-line effect). |
+| Alignment | LEFT throughout (block format) |
+| Body colour | Pure black `#000000` |
+| Accent colour | None. Letters are black on white. |
+| Structure (top to bottom, each block separated by a blank line) | 1. Sender's address block (3-4 lines: name, street, city/state/zip) — OR letterhead<br/>2. Date (e.g., `19 May 2026`)<br/>3. Recipient's address block (name, title, organisation, address — 3-5 lines)<br/>4. Salutation: `Dear [Name],` (formal: `Dear Mr./Ms. [Surname],`)<br/>5. Body paragraphs (2-5, each 2-4 sentences)<br/>6. Closing: `Sincerely,` / `Best regards,` / `Respectfully,`<br/>7. Three blank lines for signature<br/>8. Typed name<br/>9. Title (if applicable)<br/>10. Optional `Enclosures:` line if attachments are mentioned |
+| Page numbers | None for single-page. If >1 page, add `[Recipient Name] — Page X of Y` to top-right of pages 2+. |
+| Tables | Rare. If used, embed without coloured headers. |
+
+For **cover letters specifically** (`topic` mentions "cover letter" or "job application"): keep to one page, three body paragraphs (opening hook → relevant qualifications → call to action + close), match the formality the role demands.
+
+### Interim fallbacks (Phase 2.7 will land full blocks)
+
+- `doc_type: "resume"` → apply REPORT standards with these overrides: single line spacing throughout, 0.75-inch margins, no Executive Summary section, content is dense bullet points (no full-prose paragraphs), one accent colour for the name header and section dividers only.
+- `doc_type: "legal"` → apply ACADEMIC standards with these overrides: title block at top (parties, subject, date), no abstract, numbered clauses (`1.`, `1.1`, `1.2`, etc.) instead of named sections, signature block at the end with lines for parties' signatures.
 
 <!-- ════════════════════════════════════════════════════════════════════
      End JARVIS Document Intelligence
