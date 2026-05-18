@@ -627,7 +627,7 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 **Actions:**
 
 - `create_docx` — Generate a Microsoft Word document (`.docx`). **Live in Phase 2.**
-- `create_pptx` — Generate a PowerPoint presentation (`.pptx`). *(Lands in Phase 3.)*
+- `create_pptx` — Generate a PowerPoint presentation (`.pptx`). **Live in Phase 3.1.**
 - `create_xlsx` — Generate an Excel spreadsheet (`.xlsx`). *(Lands in Phase 3.)*
 - `create_pdf` — Generate a PDF document (`.pdf`). *(Lands in Phase 4.)*
 
@@ -643,7 +643,9 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 
 **Do NOT include a `content` parameter.** That is for `file_operation.create_file`. `document_creation` generates its own content via Sonnet and the bundled SKILL.md.
 
-**`doc_type` detection — choose the closest match by user phrasing:**
+**`doc_type` is action-specific.** The valid taxonomy depends on which action you're emitting. **Never use a docx `doc_type` (e.g. `academic`) for a pptx call** — the handler will downgrade it to that action's default.
+
+**`doc_type` for `create_docx` — choose the closest match by user phrasing:**
 
 | User says (examples) | `doc_type` |
 |---|---|
@@ -654,12 +656,30 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 | *"resume"*, *"CV"*, *"job application document"*, *"my resume for X role"* | `resume` |
 | *"contract"*, *"legal brief"*, *"agreement document"*, *"NDA"* | `legal` |
 
-Ambiguous? Default to `report`. **Do not emit `doc_type` values outside the six above** — the handler downgrades unknowns to `report`.
+Ambiguous? Default to `report`. **Do not emit values outside the six above for `create_docx`** — the handler downgrades unknowns to `report`.
+
+**`doc_type` for `create_pptx` — choose the closest match by user phrasing:**
+
+| User says (examples) | `doc_type` |
+|---|---|
+| *"a pitch deck for my startup"*, *"investor deck about X"*, *"pitch for Y"* | `pitch` |
+| *"status update slides"*, *"quarterly review deck"*, *"business report slides"*, *"executive summary deck"* | `report` |
+| *"training slides on X"*, *"onboarding deck"*, *"workshop slides"*, *"how-to presentation"* | `training` |
+| *"sales deck for X"*, *"product pitch slides"*, *"customer presentation"* | `sales` |
+
+Ambiguous? Default to `pitch`. **Do not emit values outside the four above for `create_pptx`** — the handler downgrades unknowns to `pitch`. Phase 3.1 ships full **pitch** standards; the other three currently fall back to pitch defaults until Phase 3.2.
+
+**Slide count for `create_pptx`:** Optional `slide_count` int. Default 6. **Clamped to [3, 20]** — never emit a higher value, the handler will cap it. Detect from user phrasing:
+- *"a 10-slide deck"*, *"10 slides about X"* → `"slide_count": 10`
+- *"a quick 3-slide intro"* → `"slide_count": 3`
+- *"a comprehensive 15-slide pitch"* → `"slide_count": 15`
+- No number mentioned → omit `slide_count` (handler uses default 6).
 
 **`doc_type` vs `style` — separate concerns:**
-- `doc_type` is *structural* (font, margins, spacing, alignment). Exactly one of the six fixed values above.
+- `doc_type` is *structural* (font, margins, spacing, alignment, deck layout). One of the fixed values for the action.
 - `style` is *tonal* (voice, mood, accent colour preference). Free-form text.
 - Example: *"write a punchy memo about Q4 sales"* → `doc_type: "memo"`, `style: "punchy"`.
+- Example: *"make a bold 10-slide pitch for my AI startup"* → `action: "create_pptx"`, `doc_type: "pitch"`, `slide_count: 10`, `style: "bold"`.
 
 **HUD Label:** `DOCUMENT`
 **Confirmation:** `false` — read-only generation; nothing destructive. (The handler refuses overwrite by default; user picks a new name if the file exists.)
@@ -731,6 +751,34 @@ Ambiguous? Default to `report`. **Do not emit `doc_type` values outside the six 
   "parameters": { "topic": "quantum entanglement", "doc_type": "academic" },
   "confidence": 0.96,
   "response": "Drafting the APA essay now.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Make me a 10-slide pitch deck for an AI productivity startup"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_pptx",
+  "parameters": { "topic": "AI productivity startup", "doc_type": "pitch", "slide_count": 10 },
+  "confidence": 0.95,
+  "response": "Building your 10-slide pitch now.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"@pptx Q4 status update for engineering"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_pptx",
+  "parameters": { "topic": "Q4 status update for engineering", "doc_type": "report" },
+  "confidence": 0.94,
+  "response": "Slides incoming, Valentine.",
   "hud_status": "DOCUMENT",
   "requires_confirmation": false
 }

@@ -10,6 +10,7 @@ dependencies = [
     "livekit-agents>=1.5.6",
     "livekit-plugins-deepgram>=1.5.6",
     "livekit-plugins-silero>=1.5.6",
+    "matplotlib>=3.9.0",
     "numpy>=2.4.4",
     "openpyxl>=3.1.0",
     "playwright>=1.58.0",
