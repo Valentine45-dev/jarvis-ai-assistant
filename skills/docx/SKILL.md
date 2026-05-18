@@ -647,7 +647,7 @@ When the user gives no colour direction and the doc_type allows colour, pick a p
 
 ## Section C — Document type standards
 
-Standards blocks below cover **REPORT**, **ACADEMIC**, **MEMO**, and **LETTER**. **RESUME** and **LEGAL** ship in Phase 2.7 — until then they fall back to REPORT for resume and to ACADEMIC's zero-colour Times-Roman block for legal (closest safe approximation).
+All six doc_types have dedicated standards blocks: **REPORT**, **ACADEMIC**, **MEMO**, **LETTER**, **RESUME**, **LEGAL**. The Universal Design Rules at the end apply to every type.
 
 ### REPORT (workplace / business)
 
@@ -732,10 +732,113 @@ Full block format — everything left-aligned. No indents on paragraphs. Single 
 
 For **cover letters specifically** (`topic` mentions "cover letter" or "job application"): keep to one page, three body paragraphs (opening hook → relevant qualifications → call to action + close), match the formality the role demands.
 
-### Interim fallbacks (Phase 2.7 will land full blocks)
+### RESUME / CV
 
-- `doc_type: "resume"` → apply REPORT standards with these overrides: single line spacing throughout, 0.75-inch margins, no Executive Summary section, content is dense bullet points (no full-prose paragraphs), one accent colour for the name header and section dividers only.
-- `doc_type: "legal"` → apply ACADEMIC standards with these overrides: title block at top (parties, subject, date), no abstract, numbered clauses (`1.`, `1.1`, `1.2`, etc.) instead of named sections, signature block at the end with lines for parties' signatures.
+One page is the target — two pages only when warranted by ≥10 years' experience. Dense, scannable, bulleted. No full-prose paragraphs. One accent colour, drawn from Section B's resume-by-field table (tech → charcoal+cyan, creative → bold accent, business → navy+gold, healthcare → blue/teal, academic → burgundy+serif). The accent appears only on the name header and section dividers; everything else is black.
+
+| Aspect | Standard |
+|---|---|
+| Body font | Calibri 10pt OR Arial 10pt (use Calibri unless the topic implies a creative/design field where Arial reads cleaner) |
+| Name header | Same font 22pt bold, accent colour. Centred or left-aligned (left for ATS-friendly resumes). |
+| Contact line | Below the name, same font 10pt black: email · phone · LinkedIn · city. Single line, separated by `·` or `|`. Centred or left-aligned to match name. |
+| Section heading | Same font 12pt bold uppercase (e.g., `EXPERIENCE`, `EDUCATION`, `SKILLS`, `PROJECTS`). Accent colour. Followed by a thin (0.75pt) horizontal rule in accent colour. |
+| Job/role entry | Bold black 11pt for the role title, normal 10pt for company + dates on the same line (right-aligned dates with `\t` tab stop). |
+| Bullets | Calibri/Arial 10pt black. **No full sentences** — start with strong verbs (`Led`, `Built`, `Reduced`, `Shipped`), quantify outcomes where possible (`reduced p95 latency by 38%`). Each bullet ≤2 lines. |
+| Margins | 0.5–0.75 inch all sides (tight to maximise content density) |
+| Line spacing | Single (`WD_LINE_SPACING.SINGLE`) |
+| Alignment | LEFT throughout. Dates right-aligned via tab stop. |
+| Body colour | Pure black `#000000` for everything except the name + section headings + dividers (which use the accent) |
+| Structure | 1. Name + contact line<br/>2. Short summary paragraph (3-4 lines, optional — only for senior roles)<br/>3. EXPERIENCE (reverse chronological, 3-5 roles, 3-5 bullets each)<br/>4. EDUCATION<br/>5. SKILLS (compact list or two-column)<br/>6. Optional: PROJECTS, CERTIFICATIONS, PUBLICATIONS — only if relevant to the field |
+| Page numbers | None for ≤2 pages |
+| Tables | **DO NOT USE TABLES IN RESUMES.** Not for skills, not for two-column layouts, not for ATS-friendliness — tables actively hurt ATS parsing. Use tab-aligned columns, single-line skill rows separated by `·`, or stacked simple paragraphs. This rule is non-negotiable. |
+
+Forbidden in resume: full-sentence paragraphs in experience bullets; objective statements ("Seeking a role where I can…"); references section ("References available upon request"); coloured backgrounds; photo; graphic charts of skill levels (e.g., "Python ██████░░ 75%") — they break ATS and look amateurish.
+
+### LEGAL (contract / agreement / brief / NDA)
+
+Zero colour. Times New Roman 12pt. Numbered clauses (`1.`, `1.1`, `1.2`). Signature blocks at the end. The document looks austere on purpose — legal weight comes from clarity and structure, never decoration.
+
+| Aspect | Standard |
+|---|---|
+| Body font | Times New Roman 12pt, every run, no exceptions |
+| Heading 1 (numbered clauses like "1. Definitions", "2. Term", "3. Termination") | Times New Roman 12pt bold, black, left-aligned. Clause number is part of the heading text. |
+| Heading 2 (sub-clauses like "1.1", "1.2") | Times New Roman 12pt bold, black. Indented by 0.25 inch from the parent clause. |
+| Document title | Times New Roman 14pt bold, black, centred at the top. Typed in ALL CAPS or Title Case (e.g., `MUTUAL NON-DISCLOSURE AGREEMENT`). |
+| Margins | 1 inch all sides (use 1.5 inch top margin if the document is a court filing) |
+| Line spacing | Double (`WD_LINE_SPACING.DOUBLE`) for clause body. Single for the parties/recitals block at top and the signature block at bottom. |
+| Alignment | LEFT (never JUSTIFY for legal — uneven spacing causes confusion in citations) |
+| Body colour | Pure black `#000000` everywhere |
+| Structure | 1. Title (centred, top)<br/>2. Parties block ("THIS AGREEMENT is entered into on [date] between [Party A], a [entity type] with its principal place of business at [address] ('Party A'), and [Party B]…")<br/>3. Recitals (optional — `WHEREAS, …; and WHEREAS, …; NOW, THEREFORE, in consideration of…`)<br/>4. Numbered clauses (Definitions → substantive terms → boilerplate: governing law, notices, severability, entire agreement)<br/>5. Signature block — see below |
+| Signature block | One block per party. Each block contains:<br/>`[PARTY NAME]` (bold)<br/>`By: ______________________` (signature line)<br/>`Name: [Typed name]`<br/>`Title: [Title]`<br/>`Date: ____________`<br/>Two parties side-by-side via a 2-column table with no borders, OR stacked vertically. |
+| Page numbers | Bottom centre, Arabic. Format `Page X of Y` for multi-page documents. |
+| Defined terms | Capitalise defined terms throughout (e.g., `the "Confidential Information"`, `the "Effective Date"`). Once defined in clause 1, use the capitalised form everywhere. |
+| Tables | Permitted for exhibits/schedules. Simple black borders. No coloured fills. |
+
+Forbidden in legal: any colour beyond black; bullet points in operative clauses (use sub-numbered clauses instead); informal language ("you", "we" — use defined party names); decorative rules; coloured table fills.
+
+**Substantive disclaimer** — JARVIS produces *formatting that resembles* a legal document. It is **not** legal advice and the generated content should be reviewed by a qualified attorney before execution. Sonnet should include a brief disclaimer paragraph at the start of any contract template (`"This template is a starting point and should be reviewed by qualified legal counsel before use."`).
+
+## Universal Design Rules (apply to every doc_type)
+
+Rules below apply on top of the doc_type-specific blocks. Where a doc_type rule contradicts a universal rule, **the doc_type rule wins** (the doc_type knows its own conventions). Universal rules cover the gaps.
+
+### Typography hierarchy (when not overridden by doc_type)
+
+| Element | Size range | Weight |
+|---|---|---|
+| Document title | 18–24pt | Bold |
+| Heading 1 (sections) | 14–18pt | Bold |
+| Heading 2 (subsections) | 12–14pt | Bold |
+| Heading 3 (sub-subsections) | 11–12pt | Bold or italic |
+| Body | 10–12pt | Regular |
+| Captions / footnotes / page numbers | 9–10pt | Regular |
+
+Maximum **two** font families per document. Mix sans-serif (Calibri, Arial) and serif (Times New Roman, Cambria, Georgia) only when there's a clear reason — heading-sans + body-serif is the most legible pairing if you do mix. Never mix two serifs or two sans-serifs.
+
+### Contrast and accessibility
+
+- Body text is always pure black `#000000` (or near-black for resume/report accent zones). Never use mid-grey for body text on white.
+- Heading/accent colours must have ≥4.5:1 contrast ratio against the page background. The palettes in Section B are pre-vetted to meet this.
+- When a coloured fill is used on a table header, the text inside the cell must be white (`#FFFFFF`) and bold for legibility.
+- Never use light text on light backgrounds (e.g., pale grey on white). Never use yellow text on white.
+
+### Alignment
+
+- Body text is **LEFT-aligned** in every doc_type. **Never use JUSTIFY** — `python-docx` justified text produces uneven word spacing that looks unprofessional in print.
+- Centre alignment is reserved for: document titles, table headers, and short standalone labels (e.g., "Abstract", "References").
+- Right alignment is reserved for: dates on resume entries, page numbers in some doc_types.
+
+### White space
+
+- Paragraph spacing: minimum `space_after = Pt(6)` on every body paragraph. Cramped paragraphs read as amateurish.
+- Section heading spacing: `space_before = Pt(12)` minimum for H1; `Pt(8)` minimum for H2. Headings need breathing room above them to signal structure.
+- Margins: never reduce below 0.5 inch (resume tight layout) or 0.75 inch (other types). 1 inch is the safe default.
+- Don't fill every inch of the page. White space is a design choice, not wasted space.
+
+### Tables
+
+- Use the `Table Grid` style as the base, then customise borders/fills via XML helpers.
+- Cell content alignment: left for prose, centre for short labels and headers, right for numeric data.
+- Header rows: filled with primary accent colour, white bold text 10pt (where colour is permitted by doc_type).
+- Body rows: alternate white and very light grey `#F5F5F5` when the table has 4+ data rows. Skip alternation for shorter tables.
+- Never use thick borders (>1.5pt). Never use heavy coloured borders.
+
+### Emphasis
+
+- **Bold** for true emphasis (key terms, action verbs in bullets, labels in header blocks).
+- *Italic* for titles of works, foreign phrases, or technical terms on first introduction.
+- **Never use underline** for emphasis in body text — underline is reserved for hyperlinks and conflicts with screen-reader conventions.
+- Avoid `ALL CAPS` for body text (impedes reading speed). Use sparingly for short labels.
+
+### What never to do (drawn from observed Sonnet mistakes)
+
+- Don't `JUSTIFY` body text.
+- Don't apply more than two font families.
+- Don't use coloured fills on body paragraphs (only headers, callouts, and table headers).
+- Don't hand-write 30 separate `add_paragraph()` calls when a loop over a list does the same. Compactness was a recurring failure mode early on.
+- Don't extract a helper function used only once. Inline it.
+- Don't add a Table of Contents unless the document is >10 pages or the doc_type structure explicitly calls for one (none currently do).
+- **Don't hallucinate python-docx XML methods.** Methods that DO exist: `tbl._element` (the `CT_Tbl`), `tbl._tbl` (also the `CT_Tbl`), `tc._tc` (cell element), `p._p` (paragraph element). Methods that **do NOT exist** despite looking plausible: `tbl._tbl.get_or_add_tblPr()`, `tc.get_or_add_tcPr()` (wrong — use `tc._tc.get_or_add_tcPr()`). For table-level XML, find or create `<w:tblPr>` manually: `tblPr = tbl._element.find(qn('w:tblPr'))` and if `None`, build with `OxmlElement('w:tblPr')` and insert as first child. When in doubt, **prefer not setting the XML at all** — the default `Table Grid` style with no border tweaks is fine.
 
 <!-- ════════════════════════════════════════════════════════════════════
      End JARVIS Document Intelligence
