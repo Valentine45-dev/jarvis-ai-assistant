@@ -629,7 +629,7 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 - `create_docx` — Generate a Microsoft Word document (`.docx`). **Live in Phase 2.**
 - `create_pptx` — Generate a PowerPoint presentation (`.pptx`). **Live in Phase 3.1.**
 - `create_xlsx` — Generate an Excel spreadsheet (`.xlsx`). **Live in Phase 3.3.**
-- `create_pdf` — Generate a PDF document (`.pdf`). *(Lands in Phase 4.)*
+- `create_pdf` — Generate a PDF document (`.pdf`). **Live in Phase 4.1.**
 
 **Parameters:**
 
@@ -678,7 +678,18 @@ Ambiguous? Default to `pitch`. **Do not emit values outside the four above for `
 | *"a tracker for X"*, *"task tracker"*, *"project tracker"*, *"budget tracker"*, *"habit tracker"* | `tracker` |
 | *"an invoice template"*, *"invoice for client X"*, *"billing sheet"*, *"receipt template"* | `invoice` |
 
-Ambiguous? Default to `dataset`. **Do not emit values outside the four above for `create_xlsx`** — the handler downgrades unknowns to `dataset`. Phase 3.3 ships full **dataset** standards; the other three currently fall back to dataset defaults until Phase 3.4.
+Ambiguous? Default to `dataset`. **Do not emit values outside the four above for `create_xlsx`** — the handler downgrades unknowns to `dataset`. All four xlsx types have full standards as of Phase 3.4.
+
+**`doc_type` for `create_pdf` — choose the closest match by user phrasing:**
+
+| User says (examples) | `doc_type` |
+|---|---|
+| *"a PDF report on X"*, *"business PDF about Y"*, *"executive summary as PDF"* | `report` |
+| *"PDF essay on X"*, *"APA paper as PDF"*, *"academic paper PDF"*, *"thesis chapter PDF"* | `academic` |
+| *"PDF invoice for X"*, *"printable invoice"*, *"billing PDF"* | `invoice` |
+| *"certificate of completion for X"*, *"award certificate"*, *"diploma template"*, *"course completion PDF"* | `certificate` |
+
+Ambiguous? Default to `report`. **Do not emit values outside the four above for `create_pdf`** — the handler downgrades unknowns to `report`. Phase 4.1 ships full **report** standards; the other three currently fall back to report defaults until Phase 4.2. Letter/memo/resume/legal PDFs are NOT in scope yet — those are best produced via `create_docx` (Phase 4.3 may add a convert-from-docx path).
 
 **Slide count for `create_pptx`:** Optional `slide_count` int. Default 6. **Clamped to [3, 20]** — never emit a higher value, the handler will cap it. Detect from user phrasing:
 - *"a 10-slide deck"*, *"10 slides about X"* → `"slide_count": 10`
@@ -818,6 +829,34 @@ Ambiguous? Default to `dataset`. **Do not emit values outside the four above for
   "parameters": { "topic": "auth-rewrite epic task tracker", "doc_type": "tracker" },
   "confidence": 0.95,
   "response": "Tracker incoming — status pills, owner column, due dates.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Make a PDF report on Q3 sales performance"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_pdf",
+  "parameters": { "topic": "Q3 sales performance", "doc_type": "report" },
+  "confidence": 0.96,
+  "response": "Compiling the Q3 PDF now.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Generate a certificate of completion for the Python fundamentals course"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_pdf",
+  "parameters": { "topic": "Python fundamentals course completion", "doc_type": "certificate" },
+  "confidence": 0.96,
+  "response": "Drafting the certificate — landscape, decorative border.",
   "hud_status": "DOCUMENT",
   "requires_confirmation": false
 }

@@ -79,12 +79,16 @@ _KNOWN_DOC_TYPES: dict[str, frozenset[str]] = {
     "create_docx": frozenset({"report", "academic", "memo", "letter", "resume", "legal"}),
     "create_pptx": frozenset({"pitch", "report", "training", "sales"}),
     "create_xlsx": frozenset({"dataset", "dashboard", "tracker", "invoice"}),
-    # create_pdf taxonomy lands in Phase 4.
+    # Phase 4.1 ships report/academic/invoice/certificate via reportlab-native.
+    # letter/memo/resume/legal are best served by the LibreOffice
+    # convert-from-docx path landing in Phase 4.3.
+    "create_pdf":  frozenset({"report", "academic", "invoice", "certificate"}),
 }
 _DEFAULT_DOC_TYPE: dict[str, str] = {
     "create_docx": "report",
     "create_pptx": "pitch",
     "create_xlsx": "dataset",
+    "create_pdf":  "report",
 }
 # Phase 3.1: slide_count is a pptx-only param. Clamp to a sensible range so
 # Sonnet can't be asked for a 200-slide deck that blows the token budget.
@@ -555,10 +559,8 @@ def _handle_document_creation(action: str, params: dict) -> dict:
     if action not in _ACTION_TO_SKILL:
         return _err(f"Unknown document action: {action}")
 
-    # Phase 3.3: create_docx + create_pptx + create_xlsx are live.
-    # create_pdf gates on its own taxonomy arriving in Phase 4.
-    if action == "create_pdf":
-        return _err(f"{action} isn't available yet — lands in Phase 4.")
+    # Phase 4.1: all four document_creation actions are live.
+    # (The phase-gate is preserved here as documentation; no action is gated.)
 
     topic = (params.get("topic") or "").strip()
     if not topic:
