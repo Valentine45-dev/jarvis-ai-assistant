@@ -32,6 +32,7 @@ _SUPPRESS_FOLLOW: frozenset = frozenset({
     ("automation_task",     "create_workflow"),
     ("automation_task",     "rename_workflow"),
     ("automation_task",     "remove_workflow"),
+    ("document_creation",   "*"),
     ("jarvis_meta",         "change_theme"),
     ("jarvis_meta",         "set_wake_word"),
     ("jarvis_meta",         "change_voice"),
@@ -320,6 +321,15 @@ def smart_error(intent: str, action: str, error: str, params: dict) -> str:
     if intent == "weather":
         place = params.get("location") or params.get("city") or "that location"
         return f"Couldn't fetch weather for {place!r}." + (f" {short_e}" if short_e else "")
+    if intent == "document_creation":
+        if action == "create_docx":
+            return f"Couldn't create the Word doc." + (f" {short_e}" if short_e else "")
+        if action == "create_pptx":
+            return f"Couldn't build the presentation." + (f" {short_e}" if short_e else "")
+        if action == "create_xlsx":
+            return f"Couldn't generate the spreadsheet." + (f" {short_e}" if short_e else "")
+        if action == "create_pdf":
+            return f"Couldn't compile the PDF." + (f" {short_e}" if short_e else "")
     if intent == "automation_task" and action == "run_workflow":
         name = params.get("task_name", "")
         base = f"Workflow {name!r} hit an error." if name else "Workflow failed."

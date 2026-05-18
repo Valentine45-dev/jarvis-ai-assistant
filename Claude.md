@@ -615,7 +615,69 @@ Fetch current weather conditions using OpenWeather.
 
 -----
 
-### 15. `unknown`
+### 15. `document_creation`
+
+Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a topic. The executor reads a bundled SKILL.md, asks Sonnet to write a Python script, AST-validates it, and runs it in a sandboxed subprocess. **Use this — not `file_operation.create_file` — whenever the user asks for a Word doc, slide deck, spreadsheet, or PDF.**
+
+**Critical routing distinction (read this before emitting JSON):**
+
+- *"create a text file with this content: foo bar"* → `file_operation.create_file` with literal `content` the user provided.
+- *"create a Word doc about X"* / *"make me a report on X"* / *"draft slides on X"* / *"build a spreadsheet for X"* / *"compile a PDF about X"* → **`document_creation`**. JARVIS generates the rich formatted content itself. **Do NOT emit `content` here** — the handler writes its own content via Sonnet + the bundled skill.
+
+**Actions:**
+
+- `create_docx` — Generate a Microsoft Word document (`.docx`). **Live in Phase 2.**
+- `create_pptx` — Generate a PowerPoint presentation (`.pptx`). *(Lands in Phase 3.)*
+- `create_xlsx` — Generate an Excel spreadsheet (`.xlsx`). *(Lands in Phase 3.)*
+- `create_pdf` — Generate a PDF document (`.pdf`). *(Lands in Phase 4.)*
+
+**Parameters:**
+
+```json
+{ "topic": "string — REQUIRED. What the document is about. The handler asks Sonnet to write the content based on this." }
+{ "path": "string — optional. Save location. Default: Documents/<slug>_<timestamp>.<ext>. The handler corrects the extension automatically." }
+{ "style": "string — optional. e.g. 'report', 'memo', 'pitch deck', 'casual', 'academic'. Default: 'professional, modern, well-formatted'." }
+{ "slide_count": "int — optional, create_pptx only. Default 6." }
+```
+
+**Do NOT include a `content` parameter.** That is for `file_operation.create_file`. `document_creation` generates its own content via Sonnet and the bundled SKILL.md.
+
+**HUD Label:** `DOCUMENT`
+**Confirmation:** `false` — read-only generation; nothing destructive. (The handler refuses overwrite by default; user picks a new name if the file exists.)
+
+**JSON examples:**
+
+*Input:* `"Create a Word doc about renewable energy in Africa"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_docx",
+  "parameters": { "topic": "renewable energy in Africa", "style": "report" },
+  "confidence": 0.95,
+  "response": "Drafting that report now.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"@doc make me a memo about Q4 sales"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_docx",
+  "parameters": { "topic": "Q4 sales", "style": "memo" },
+  "confidence": 0.97,
+  "response": "On it — drafting the Q4 sales memo.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+### 16. `unknown`
 
 Intent could not be determined.
 
@@ -1156,6 +1218,7 @@ The `response` field is the **primary spoken output** — it is read aloud exact
 |`jarvis_meta`       |`STANDBY`        |
 |`reminder_task`     |`REMINDER SET`   |
 |`weather`           |`WEATHER`        |
+|`document_creation` |`DOCUMENT`       |
 |`unknown`           |`UNKNOWN`        |
 
 Override the default when context demands it — e.g. `"SHUTDOWN PENDING"` or `"SLEEP PENDING"` instead of `"SYS CONTROL"` when awaiting confirmation for those actions.
@@ -1206,6 +1269,8 @@ The Python layer (`brain.py`) strips @tags from input before sending to you. Whe
 | `@remind`   | `reminder_task`      |
 | `@weather`  | `weather`            |
 | `@jarvis`   | `jarvis_meta`        |
+| `@doc`      | `document_creation`  |
+| `@docx`     | `document_creation`  |
 
 ### @Tag Examples
 

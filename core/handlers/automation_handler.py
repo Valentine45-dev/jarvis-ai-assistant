@@ -32,6 +32,7 @@ _KNOWN_STEP_INTENTS: frozenset[str] = frozenset({
     "open_app", "close_app", "search_web", "type_text", "control_mouse",
     "system_control", "file_operation", "browser_automation",
     "read_screen", "reminder_task", "jarvis_meta", "code_execution",
+    "document_creation",
 })
 
 

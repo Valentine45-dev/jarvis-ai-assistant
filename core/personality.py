@@ -643,6 +643,53 @@ _P: dict[tuple, dict] = {
             "Ready to rename — confirm?\n\n{o}",
         ],
     },
+    ("document_creation", "create_docx"): {
+        "ok": [
+            "Report drafted.",
+            "Word doc's ready.",
+            "Done — written up, Valentine.",
+            "Drafted. {o}",
+            "Saved — {o}",
+        ],
+        "err": [
+            "Couldn't draft that. {e}",
+            "Document generation failed. {e}",
+            "Something went wrong — {e}",
+        ],
+    },
+    ("document_creation", "create_pptx"): {
+        "ok": [
+            "Slides are ready.",
+            "Presentation built.",
+            "Deck's done, Valentine.",
+        ],
+        "err": [
+            "Couldn't build the slides. {e}",
+            "Presentation failed. {e}",
+        ],
+    },
+    ("document_creation", "create_xlsx"): {
+        "ok": [
+            "Spreadsheet ready.",
+            "Excel file done.",
+            "Sheet's ready, Valentine.",
+        ],
+        "err": [
+            "Couldn't build the spreadsheet. {e}",
+            "Excel failed. {e}",
+        ],
+    },
+    ("document_creation", "create_pdf"): {
+        "ok": [
+            "PDF ready.",
+            "Document compiled.",
+            "Compiled it, Valentine.",
+        ],
+        "err": [
+            "Couldn't generate the PDF. {e}",
+            "PDF failed. {e}",
+        ],
+    },
 }
 
 _DEFAULT = {

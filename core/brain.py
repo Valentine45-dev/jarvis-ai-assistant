@@ -71,6 +71,10 @@ TAG_INTENT_MAP: dict[str, str] = {
     "remind":   "reminder_task",
     "weather":  "weather",
     "jarvis":   "jarvis_meta",
+    # document_creation: @doc and @docx land in Phase 2.
+    # @pptx, @xlsx, @pdf wait until Phase 3/4 when those actions exist.
+    "doc":      "document_creation",
+    "docx":     "document_creation",
 }
 
 

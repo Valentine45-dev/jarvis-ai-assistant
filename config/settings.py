@@ -41,6 +41,10 @@ class AppConfig:
     dim_mode: bool = False
     wake_word_enabled: bool = True
     weather_default_city: str = "Monrovia,LR"
+    # When True, stream Sonnet-generated document scripts to the terminal panel
+    # before sandbox execution. Useful during the document_creation rollout;
+    # noisy long-term — flip to False once the pipeline is trusted.
+    document_show_code: bool = True
 
     @classmethod
     def from_env(cls):
