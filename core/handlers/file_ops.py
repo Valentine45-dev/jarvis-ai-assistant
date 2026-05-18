@@ -139,6 +139,24 @@ def _locate_file(name: str) -> Path | None:
     return None
 
 
+def _raw_path_is_bare_filename(raw_path: str) -> bool:
+    s = str(raw_path or "").strip().strip('"')
+    if not s:
+        return False
+    try:
+        p = Path(s.replace("\\", "/"))
+    except (TypeError, ValueError):
+        return False
+    return len(p.parts) == 1
+
+
+def _resolved_missing_path(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return str(path)
+
+
 def _find_existing_item(path: Path) -> Path | None:
     target = path.name
     if not target:
@@ -268,11 +286,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             return _err(f"end_line ({end_line}) must be >= start_line ({start_line})")
 
         if not path.exists():
-            found = _locate_file(path.name)
+            found = _locate_file(path.name) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
-                result = _err(f"File not found: {path.name}")
+                result = _err(f"File not found: {_resolved_missing_path(path)}")
                 _emit_to_terminal(result["error"], success=False)
                 return result
 
@@ -333,11 +351,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
 
     if action == "delete_file":
         if not path.exists():
-            found = _find_existing_item(path)
+            found = _find_existing_item(path) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
-                return _err(f"Cannot find {path.name!r} — check the name and try again.")
+                return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
         try:
             full_path_str = str(path.resolve())
         except (OSError, ValueError):
@@ -374,11 +392,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
 
     if action == "rename_file":
         if not path.exists():
-            found = _find_existing_item(path)
+            found = _find_existing_item(path) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
-                return _err(f"Cannot find {path.name!r} — check the name and try again.")
+                return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
         new_name_raw = (params.get("new_name") or params.get("destination") or "").strip()
         if not new_name_raw:
             return _err("No new name provided for rename.")
@@ -409,11 +427,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
 
     if action == "move_file":
         if not path.exists():
-            found = _find_existing_item(path)
+            found = _find_existing_item(path) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
-                return _err(f"Cannot find {path.name!r} — check the name and try again.")
+                return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
         raw_dest_str = (params.get("destination") or "").strip()
         if raw_dest_str and "/" not in raw_dest_str and "\\" not in raw_dest_str:
             # Natural-language suffix strip: "desktop folder" → "desktop"
@@ -538,7 +556,18 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         modified_after  = params.get("modified_after")
         size_gt_raw     = params.get("size_gt")
         size_lt_raw     = params.get("size_lt")
-        base            = path if path.is_dir() else Path.home()
+        if not raw_path:
+            base = Path.home()
+        elif path.exists() and path.is_dir():
+            base = path
+        elif path.exists():
+            return _err(f"Not a directory: {path}")
+        else:
+            found_dir = _find_folder(raw_path)
+            if found_dir:
+                base = found_dir
+            else:
+                return _err(f"Directory not found: {_resolved_missing_path(path)}")
 
         # Parse filters up-front so bad input fails fast with a helpful message.
         after_ts: float | None = None
@@ -611,12 +640,12 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         use_timestamp = bool(params.get("timestamp", False))
 
         if not path.exists():
-            found = _locate_file(path.name)
+            found = _locate_file(path.name) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
                 return _err(
-                    f"File not found: {path.name} — use create_file to make a new one"
+                    f"File not found: {_resolved_missing_path(path)} — use create_file to make a new one"
                 )
         if path.is_dir():
             return _err(f"{path.name} is a directory — append_file only works on files")
@@ -661,11 +690,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
 
     if action == "file_info":
         if not path.exists():
-            found = _find_existing_item(path)
+            found = _find_existing_item(path) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
-                return _err(f"Not found: {path.name}")
+                return _err(f"Not found: {_resolved_missing_path(path)}")
 
         try:
             st = path.stat()
@@ -755,11 +784,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             return _err("Missing 'replace' text")
 
         if not path.exists():
-            found = _locate_file(path.name)
+            found = _locate_file(path.name) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
-                return _err(f"File not found: {path.name}")
+                return _err(f"File not found: {_resolved_missing_path(path)}")
 
         if _is_probably_binary(path):
             return _err(
@@ -881,10 +910,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             except OSError:
                 pass
 
-        preview_n = 20
-        preview_lines = [f"  {p}" for p in candidates[:preview_n]]
-        if len(candidates) > preview_n:
-            preview_lines.append(f"  + {len(candidates) - preview_n} more")
+        preview_lines = [f"  {p}" for p in candidates]
 
         prompt = (
             f"Delete these files?\n\n"

@@ -15,9 +15,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from core.handlers.shared import _ok, _err
+from core.handlers.shared import _ok, _err, request_confirmation
 
 # Background processes launched via run_background — pid → Popen
 _bg_procs: dict[int, "subprocess.Popen[str]"] = {}
@@ -157,19 +157,37 @@ _DANGER_PATTERNS: list[re.Pattern] = [
 ]
 
 
-def _danger_check(command: str) -> Optional[dict]:
-    """Return a needs_confirmation dict if the command matches a danger pattern, else None."""
+def _danger_check(command: str, on_confirm: Callable[[], dict] | None = None) -> Optional[dict]:
+    """Return a confirmation/blocking dict if the command matches a danger pattern."""
     for pat in _DANGER_PATTERNS:
         if pat.search(command):
-            return {
-                "success": False,
-                "output": "",
-                "error": f"Dangerous command detected: {pat.pattern!r}. Confirm to proceed.",
-                "needs_confirmation": True,
-                "confirm_type": "danger",
-                "subject": command,
-            }
+            msg = f"Dangerous command detected: {pat.pattern!r}. Confirm to proceed."
+            if on_confirm is None:
+                return _err(f"Dangerous command blocked: {pat.pattern!r}")
+            result = request_confirmation(msg, on_confirm)
+            result.update({"confirm_type": "danger", "subject": command})
+            return result
     return None
+
+
+def _manual_command_confirmation(prompt: str, command: str, cwd: str | None) -> dict:
+    """Ask before running a non-auto-safe command suggestion."""
+    def _run_confirmed() -> dict:
+        try:
+            args = shlex.split(command)
+        except Exception as exc:
+            return _err(f"Could not parse command: {exc}")
+        out, exit_code, dur = _stream_execute(args, cwd=cwd, timeout=60)
+        _store_block(CommandBlock(
+            command=command, output=out, exit_code=exit_code,
+            duration_ms=dur, cwd=os.getcwd(),
+            ai_generated=True, fix_applied=True,
+        ))
+        return _ok(out) if exit_code == 0 else _err(out)
+
+    result = request_confirmation(prompt, _run_confirmed)
+    result.update({"confirm_type": "fix", "subject": command})
+    return result
 
 
 # ── Streaming execution ───────────────────────────────────────────────────────
@@ -396,13 +414,8 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
             if exit_code == 0:
                 return _ok(f"{explain} — fix applied automatically.")
             return _err(f"Auto-fix also failed: {out}")
-        return {
-            "success": False, "output": "",
-            "error": f"{explain} Suggested fix: {fix_cmd}",
-            "needs_confirmation": True,
-            "confirm_type": "fix",
-            "subject": fix_cmd,
-        }
+        prompt = f"{explain} Suggested fix: {fix_cmd}"
+        return _manual_command_confirmation(prompt, fix_cmd, cwd)
     except Exception:
         return None
 
@@ -510,10 +523,14 @@ def _handle_code_execution(action: str, params: dict) -> dict:
     code = params.get("code", params.get("script_path", ""))
     cwd_raw = params.get("working_directory", None)
     cwd = _valid_cwd(cwd_raw)
+    danger_confirmed = bool(params.get("_danger_confirmed", False))
 
     # ── Danger check (runs before anything else, no exceptions) ───────────────
-    if code:
-        danger = _danger_check(str(code))
+    if code and not danger_confirmed:
+        def _run_after_danger_confirm() -> dict:
+            return _handle_code_execution(action, {**params, "_danger_confirmed": True})
+
+        danger = _danger_check(str(code), _run_after_danger_confirm)
         if danger:
             return danger
 
