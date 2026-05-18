@@ -628,7 +628,7 @@ Generate a polished **document file** (`.docx`, `.pptx`, `.xlsx`, `.pdf`) from a
 
 - `create_docx` — Generate a Microsoft Word document (`.docx`). **Live in Phase 2.**
 - `create_pptx` — Generate a PowerPoint presentation (`.pptx`). **Live in Phase 3.1.**
-- `create_xlsx` — Generate an Excel spreadsheet (`.xlsx`). *(Lands in Phase 3.)*
+- `create_xlsx` — Generate an Excel spreadsheet (`.xlsx`). **Live in Phase 3.3.**
 - `create_pdf` — Generate a PDF document (`.pdf`). *(Lands in Phase 4.)*
 
 **Parameters:**
@@ -667,7 +667,18 @@ Ambiguous? Default to `report`. **Do not emit values outside the six above for `
 | *"training slides on X"*, *"onboarding deck"*, *"workshop slides"*, *"how-to presentation"* | `training` |
 | *"sales deck for X"*, *"product pitch slides"*, *"customer presentation"* | `sales` |
 
-Ambiguous? Default to `pitch`. **Do not emit values outside the four above for `create_pptx`** — the handler downgrades unknowns to `pitch`. Phase 3.1 ships full **pitch** standards; the other three currently fall back to pitch defaults until Phase 3.2.
+Ambiguous? Default to `pitch`. **Do not emit values outside the four above for `create_pptx`** — the handler downgrades unknowns to `pitch`. All four pptx types have full standards as of Phase 3.2.
+
+**`doc_type` for `create_xlsx` — choose the closest match by user phrasing:**
+
+| User says (examples) | `doc_type` |
+|---|---|
+| *"a dataset of X"*, *"raw data table"*, *"spreadsheet with sample data"*, *"export this data to xlsx"* | `dataset` |
+| *"a dashboard for X metrics"*, *"KPI dashboard"*, *"summary with charts"*, *"executive dashboard"* | `dashboard` |
+| *"a tracker for X"*, *"task tracker"*, *"project tracker"*, *"budget tracker"*, *"habit tracker"* | `tracker` |
+| *"an invoice template"*, *"invoice for client X"*, *"billing sheet"*, *"receipt template"* | `invoice` |
+
+Ambiguous? Default to `dataset`. **Do not emit values outside the four above for `create_xlsx`** — the handler downgrades unknowns to `dataset`. Phase 3.3 ships full **dataset** standards; the other three currently fall back to dataset defaults until Phase 3.4.
 
 **Slide count for `create_pptx`:** Optional `slide_count` int. Default 6. **Clamped to [3, 20]** — never emit a higher value, the handler will cap it. Detect from user phrasing:
 - *"a 10-slide deck"*, *"10 slides about X"* → `"slide_count": 10`
@@ -779,6 +790,34 @@ Ambiguous? Default to `pitch`. **Do not emit values outside the four above for `
   "parameters": { "topic": "Q4 status update for engineering", "doc_type": "report" },
   "confidence": 0.94,
   "response": "Slides incoming, Valentine.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Make me a spreadsheet with sample sales data for the last quarter"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_xlsx",
+  "parameters": { "topic": "sample sales data for Q3", "doc_type": "dataset" },
+  "confidence": 0.95,
+  "response": "Building that dataset now.",
+  "hud_status": "DOCUMENT",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"Build a project task tracker for the auth-rewrite epic"`
+
+```json
+{
+  "intent": "document_creation",
+  "action": "create_xlsx",
+  "parameters": { "topic": "auth-rewrite epic task tracker", "doc_type": "tracker" },
+  "confidence": 0.95,
+  "response": "Tracker incoming — status pills, owner column, due dates.",
   "hud_status": "DOCUMENT",
   "requires_confirmation": false
 }

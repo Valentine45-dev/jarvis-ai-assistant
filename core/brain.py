@@ -72,10 +72,12 @@ TAG_INTENT_MAP: dict[str, str] = {
     "weather":  "weather",
     "jarvis":   "jarvis_meta",
     # document_creation tags. @doc/@docx → create_docx (Phase 2). @pptx →
-    # create_pptx (Phase 3.1). @xlsx/@pdf land when their actions arrive.
+    # create_pptx (Phase 3.1). @xlsx → create_xlsx (Phase 3.3). @pdf lands
+    # when create_pdf arrives in Phase 4.
     "doc":      "document_creation",
     "docx":     "document_creation",
     "pptx":     "document_creation",
+    "xlsx":     "document_creation",
 }
 
 

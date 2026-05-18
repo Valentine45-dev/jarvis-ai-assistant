@@ -78,11 +78,13 @@ _ACTION_TO_FORMAT_NAME: dict[str, str] = {
 _KNOWN_DOC_TYPES: dict[str, frozenset[str]] = {
     "create_docx": frozenset({"report", "academic", "memo", "letter", "resume", "legal"}),
     "create_pptx": frozenset({"pitch", "report", "training", "sales"}),
-    # create_xlsx / create_pdf taxonomies land in Phase 3.3 / 4.
+    "create_xlsx": frozenset({"dataset", "dashboard", "tracker", "invoice"}),
+    # create_pdf taxonomy lands in Phase 4.
 }
 _DEFAULT_DOC_TYPE: dict[str, str] = {
     "create_docx": "report",
     "create_pptx": "pitch",
+    "create_xlsx": "dataset",
 }
 # Phase 3.1: slide_count is a pptx-only param. Clamp to a sensible range so
 # Sonnet can't be asked for a 200-slide deck that blows the token budget.
@@ -101,6 +103,10 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset({
     # companion for chart data; traceback / typing are stdlib safety nets
     # Sonnet uses for error handling and type hints. All three are safe.
     "numpy", "traceback", "typing",
+    # Phase 3.3: xlsx generation uses random for synthetic sample data
+    # (see "programmatic data generation" rule in skills/xlsx/SKILL.md).
+    # Stdlib, no I/O, safe.
+    "random",
 })
 # Empty for now — reserved for genuine future warn-tier imports. Keeping the
 # tier infrastructure in place because confirm-on-warn is still a useful escape
@@ -269,7 +275,7 @@ def _build_system_blocks(skill_text: str, format_name: str) -> list[dict]:
         "The script MUST save its output to the exact path provided in the user message. "
         "Use only these libraries: python-docx, python-pptx, openpyxl, reportlab, pypdf, "
         "pathlib, datetime, os, json, math, re, io, copy, collections, itertools, PIL, "
-        "matplotlib, numpy, traceback, typing. "
+        "matplotlib, numpy, traceback, typing, random. "
         "No network calls. No eval/exec/compile/__import__. No subprocess — the handler "
         "owns format conversion; your script only writes the native format. "
         "Complete in under 60 seconds. "
@@ -549,10 +555,10 @@ def _handle_document_creation(action: str, params: dict) -> dict:
     if action not in _ACTION_TO_SKILL:
         return _err(f"Unknown document action: {action}")
 
-    # Phase 3.1: create_docx + create_pptx are live. create_xlsx / create_pdf
-    # gate on their own taxonomies arriving in Phase 3.3 / 4.
-    if action in ("create_xlsx", "create_pdf"):
-        return _err(f"{action} isn't available yet — lands in a later phase.")
+    # Phase 3.3: create_docx + create_pptx + create_xlsx are live.
+    # create_pdf gates on its own taxonomy arriving in Phase 4.
+    if action == "create_pdf":
+        return _err(f"{action} isn't available yet — lands in Phase 4.")
 
     topic = (params.get("topic") or "").strip()
     if not topic:
