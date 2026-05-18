@@ -342,7 +342,7 @@ Status pill palette (used in TRACKER and DASHBOARD):
 
 ## Section C — Spreadsheet type standards
 
-Phase 3.3 ships **DATASET** only. Other types are accepted by the handler but currently fall back to DATASET defaults until their blocks land (Phase 3.4).
+All four spreadsheet types have dedicated standards blocks: **DATASET**, **DASHBOARD**, **TRACKER**, **INVOICE**. The Universal Spreadsheet Rules at the end apply to every type.
 
 ### DATASET (structured data table)
 
@@ -369,12 +369,80 @@ A clean, queryable data table — the most common spreadsheet shape. Single shee
 5. Status/category columns may use the status pill palette via conditional formatting
 6. No summary row, no totals, no charts — that's DASHBOARD territory
 
-### Other doc_types (placeholder until Phase 3.4)
+### DASHBOARD (KPI summary with charts)
 
-If the handler injects `doc_type: "dashboard" | "tracker" | "invoice"` and you don't see a dedicated block above, apply DATASET standards with these adjustments:
-- `dashboard`: add a summary sheet at position 0 with 4–6 KPI cards (large bold number + label) and 1–2 embedded charts. Keep the raw data on a second sheet.
-- `tracker`: add a Status column with the status pill palette via conditional formatting. Add Owner, Due Date, Notes columns. Sort by status then due date.
-- `invoice`: switch to a printable single-sheet layout — sender block top-left, recipient block top-right, line items table mid-page, totals box bottom-right (Subtotal / Tax / Total). No autofilter, no freeze panes — this is a document, not a queryable table.
+A two-sheet workbook: **`Summary`** (KPI cards + charts) and **`Data`** (the raw data). The Summary sheet is what the audience sees first — clean, scannable, chart-driven. The Data sheet follows DATASET conventions and feeds the charts.
+
+| Aspect | Standard |
+|---|---|
+| Workbook structure | **Two sheets**: `Summary` (active sheet at position 0) and `Data`. Use `wb.create_sheet("Data", 1)` after creating the Summary sheet. |
+| Summary sheet name | `Summary` or `Dashboard` |
+| Summary sheet layout | Top band (rows 1–3): merged title cell, bold 18pt, header-fill colour. KPI cards from row 5. Charts below the cards. |
+| KPI cards | 4–6 cards arranged in a 2×3 or 3×2 grid. Each card: a 3×2 merged block (e.g. `B5:D7`) with the metric number (28pt bold, header-fill colour) on the top row and a 9pt label below. Light fill (`#F5F5F5`) on the card background. |
+| Charts | 1–2 charts below the KPI cards. Use **openpyxl native** (`BarChart`, `LineChart`, `PieChart`) — never matplotlib. Chart anchor: `ws.add_chart(chart, "B14")`. Chart size: `chart.width = 15`, `chart.height = 8`. |
+| Chart series colours | From Section B chart-series palette. Apply via `series.graphicalProperties.solidFill = "1F4E79"`. |
+| Data sheet | Full DATASET treatment — frozen header, autofilter, alternating rows, number formats per column. **The KPI formulas on Summary must reference this sheet** (`=SUM(Data!H:H)`, `=AVERAGE(Data!E2:E40)`, etc.) so the dashboard updates when data changes. |
+| Print area | `ws.print_options.horizontalCentered = True`. Page orientation landscape: `ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE`. |
+| Autofilter on Summary | **Off.** Summary is read-only. Autofilter only on the Data sheet. |
+| Freeze panes on Summary | Optional — freeze the title band (`ws.freeze_panes = "A4"`). |
+
+**Standard DASHBOARD structure:**
+1. Summary sheet — title band → KPI card grid (4-6 cards) → 1-2 charts
+2. Data sheet — full DATASET layout, drives the Summary via cell references
+3. All KPI numbers are **formulas**, never hardcoded (`=COUNTA(Data!B:B)-1`, `=SUMIF(Data!F:F, "Closed Won", Data!K:K)`)
+
+### TRACKER (task / project / budget / habit)
+
+Single sheet, scannable, action-oriented. Each row is one item to track. Status is the most important visual signal — coloured pills via conditional formatting. Dropdown validation on bounded enum columns. Realistic sample tasks for the topic.
+
+| Aspect | Standard |
+|---|---|
+| Sheet name | Descriptive — `Tasks`, `Project Tracker`, `Q3 Budget`, etc. |
+| Columns (default tracker shape) | `ID`, `Title` (or `Task` / `Item`), `Status`, `Priority`, `Owner`, `Due Date`, `Created`, `Notes`. Drop or add columns as the topic demands. |
+| Header row | Same as DATASET — bold white text on header-fill colour, row 1, height 22. |
+| Status column | **Dropdown validation** via `DataValidation(type="list", formula1='"Backlog,In Progress,Blocked,Done,Cancelled"')`. Conditional formatting applies the status pill palette (Section B). |
+| Priority column | Dropdown validation: `"Low,Medium,High,Critical"`. Optional conditional formatting (Critical → red bg, High → amber bg). |
+| Due Date column | Conditional formatting: if `<TODAY()` and Status not Done → red fill; if `<TODAY()+7` and Status not Done → amber fill. Use `FormulaRule` for these. |
+| Owner column | Plain text. If the user provides a team list, add a dropdown. |
+| Freeze panes | `ws.freeze_panes = "B2"` (freeze header row + ID column for horizontal scrolling). |
+| Autofilter | On (`ws.auto_filter.ref = ws.dimensions`) — users sort by status or owner constantly. |
+| Default sort | By Status (Active items first), then Priority (Critical first), then Due Date (soonest first) — apply via the data generation, not via XML sort definitions. |
+| Row count | 15–25 realistic rows. Names from a real list, dates spanning ~3 months around today. |
+
+**Standard TRACKER structure:**
+1. Single sheet
+2. Default columns: `ID | Title | Status | Priority | Owner | Due Date | Created | Notes`
+3. Dropdowns on Status + Priority; conditional formatting on Status + Due Date
+4. Frozen header + ID column; autofilter on
+5. 15–25 realistic sample rows
+
+### INVOICE (printable single-sheet template)
+
+A printable document, not a queryable table. Single sheet, portrait orientation, fits one page. Header blocks at top (sender + recipient), line items table in the middle, totals box bottom-right. Merged cells are allowed here — **this is the one xlsx doc_type where merged cells are permitted** (header blocks, totals box).
+
+| Aspect | Standard |
+|---|---|
+| Sheet name | `Invoice` |
+| Page setup | Portrait orientation (`ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT`), paper US Letter or A4, margins ~0.5". Print area set with `ws.print_area = "A1:F40"` (or appropriate). |
+| Top band | Merged `A1:F2` — company name (24pt bold, header-fill colour) or logo placeholder text. |
+| Invoice metadata block | Right-aligned merged block (e.g. `D4:F8`): `Invoice #` / `Date` / `Due Date` / `Payment Terms`. Label column bold, value column right-aligned. |
+| Sender ("From:") block | Top-left, rows 4–8, columns A–C. `From:` label bold, address lines plain Calibri 10pt. |
+| Recipient ("Bill To:") block | Mid-left, rows 10–14, columns A–C. `Bill To:` label bold, address lines plain. |
+| Line items table | Starts row 17. Headers: `Item` / `Description` / `Quantity` / `Unit Price` / `Tax` / `Total`. Bold white on header-fill. Body rows: 10–15 line items max. |
+| Totals box | Bottom-right merged block. `Subtotal`, `Tax`, `Total` labels. **Total uses a formula** (`=SUM(F18:F32)` or similar). Bold Total row, larger font (14pt). |
+| Number formats | Currency cells: `$#,##0.00`. Quantity: `#,##0`. Tax: `0.0%`. Dates: `yyyy-mm-dd`. |
+| Footer | Below the totals box: payment instructions (bank/wire info, payment-link URL), thank-you note. Italic 9pt grey. |
+| Autofilter | **Off.** Invoices are documents. |
+| Freeze panes | **Off.** Single-page document. |
+| Merged cells | **Allowed** — header blocks (sender/recipient/metadata), top band, totals box. This is the one xlsx doc_type where merged cells don't break expected behaviour. |
+| Borders | Light borders around the line items table only (`Side(style="thin", color="CCCCCC")`). The rest of the sheet is borderless. |
+
+**Standard INVOICE structure:**
+1. Single sheet, portrait, printable
+2. Top band (company name/logo) → sender block (left) + invoice metadata (right) → recipient block → line items table → totals box (right-aligned) → footer
+3. Total is a formula referencing the line items column
+4. Print area set so it lands cleanly on one page
+5. Realistic placeholder sender/recipient/items — the user will customise but should see a credible template
 
 ## Universal Spreadsheet Rules (apply to every type)
 
