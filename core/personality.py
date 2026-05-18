@@ -384,6 +384,57 @@ _P: dict[tuple, dict] = {
             "Couldn't rename that. {e}",
         ],
     },
+    ("file_operation", "append_file"): {
+        "ok": [
+            "Added to the file. {o}",
+            "Appended. {o}",
+            "Done — {o}",
+            "Tacked it on, Valentine. {o}",
+        ],
+        "err": [
+            "Couldn't append — {e}",
+            "Append failed. {e}",
+            "Wouldn't take the new content — {e}",
+        ],
+    },
+    ("file_operation", "file_info"): {
+        "ok": [
+            "Here's what I found.\n{o}",
+            "File details below.\n{o}",
+            "Got it:\n{o}",
+            "Here's the breakdown, Valentine:\n{o}",
+        ],
+        "err": [
+            "Couldn't inspect that — {e}",
+            "No info available. {e}",
+        ],
+    },
+    ("file_operation", "replace_in_file"): {
+        "ok": [
+            "Done — {o}",
+            "Swapped. {o}",
+            "Edits saved — {o}",
+            "Replaced, Valentine. {o}",
+        ],
+        "err": [
+            "Couldn't replace that — {e}",
+            "Replace failed. {e}",
+            "Nothing matched — {e}",
+        ],
+    },
+    ("file_operation", "batch_delete"): {
+        "ok": [
+            "Cleared. {o}",
+            "All gone — {o}",
+            "Done — {o}",
+            "Cleaned up, Valentine. {o}",
+        ],
+        "err": [
+            "Batch delete hit a snag — {e}",
+            "Some files wouldn't budge — {e}",
+            "Couldn't clear those — {e}",
+        ],
+    },
 
     # ── SCREEN READ ──────────────────────────────────────────────────
     ("read_screen", "*"): {

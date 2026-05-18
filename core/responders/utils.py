@@ -44,6 +44,7 @@ _OUTPUT_IS_RESPONSE: frozenset = frozenset({
     ("read_screen",        "*"),
     ("code_execution",     "*"),
     ("file_operation",     "read_file"),
+    ("file_operation",     "file_info"),
     ("file_operation",     "list_directory"),
     ("file_operation",     "search_files"),
     ("reminder_task",      "list_reminders"),
@@ -209,6 +210,15 @@ def data_follow(intent: str, action: str, output: str, params: dict) -> Optional
         if action == "delete_file":
             name = filename(params.get("path", ""))
             return f"Deleted — {name}." if name else "Deleted."
+        if action == "replace_in_file":
+            name = filename(params.get("path", ""))
+            return f"Updated {name}." if name else None
+        if action == "batch_delete":
+            pat = params.get("pattern", "")
+            return f"Cleared {pat!r}." if pat else None
+        if action == "append_file":
+            name = filename(params.get("path", ""))
+            return f"Appended to {name}." if name else None
 
     if intent == "browser_automation":
         if action == "fill_form":
@@ -269,6 +279,24 @@ def smart_error(intent: str, action: str, error: str, params: dict) -> str:
             return f"Couldn't move {label} to {dest!r}." if dest else f"Move failed. {short_e}"
         if action == "search_files":
             return f"Nothing found." + (f" {short_e}" if short_e else "")
+        if action == "replace_in_file":
+            find_t = params.get("find", "")
+            return (
+                f"Couldn't replace {find_t!r} in {label}." + (f" {short_e}" if short_e else "")
+                if find_t else
+                f"Replace failed in {label}." + (f" {short_e}" if short_e else "")
+            )
+        if action == "batch_delete":
+            pat = params.get("pattern", "")
+            return (
+                f"Couldn't delete {pat!r}." + (f" {short_e}" if short_e else "")
+                if pat else
+                f"Batch delete failed." + (f" {short_e}" if short_e else "")
+            )
+        if action == "append_file":
+            return f"Couldn't append to {label}." + (f" {short_e}" if short_e else "")
+        if action == "file_info":
+            return f"Couldn't read info for {label}." + (f" {short_e}" if short_e else "")
     if intent == "system_control":
         if action == "screenshot":
             return "Screenshot failed." + (f" {short_e}" if short_e else "")

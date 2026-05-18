@@ -351,24 +351,55 @@ File system operations — create, read, move, delete files.
 - `move_file` — Move a file to a different location
 - `copy_file` — Copy a file
 - `list_directory` — List contents of a directory
-- `search_files` — Search for files by name or pattern
+- `search_files` — Search for files by **name or glob pattern** (filename only). Use this when the user wants to locate files by name.
+- `append_file` — Append text to the **end of an existing file**. Use for *"add a note to my todo.txt"*, *"append this line to the log"*. Never overwrites; never creates a missing file (route to `create_file` for that).
+- `file_info` — Metadata of a single file or folder (size, modified date, type/extension, line count for text files, total size + item count for folders). Use for *"how big is main.py"*, *"when was this file modified"*, *"what's the size of my Documents folder"*.
+- `replace_in_file` — Find and replace text **inside an existing file**. Use for *"edit X to change Y to Z"*, *"replace foo with bar in file.py"*. Confirmed in-app with a preview before writing.
+- `batch_delete` — Delete multiple files matching a glob pattern in a directory (optionally recursive). Confirmed in-app with the full file list and total size.
 
 **Parameters:**
 
 ```json
-{ "path": "string — file path" }
+{ "path": "string — file or folder path" }
 { "destination": "string — destination path for move/copy" }
-{ "content": "string — content for file creation" }
+{ "content": "string — text payload for create_file (initial body) and append_file (the line/block to add)" }
+{ "timestamp": "bool — append_file only: if true, prefix the content with [YYYY-MM-DD HH:MM] (local time). Default false." }
 { "path": "string — current file/folder path", "new_name": "string — new filename only (no path separators)" }
-{ "pattern": "string — search pattern (glob)" }
+{ "start_line": "int — read_file: 1-indexed first line to include (default 1)" }
+{ "end_line":   "int — read_file: last line to include, -1 for EOF (default -1)" }
+{ "sort":       "string — list_directory: name|date|size|type (default name; date = newest first, size = largest first, type = folders first)" }
+{ "pattern":    "string — search_files: filename glob (default '*'); list_directory: filter visible entries by glob (e.g. '*.py')" }
+{ "modified_after": "string — search_files: ISO date YYYY-MM-DD; only return files modified on or after this date" }
+{ "size_gt":    "string — search_files: keep files strictly larger than this size, e.g. '1MB' / '500KB' / '2.5GB'" }
+{ "size_lt":    "string — search_files: keep files strictly smaller than this size, same units as size_gt" }
+{ "find":       "string — replace_in_file: text to search for (required)" }
+{ "replace":    "string — replace_in_file: replacement text (required, may be empty to delete the match)" }
+{ "count":      "int — replace_in_file: max replacements (default -1 = replace all)" }
+{ "recursive":  "bool — batch_delete: if true, scan subdirectories (default false)" }
 ```
+
+**Action-specific notes:**
+- `read_file`: returns the **full** file (no silent 2 KB cap). 5 MB safety cap; larger files require `start_line`/`end_line` to slice. Output past 50 K chars is truncated with an explicit footer that shows total chars and lines so the user can pick a range.
+- `list_directory`: shows up to 500 entries with a `X items (Y folders, Z files)` summary; truncation is footer-flagged. Use `pattern` to filter (e.g. *"only Python files"* → `"*.py"`).
+- `search_files`: filename glob search, up to 200 results, 30 s time budget, prunes `node_modules`/`.git`/`__pycache__`/`.venv`/`.mypy_cache`/`.pytest_cache`/`dist`/`build` during walk. Use `modified_after` / `size_gt` / `size_lt` to narrow.
+- `append_file`: requires `path` + `content`. Never creates a missing file (returns `_err` pointing to `create_file`); never overwrites — content is always appended. Optional `timestamp: true` prefixes with `[YYYY-MM-DD HH:MM]`. The executor ensures the appended chunk starts on its own line.
+- `file_info`: read-only metadata for a single `path` (file or folder). Binary files skip the line count automatically. For folders, walks the tree to compute total size and item count.
+- `replace_in_file`: edits an **existing** text file. Required: `path`, `find`, `replace`. Optional: `count` (default `-1` = all). The executor rejects binary files up-front and shows a confirm card with the first match's context window. **Never** route *"edit / change / replace X with Y in <file>"* requests to `create_file` — that overwrites the file. Always route to `replace_in_file`.
+- `batch_delete`: required `path` (directory) + `pattern` (glob, e.g. `"*.tmp"`). Optional `recursive` (default `false`). Files-only (folders are never deleted). Hard cap 1000 matches. The confirm card shows the full file list and total size.
+
+**Routing distinctions:**
+- *"find files named main.py"* / *"search for *.py files"* → `search_files` (filename).
+- *"edit X to replace Y with Z"* / *"change foo to bar in tasks.txt"* / *"in addition.py, replace Sum with Addition"* → **`replace_in_file`** (in-file text edit).
+- *"delete all .tmp files in Downloads"* / *"clear *.log files"* → **`batch_delete`**.
+- *"add a note to todo.txt"* / *"append this to my log"* / *"add a timestamped entry"* → **`append_file`** (set `timestamp: true` when the user asks for a dated entry).
+- *"how big is main.py"* / *"when was this file modified"* / *"size of my Documents folder"* / *"file info on X"* → **`file_info`** (read-only metadata).
 
 **Path resolution (important):** For **relative** paths, the first segment (e.g. `jarvis_UI_SCREENS` in `jarvis_UI_SCREENS/file.py`) is **resolved to an existing folder** by searching under **the user profile** (`Path.home()`): common locations first, then a bounded walk (prunes e.g. `node_modules`, `.git`). If several folders share the name, the **shallowest** wins, then paths under **Documents** are preferred. If **no** such folder exists, new paths are rooted under **`JARVIS_DEFAULT_CREATE_PARENT`** (env: `documents` | `desktop` | `downloads` | `home`; default **Documents**), **not** the JARVIS process CWD. Prefer giving **`Documents/…`** or a **full absolute path** when the user names a specific location.
 
 **Do not** invent `/.keep/`, `jarvis_note`, or other placeholder path segments. For a new folder, set **`path`** to that folder only (e.g. `Documents/TEsting`); the shell strips bogus `.keep` tails if they appear, but you must not emit them.
 
 **HUD Label:** `FILE OPS`
-**Confirmation:** `true` in JSON for `delete_file` only. **`create_file`** and **`create_directory`** are confirmed in-app; keep `requires_confirmation` **`false`** in JSON (avoid double prompt).
+**Confirmation:** `true` in JSON for `delete_file` only. **`create_file`**, **`create_directory`**, **`rename_file`**, **`move_file`**, **`replace_in_file`**, and **`batch_delete`** are confirmed in-app; keep `requires_confirmation` **`false`** in JSON for those (avoid double prompt).
 
 -----
 
@@ -783,6 +814,70 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "response": "Awaiting confirmation to delete.",
   "hud_status": "FILE OPS",
   "requires_confirmation": true
+}
+```
+
+-----
+
+**Input:** `"Add 'finished feature X' to my todo.txt with a timestamp"`
+
+```json
+{
+  "intent": "file_operation",
+  "action": "append_file",
+  "parameters": { "path": "todo.txt", "content": "finished feature X", "timestamp": true },
+  "confidence": 0.95,
+  "response": "Adding it to todo.txt.",
+  "hud_status": "FILE OPS",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"How big is main.py?"`
+
+```json
+{
+  "intent": "file_operation",
+  "action": "file_info",
+  "parameters": { "path": "main.py" },
+  "confidence": 0.96,
+  "response": "Pulling the details.",
+  "hud_status": "FILE OPS",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"In addition.py, replace 'Sum' with 'Addition'"`
+
+```json
+{
+  "intent": "file_operation",
+  "action": "replace_in_file",
+  "parameters": { "path": "addition.py", "find": "Sum", "replace": "Addition" },
+  "confidence": 0.95,
+  "response": "Editing addition.py — confirm to swap.",
+  "hud_status": "FILE OPS",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Delete all .tmp files in Downloads"`
+
+```json
+{
+  "intent": "file_operation",
+  "action": "batch_delete",
+  "parameters": { "path": "Downloads", "pattern": "*.tmp", "recursive": false },
+  "confidence": 0.95,
+  "response": "Lining up the .tmp files — confirm to clear.",
+  "hud_status": "FILE OPS",
+  "requires_confirmation": false
 }
 ```
 
