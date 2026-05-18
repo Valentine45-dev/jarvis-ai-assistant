@@ -277,7 +277,7 @@ Body text on light backgrounds is always pure black or near-black (`#1A1A2E`). U
 
 ## Section C — Presentation type standards
 
-Phase 3.1 ships **PITCH** only. Other types are accepted by the handler but currently fall back to PITCH defaults until their blocks land (Phase 3.2).
+All four deck types have dedicated standards blocks: **PITCH**, **REPORT**, **TRAINING**, **SALES**. The Universal Slide Rules at the end apply to every type.
 
 ### PITCH (investor / startup / new-idea deck)
 
@@ -313,12 +313,106 @@ The pitch deck is **the** canonical slide format. Bold, fast, emotionally engagi
 - `slide_count: 7–10` → Add team slide, business model slide, competition / "why us" slide, financials slide
 - `slide_count: 11–20` → Expand with detailed financials, roadmap, product-demo placeholders, use-case deep-dives
 
-### Other doc_types (placeholder until Phase 3.2)
+### REPORT (status update / quarterly review / executive summary)
 
-If the handler injects `doc_type: "report" | "training" | "sales"` and you don't see a dedicated block above, apply PITCH standards with these adjustments:
-- `report`: drop the emotional/marketing tone — neutral business language. More data slides, fewer hero slides.
-- `training`: structure as Intro → Steps (one per slide) → Recap → Q&A. Higher text density acceptable (35–50 words/slide). Add slide numbers and section labels.
-- `sales`: emphasise customer benefits over features. End with pricing/packages slide and contact info.
+Neutral business language, data-heavy, more density than a pitch. The audience is internal stakeholders or leadership — they want substance, not marketing tone. Tables and charts are central; emotional hooks are not.
+
+| Aspect | Standard |
+|---|---|
+| Slide size | 16:9 widescreen (`Inches(13.333)` × `Inches(7.5)`) |
+| Background | Light theme throughout (`#FFFFFF` or near-white). Title slide may use the primary colour as a thin top band rather than a full fill. |
+| Font family | Calibri or similar sans-serif. One family throughout. |
+| Title slide — title | 36–44pt bold, primary colour. Smaller than a pitch — this isn't a hero moment. |
+| Title slide — subtitle | 18pt regular, secondary colour. Include reporting period (e.g. "Q3 2025 · Engineering"). |
+| Content slide — title | 24–28pt bold, primary colour |
+| Content slide — body | 14–18pt regular, near-black `#1A1A2E`. **35–45 words/slide acceptable** — reports tolerate more density than pitches. |
+| Bullets | 14–16pt regular, up to 6 bullets/slide, each ≤15 words. Sub-bullets allowed one level deep. |
+| Data slides | Tables and charts are the headline. Title 24pt, chart/table fills 60–70% of slide. Callouts annotate the data. |
+| Accent bar | Same as PITCH — 0.12" primary-colour bar at top of every content slide |
+| Slide numbers | Every slide including title (top-right or bottom-right, 10pt) |
+| Header/footer | Footer left: report title + date. Footer right: slide number. |
+
+**Standard 6-slide report structure** (scale with `slide_count`):
+1. **Title** — Report name, reporting period, presenter/team
+2. **Executive Summary** — Top 3 takeaways as short bulleted statements with supporting numbers
+3. **Highlights / Wins** — What went well. KPI table or 3–4 metric cards.
+4. **Metrics deep-dive** — Charts: trend line, breakdown, comparison vs. last period
+5. **Risks / Lowlights** — What didn't go well. Tables of issues + owners + status.
+6. **Next steps / asks** — Action items table (action / owner / date) + any decisions needed
+
+**Scaling rules:**
+- `slide_count: 3` → Title + Summary + Next-steps (skip deep-dive)
+- `slide_count: 4–5` → Drop one of Highlights or Risks
+- `slide_count: 7–10` → Split metrics into per-area slides (revenue / engagement / ops)
+- `slide_count: 11–20` → One slide per workstream, plus appendix tables
+
+### TRAINING (educational deck / workshop / onboarding)
+
+The goal is teaching, not pitching. Structure mirrors a lesson: objectives → modules → recap → Q&A. Each step gets its own slide. Higher text density acceptable because learners read along.
+
+| Aspect | Standard |
+|---|---|
+| Slide size | 16:9 widescreen |
+| Background | Light theme throughout. Section divider slides use a primary-colour band on the left third. |
+| Font family | Calibri or similar sans-serif. **A secondary serif font (e.g. Cambria) is allowed for pull-quotes only.** |
+| Title slide — title | 40–48pt bold, primary colour |
+| Title slide — subtitle | 18–20pt, secondary colour. Include course/module name. |
+| Section divider — title | 32–36pt bold on coloured band. Numbered (e.g. "Module 2: Working with the API"). |
+| Content slide — title | 26–30pt bold, primary colour |
+| Content slide — body | 16–20pt regular, near-black. **35–50 words/slide acceptable.** Use prose paragraphs OR bullets, not both on one slide. |
+| Pull-quote callout | 22pt italic Cambria or Georgia, secondary colour, centred. Use sparingly for key concepts. |
+| Code / command samples | Consolas 12–14pt in a light grey rounded rectangle. Black text. |
+| Bullets | 16–18pt regular. Numbered when teaching steps, plain bullets for lists. |
+| Accent bar | 0.15" primary-colour bar at the top of every content slide |
+| Slide numbers | Every slide. Format: `<module>.<slide-in-module>` (e.g. `2.3`) for navigability. |
+| Footer | Course name + module label on left, slide number on right |
+
+**Standard 6-slide training structure** (scale with `slide_count`):
+1. **Title** — Course title, "by [instructor]", duration estimate
+2. **Learning objectives** — "By the end you'll be able to…" + 3–4 bulleted outcomes
+3. **Module 1 / Step 1** — Concept + diagram or example
+4. **Module 2 / Step 2** — Building on previous, with code/example
+5. **Recap** — "What we covered" + same outcome list, now marked complete
+6. **Q&A / next steps** — Resources, links to deeper material, contact
+
+**Scaling rules:**
+- `slide_count: 3` → Title + One-page-summary + Recap (skip step decomposition — for tightly-scoped topics only)
+- `slide_count: 4–5` → Drop recap or split objectives into multiple slides
+- `slide_count: 7–10` → Expand into 4–6 module slides + add an examples / exercises slide
+- `slide_count: 11–20` → Full curriculum: section dividers between modules, 2–3 slides per module, exercises slide, glossary slide
+
+### SALES (product/service pitch to a customer)
+
+Outward-facing, customer-centric. Use "you" and "your team" — not "we" — throughout the body. Lead with the customer's problem, not your product. End with a clear ask and contact info.
+
+| Aspect | Standard |
+|---|---|
+| Slide size | 16:9 widescreen |
+| Background | Light theme for content; **brand colours stronger than PITCH** — title and section divider slides should fill ~60% of the slide with primary colour |
+| Font family | Calibri or similar sans-serif. One family. |
+| Title slide — title | 48–56pt bold, primary colour OR white on primary fill. Tagline-style if appropriate ("How [Customer] Can Reduce Churn by 40%"). |
+| Title slide — subtitle | 18–22pt, secondary colour. Include presenter + company. |
+| Content slide — title | 30–34pt bold, primary colour. Should be **a benefit statement, not a feature name** — "Cut onboarding time by 70%" beats "Onboarding Module". |
+| Content slide — body | 18–22pt regular, near-black. **One key benefit per slide, max 30 words.** Match PITCH density. |
+| Bullets | 16–20pt regular, max 4 bullets/slide. Lead each with a strong outcome verb. |
+| Customer-proof slide | Logo grid (3×2 or 4×3 of customer logos) OR testimonial pull-quote (28pt italic, attributed in 14pt with photo placeholder) |
+| Pricing slide | 2–3 tier cards. The middle/recommended tier visually pops (primary fill, accent badge "RECOMMENDED"). |
+| Accent bar | Same as PITCH |
+| Slide numbers | Optional — many sales decks skip them for a cleaner look. If included, bottom-right 10pt. |
+
+**Standard 6-slide sales structure** (scale with `slide_count`):
+1. **Title / hook** — Customer-facing title, presenter info, customer logo if known
+2. **Their problem** — The pain point in the customer's own language. Numbers if available.
+3. **Your solution** — One sentence about your product, 2–3 differentiators
+4. **Proof** — Customer logos OR case study with metrics OR testimonial pull-quote
+5. **Pricing / packages** — 2–3 tier cards, recommended tier highlighted
+6. **Call to action** — Next step: trial, demo, signed proposal. Contact info prominent.
+
+**Scaling rules:**
+- `slide_count: 3` → Title + Problem-and-Solution combined + CTA
+- `slide_count: 4–5` → Drop pricing OR proof; keep title + problem + solution + CTA
+- `slide_count: 7–10` → Add feature deep-dives between solution and proof (each slide = one capability + benefit)
+- `slide_count: 11–20` → Full enterprise sales deck: dedicated case studies (one per slide), security/compliance slide, integration/architecture slide, success-team slide, contract terms slide
 
 ## Universal Slide Rules (apply to every deck)
 
