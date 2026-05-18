@@ -127,4 +127,4 @@ def resolve_confirmation(user_response: str) -> dict:
             except Exception as exc:
                 return _err(str(exc))
         return _err("Action missing.")
-    return {"success": False, "output": "Understood, standing down, sir.", "error": ""}
+    return {"success": False, "output": "Understood — standing down.", "error": ""}

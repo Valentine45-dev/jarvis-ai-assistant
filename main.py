@@ -559,7 +559,7 @@ class JarvisWindow(QMainWindow):
         direct_workflow_id, display_cmd = self._command_controller.parse_command(cmd)
         if self._state == "awaiting_confirmation":
             self._dashboard.toast.show_toast(
-                "Please respond to the pending confirmation first, sir.", "warning")
+                "Please respond to the pending confirmation first.", "warning")
             return
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
@@ -624,12 +624,12 @@ class JarvisWindow(QMainWindow):
                     "parameters": {"task_name": direct_workflow_id},
                     "requires_confirmation": False,
                     "confidence": 1.0,
-                    "response": "Running workflow now, sir.",
+                    "response": "Running workflow now.",
                     "hud_status": "AUTOMATION",
                 },
                 "automation_task",
                 1.0,
-                "Running workflow now, sir.",
+                "Running workflow now.",
                 "AUTOMATION",
             )
             return
@@ -665,7 +665,7 @@ class JarvisWindow(QMainWindow):
                 return
             self._pending_result = result
             self._confirm_mode = "claude"
-            prompt = resp or "Awaiting confirmation, sir."
+            prompt = resp or "Awaiting confirmation."
             j_time = datetime.now().strftime("%H:%M")
             if self._history:
                 self._history[-1].update({
@@ -1325,7 +1325,7 @@ class JarvisWindow(QMainWindow):
             self._dashboard.left.state_pill.setStyleSheet(
                 "color:rgba(210,220,245,0.88);border:1px solid rgba(0,102,255,0.28);"
                 f"background:rgba(0,102,255,0.05);{pill_base}")
-            self._dashboard.left.status_lbl.setText("Awaiting command, sir.")
+            self._dashboard.left.status_lbl.setText("Awaiting command.")
         elif s == "awaiting_confirmation":
             self._dashboard.left.state_pill.setStyleSheet(
                 "color:rgba(255,190,50,0.90);border:1px solid rgba(255,190,50,0.40);"

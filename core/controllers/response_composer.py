@@ -47,7 +47,7 @@ def compose_execution_response(
             and exec_out.get("quit_application")
         ):
             display_resp = (resp or "").strip() or (
-                "Understood, sir. Closing JARVIS — we shall speak again."
+                "Closing JARVIS — catch you later, Valentine."
             )
         elif action_name in factual_actions and exec_out.get("output"):
             status = "ok" if exec_out["success"] else "err"

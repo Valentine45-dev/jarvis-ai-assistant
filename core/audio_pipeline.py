@@ -353,7 +353,7 @@ class SttEngine:
         except sr.UnknownValueError:
             raise _SttErrorExc(
                 SttError.NO_SPEECH,
-                "Could not make that out — try speaking a little clearer, sir.",
+                "Could not make that out — try speaking a little clearer.",
             )
         except sr.RequestError as exc:
             msg = str(exc).lower()

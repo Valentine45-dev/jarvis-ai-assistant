@@ -28,10 +28,10 @@ class InlineConfirmCard(QWidget):
     cancelled = pyqtSignal()
 
     _WAIT_LINES = [
-        "Waiting for your call, sir.",
-        "Your move, sir.",
+        "Waiting for your call.",
+        "Your move.",
         "Just say the word.",
-        "Standing by for your decision, sir.",
+        "Standing by.",
     ]
 
     def __init__(self, parent=None):

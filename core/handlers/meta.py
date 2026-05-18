@@ -150,7 +150,7 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         name = _VOICE_FIRST_NAMES.get(key, key)
         # Spoken in the NEW voice — the caller must read output (not Claude's
         # pre-execution response) so the user hears audible proof of the switch.
-        return _ok(f"Now {name}'s speaking, sir.")
+        return _ok(f"Now {name}'s speaking.")
 
     if action in ("quit_application", "close_jarvis"):
         return {"success": True, "output": "", "error": "", "quit_application": True}

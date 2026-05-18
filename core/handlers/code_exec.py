@@ -501,7 +501,7 @@ def _run_plan(steps: list[str], cwd: str | None) -> dict:
             explanation = _explain_output(block) or out
             return _err(f"Step {i}/{n} may have failed: {explanation}")
     plural = "s" if n != 1 else ""
-    return _ok(f"Done, sir — ran {n} step{plural}, all succeeded.")
+    return _ok(f"Done — ran {n} step{plural}, all succeeded.")
 
 
 # ── Main handler ──────────────────────────────────────────────────────────────

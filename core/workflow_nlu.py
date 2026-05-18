@@ -100,7 +100,7 @@ def parse_create_workflow_command(raw_input: str) -> dict[str, Any] | None:
             "trigger": trigger,
         },
         "confidence": 0.94,
-        "response": f"Building {display_name} now, sir.",
+        "response": f"Building {display_name} now.",
         "hud_status": "AUTOMATION",
         "requires_confirmation": False,
     }

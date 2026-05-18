@@ -94,7 +94,7 @@ def _file_op_create_directory(params: dict) -> dict:
     except (OSError, ValueError, RuntimeError):
         target_display = str(path)
     prompt = (
-        f"Create this folder, sir? (Parent folders are created if needed.)\n\n"
+        f"Create this folder? (Parent folders are created if needed.)\n\n"
         f"Folder: {target_display}"
     )
 

@@ -14,9 +14,9 @@ QUICK_ACTIONS = [
 ]
 
 RESPONSES = [
-    "Right away, sir. Executing now.",
-    "Done. Anything else you need?",
-    "Command acknowledged, sir.",
-    "Task completed successfully.",
-    "Very well. I've taken care of it, sir.",
+    "Right away — executing now.",
+    "Done. Anything else?",
+    "Command acknowledged.",
+    "Task completed.",
+    "Taken care of.",
 ]

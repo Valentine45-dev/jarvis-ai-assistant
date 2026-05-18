@@ -4,8 +4,8 @@ from __future__ import annotations
 
 
 class ConfirmationController:
-    DEFAULT_PROMPT = "Awaiting your confirmation, sir."
-    CANCEL_MESSAGE = "Understood, standing down, sir."
+    DEFAULT_PROMPT = "Awaiting your confirmation."
+    CANCEL_MESSAGE = "Understood — standing down."
 
     def needs_followup_confirmation(self, resolved: dict) -> bool:
         return bool((resolved or {}).get("needs_confirmation"))
@@ -17,7 +17,7 @@ class ConfirmationController:
         out = str((resolved or {}).get("output") or "").strip()
         if out:
             return out
-        return "Done, sir." if bool((resolved or {}).get("success")) else self.CANCEL_MESSAGE
+        return "Done." if bool((resolved or {}).get("success")) else self.CANCEL_MESSAGE
 
     def final_hud_status(self, resolved: dict) -> str:
         return "CONFIRMED" if bool((resolved or {}).get("success")) else "CANCELLED"

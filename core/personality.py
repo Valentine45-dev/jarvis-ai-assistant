@@ -10,41 +10,41 @@ _P: dict[tuple, dict] = {
     # ── BROWSER AUTOMATION ──────────────────────────────────────────
     ("browser_automation", "navigate"): {
         "ok": [
-            "Page is up, sir.",
+            "Page is up.",
             "Done — loaded it for you.",
             "There you go — it's open.",
             "Navigated. Take a look.",
         ],
         "err": [
-            "Couldn't reach that, sir. {e}",
+            "Couldn't reach that. {e}",
             "Navigation failed — {e}",
-            "That URL didn't load, sir. Check your connection.",
+            "That URL didn't load. Check your connection.",
         ],
     },
     ("browser_automation", "fill_form"): {
         "ok": [
-            "Typed it in. Take a look, sir.",
+            "Typed it in. Take a look.",
             "Done — check the field.",
-            "All filled in, sir.",
+            "All filled in.",
             "On it — punched that in for you.",
         ],
         "err": [
-            "Couldn't find that field, sir. {e}",
+            "Couldn't find that field. {e}",
             "Field not found — {e}",
-            "Nothing matched that input, sir.",
+            "Nothing matched that input.",
         ],
     },
     ("browser_automation", "click_element"): {
         "ok": [
-            "Clicked it, sir.",
+            "Clicked it.",
             "Done.",
             "Got it — clicked.",
-            "Consider it clicked, sir.",
+            "Consider it clicked.",
         ],
         "err": [
-            "Couldn't find that element, sir. {e}",
+            "Couldn't find that element. {e}",
             "Click failed — nothing matched. {e}",
-            "That element isn't visible, sir.",
+            "That element isn't visible.",
         ],
     },
     ("browser_automation", "read_page"): {
@@ -52,66 +52,66 @@ _P: dict[tuple, dict] = {
             "{o}",
         ],
         "err": [
-            "Nothing readable on that page, sir.",
+            "Nothing readable on that page.",
             "Page read failed — {e}",
-            "Couldn't extract anything useful, sir.",
+            "Couldn't extract anything useful.",
         ],
     },
     ("browser_automation", "extract_text"): {
         "ok": ["{o}"],
-        "err": ["Couldn't extract that, sir — {e}"],
+        "err": ["Couldn't extract that — {e}"],
     },
     ("browser_automation", "new_tab"): {
         "ok": [
-            "Fresh tab open, sir.",
+            "Fresh tab open.",
             "New tab ready.",
             "There you go — clean slate.",
         ],
         "err": [
             "Couldn't open a new tab — {e}",
-            "Tab open failed, sir. {e}",
+            "Tab open failed. {e}",
         ],
     },
     ("browser_automation", "close_tab"): {
         "ok": [
-            "Tab closed, sir.",
+            "Tab closed.",
             "Done — gone.",
             "Closed it.",
         ],
         "err": [
             "Tab close failed — {e}",
-            "Couldn't close that tab, sir.",
+            "Couldn't close that tab.",
         ],
     },
     ("browser_automation", "screenshot"): {
         "ok": [
-            "Browser screenshot saved, sir. {o}",
+            "Browser screenshot saved. {o}",
             "Captured it. {o}",
             "Snapped and saved. {o}",
         ],
         "err": [
             "Screenshot failed — {e}",
-            "Couldn't capture that, sir. {e}",
+            "Couldn't capture that. {e}",
         ],
     },
 
     # ── SYSTEM CONTROL ───────────────────────────────────────────────
     ("system_control", "screenshot"): {
         "ok": [
-            "Snapped it, sir. Saved to {o}",
+            "Snapped it. Saved to {o}",
             "Got it — dropped it in {o}",
             "Screenshot's done. Check {o}",
             "Screen captured. You'll find it in {o}",
         ],
         "err": [
-            "Screenshot failed, sir — {e}",
+            "Screenshot failed — {e}",
             "Couldn't snap that — {e}",
-            "Folder not found, sir. {e}",
+            "Folder not found. {e}",
         ],
     },
     ("system_control", "volume_up"): {
         "ok": [
-            "Volume's up, sir. {o}",
+            "Volume's up. {o}",
             "Louder — sitting at {o} now.",
             "Cranked it up. {o}",
             "Turned it up for you. {o}",
@@ -120,7 +120,7 @@ _P: dict[tuple, dict] = {
     },
     ("system_control", "volume_down"): {
         "ok": [
-            "Brought it down, sir. {o}",
+            "Brought it down. {o}",
             "Quieter now — {o}",
             "Volume's at {o}",
             "Turned it down. {o}",
@@ -129,7 +129,7 @@ _P: dict[tuple, dict] = {
     },
     ("system_control", "volume_mute"): {
         "ok": [
-            "Muted, sir.",
+            "Muted.",
             "All quiet now.",
             "Done — silenced.",
             "Muted it for you.",
@@ -138,7 +138,7 @@ _P: dict[tuple, dict] = {
     },
     ("system_control", "volume_unmute"): {
         "ok": [
-            "Unmuted, sir.",
+            "Unmuted.",
             "Sound's back.",
             "All good — audio restored.",
         ],
@@ -146,7 +146,7 @@ _P: dict[tuple, dict] = {
     },
     ("system_control", "lock_screen"): {
         "ok": [
-            "Screen locked, sir.",
+            "Screen locked.",
             "Locked down.",
             "All secured.",
         ],
@@ -154,21 +154,21 @@ _P: dict[tuple, dict] = {
     },
     ("system_control", "sleep"): {
         "ok": [
-            "Going to sleep, sir. Goodnight.",
+            "Going to sleep. Goodnight.",
             "Putting the system to sleep.",
         ],
         "err": ["Sleep failed — {e}"],
     },
     ("system_control", "shutdown"): {
         "ok": [
-            "Shutting down, sir. It's been a pleasure.",
+            "Shutting down. It's been a pleasure.",
             "Powering off now.",
         ],
         "err": ["Shutdown failed — {e}"],
     },
     ("system_control", "restart"): {
         "ok": [
-            "Restarting now, sir. I'll be right back.",
+            "Restarting now. I'll be right back.",
             "Rebooting — give me a moment.",
         ],
         "err": ["Restart failed — {e}"],
@@ -177,7 +177,7 @@ _P: dict[tuple, dict] = {
     # ── MOUSE CONTROL ────────────────────────────────────────────────
     ("control_mouse", "move_mouse"): {
         "ok": [
-            "Mouse moved, sir.",
+            "Mouse moved.",
             "Done — cursor's there.",
             "Moved it.",
         ],
@@ -185,7 +185,7 @@ _P: dict[tuple, dict] = {
     },
     ("control_mouse", "click"): {
         "ok": [
-            "Clicked, sir.",
+            "Clicked.",
             "Done.",
             "Got it — clicked.",
         ],
@@ -193,7 +193,7 @@ _P: dict[tuple, dict] = {
     },
     ("control_mouse", "right_click"): {
         "ok": [
-            "Right-clicked, sir.",
+            "Right-clicked.",
             "Context menu should be up.",
             "Done — right-clicked.",
         ],
@@ -201,14 +201,14 @@ _P: dict[tuple, dict] = {
     },
     ("control_mouse", "double_click"): {
         "ok": [
-            "Double-clicked, sir.",
+            "Double-clicked.",
             "Done.",
         ],
         "err": ["Double-click failed — {e}"],
     },
     ("control_mouse", "scroll"): {
         "ok": [
-            "Scrolled {o}, sir.",
+            "Scrolled {o}.",
             "Done — scrolled {o}.",
             "Scrolling {o}.",
         ],
@@ -216,20 +216,20 @@ _P: dict[tuple, dict] = {
     },
     ("control_mouse", "drag"): {
         "ok": [
-            "Dragged it, sir.",
+            "Dragged it.",
             "Done — moved across.",
         ],
         "err": ["Drag failed — {e}"],
     },
     ("control_mouse", "*"): {
-        "ok": ["Done, sir.", "Done."],
+        "ok": ["Done.", "Done."],
         "err": ["Mouse control failed — {e}"],
     },
 
     # ── KEYBOARD / TYPE ──────────────────────────────────────────────
     ("type_text", "type_text"): {
         "ok": [
-            "Typed it in, sir.",
+            "Typed it in.",
             "Done — check it.",
             "All typed out.",
             "On it — punched that in.",
@@ -238,7 +238,7 @@ _P: dict[tuple, dict] = {
     },
     ("type_text", "press_key"): {
         "ok": [
-            "Key pressed, sir.",
+            "Key pressed.",
             "Done.",
             "Hit it.",
         ],
@@ -252,115 +252,115 @@ _P: dict[tuple, dict] = {
     # ── APP CONTROL ──────────────────────────────────────────────────
     ("open_app", "*"): {
         "ok": [
-            "It's up, sir.",
+            "It's up.",
             "Pulled it up for you.",
             "There you go — it's open.",
             "Launching now, give it a second.",
         ],
         "err": [
-            "Can't find that app, sir. Is it installed?",
+            "Can't find that app. Is it installed?",
             "Application not found — {e}",
-            "Nothing matched that name, sir.",
+            "Nothing matched that name.",
         ],
     },
     ("close_app", "*"): {
         "ok": [
-            "Closed it, sir.",
+            "Closed it.",
             "All shut down.",
             "Done — terminated.",
         ],
         "err": [
             "Couldn't close that — {e}",
-            "Process not found, sir.",
+            "Process not found.",
         ],
     },
 
     # ── WEB SEARCH ──────────────────────────────────────────────────
     ("search_web", "*"): {
         "ok": [
-            "Results are up, sir.",
+            "Results are up.",
             "Here you go — search is in.",
             "Pulled it up.",
             "Done — take a look.",
         ],
         "err": [
             "Search failed — {e}",
-            "Couldn't run that search, sir.",
+            "Couldn't run that search.",
         ],
     },
 
     # ── FILE OPERATIONS ──────────────────────────────────────────────
     ("file_operation", "create_file"): {
         "ok": [
-            "File's created, sir. {o}",
+            "File's created. {o}",
             "Done — it's in place. {o}",
             "Created it for you. {o}",
         ],
         "err": [
             "Couldn't create that file — {e}",
-            "Creation failed, sir. {e}",
+            "Creation failed. {e}",
         ],
     },
     ("file_operation", "create_directory"): {
         "ok": [
-            "Folder is ready, sir. {o}",
+            "Folder is ready. {o}",
             "Directory created. {o}",
             "Done — {o}",
         ],
         "err": [
             "Couldn't create that folder — {e}",
-            "That folder failed, sir. {e}",
+            "That folder failed. {e}",
         ],
     },
     ("file_operation", "read_file"): {
         "ok": [
-            "Here's what's in it, sir: {o}",
+            "Here's what's in it: {o}",
             "Got it — {o}",
             "Read it. {o}",
         ],
         "err": [
-            "Can't read that file, sir — {e}",
+            "Can't read that file — {e}",
             "File not found or unreadable. {e}",
         ],
     },
     ("file_operation", "delete_file"): {
         "ok": [
-            "Done — deleted, sir.",
+            "Done — deleted.",
             "Gone.",
             "Removed it.",
         ],
         "err": [
             "Delete failed — {e}",
-            "Couldn't remove that, sir. {e}",
+            "Couldn't remove that. {e}",
         ],
     },
     ("file_operation", "list_directory"): {
         "ok": [
-            "Here's what's in there, sir: {o}",
+            "Here's what's in there: {o}",
             "Found these: {o}",
             "{o}",
         ],
         "err": [
             "Can't read that directory — {e}",
-            "Folder not accessible, sir. {e}",
+            "Folder not accessible. {e}",
         ],
     },
     ("file_operation", "search_files"): {
         "ok": [
-            "Found it, sir — {o}",
+            "Found it — {o}",
             "Here's what I found: {o}",
             "Located it. {o}",
-            "Yes sir — {o}",
+            "Yes —{o}",
         ],
         "err": [
-            "Nothing called that in there, sir. Want me to check elsewhere?",
+            "Nothing called that in there. Want me to check elsewhere?",
             "Can't find that file — {e}",
-            "No match found, sir.",
+            "No match found.",
         ],
     },
     ("file_operation", "move_file"): {
         "ok": [
-            "Moved it, sir.",
+            "Moved it.",
             "File's in its new spot.",
             "Done — relocated.",
         ],
@@ -368,66 +368,66 @@ _P: dict[tuple, dict] = {
     },
     ("file_operation", "copy_file"): {
         "ok": [
-            "Copied, sir.",
+            "Copied.",
             "Done — copy's there.",
         ],
         "err": ["Copy failed — {e}"],
     },
     ("file_operation", "rename_file"): {
         "ok": [
-            "Renamed, sir. {o}",
+            "Renamed. {o}",
             "Done — {o}",
             "All set. {o}",
         ],
         "err": [
             "Rename failed — {e}",
-            "Couldn't rename that, sir. {e}",
+            "Couldn't rename that. {e}",
         ],
     },
 
     # ── SCREEN READ ──────────────────────────────────────────────────
     ("read_screen", "*"): {
         "ok": [
-            "Here's what's on screen, sir: {o}",
+            "Here's what's on screen: {o}",
             "Scanned it. {o}",
             "Got it — {o}",
         ],
         "err": [
             "Screen read failed — {e}",
-            "Couldn't read that, sir. {e}",
+            "Couldn't read that. {e}",
         ],
     },
 
     # ── JARVIS META ──────────────────────────────────────────────────
     ("jarvis_meta", "list_voices"): {
         "ok": [
-            "Here are the available voices, sir:\n{o}",
-            "Here's what I have, sir:\n{o}",
+            "Here are the available voices:\n{o}",
+            "Here's what I have:\n{o}",
         ],
         "err": ["Couldn't fetch the voice list — {e}"],
     },
     ("jarvis_meta", "change_voice"): {
         "ok": [
-            "Done, sir. Switched to {o}.",
+            "Done. Switched to {o}.",
             "Voice changed to {o}.",
             "{o} — consider it done.",
         ],
         "err": [
             "Couldn't switch voice — {e}",
-            "Voice change failed, sir. {e}",
+            "Voice change failed. {e}",
         ],
     },
     ("jarvis_meta", "tell_time"): {
         "ok": [
-            "It's {o}, sir.",
+            "It's {o}.",
             "The time is {o}.",
-            "{o} — right on schedule, sir.",
+            "{o} — right on schedule.",
         ],
         "err": ["Couldn't fetch the time — {e}"],
     },
     ("jarvis_meta", "tell_date"): {
         "ok": [
-            "Today is {o}, sir.",
+            "Today is {o}.",
             "{o}.",
             "It's {o}.",
         ],
@@ -435,10 +435,10 @@ _P: dict[tuple, dict] = {
     },
     ("jarvis_meta", "status_report"): {
         "ok": [
-            "All systems nominal, sir. {o}",
+            "All systems nominal. {o}",
             "Running clean — {o}",
             "Systems look good. {o}",
-            "Here's the report, sir: {o}",
+            "Here's the report: {o}",
         ],
         "err": ["Status check failed — {e}"],
     },
@@ -446,18 +446,18 @@ _P: dict[tuple, dict] = {
     # ── REMINDERS ───────────────────────────────────────────────────
     ("reminder_task", "set_reminder"): {
         "ok": [
-            "I'll remind you, sir. {o}",
+            "I'll remind you. {o}",
             "Reminder set. {o}",
             "Got it — I'll ping you. {o}",
             "Noted. {o}",
             "On it — {o}",
-            "When the time's up, I'll run that for you, sir. {o}",
+            "When the time's up, I'll run that for you. {o}",
         ],
         "err": ["Reminder failed — {e}"],
     },
     ("reminder_task", "cancel_reminder"): {
         "ok": [
-            "Reminder cancelled, sir.",
+            "Reminder cancelled.",
             "Done — standing down.",
             "Cancelled it.",
         ],
@@ -465,22 +465,22 @@ _P: dict[tuple, dict] = {
     },
     ("reminder_task", "list_reminders"): {
         "ok": [
-            "Here's what I have, sir: {o}",
+            "Here's what I have: {o}",
             "Active reminders: {o}",
             "{o}",
         ],
-        "err": ["Nothing queued up, sir."],
+        "err": ["Nothing queued up."],
     },
 
     # ── CODE EXECUTION ───────────────────────────────────────────────
     ("code_execution", "*"): {
         "ok": [
-            "Done, sir. Output: {o}",
+            "Done. Output: {o}",
             "Ran it. Here's the result: {o}",
             "Executed. {o}",
         ],
         "err": [
-            "Execution failed, sir — {e}",
+            "Execution failed — {e}",
             "Script error — {e}",
         ],
     },
@@ -488,25 +488,25 @@ _P: dict[tuple, dict] = {
     # ── AUTOMATION WORKFLOWS ─────────────────────────────────────────
     ("automation_task", "run_workflow"): {
         "ok": [
-            "Workflow complete, sir.",
+            "Workflow complete.",
             "All steps done.",
             "Finished the routine.",
         ],
         "err": [
-            "Workflow hit a snag, sir — {e}",
+            "Workflow hit a snag — {e}",
             "Routine failed at — {e}",
         ],
     },
     ("automation_task", "list_workflows"): {
         "ok": [
-            "Here's what I have loaded, sir: {o}",
+            "Here's what I have loaded: {o}",
             "Available routines: {o}",
         ],
         "err": ["Can't list workflows — {e}"],
     },
     ("automation_task", "create_workflow"): {
         "ok": [
-            "Workflow created, sir. {o}",
+            "Workflow created. {o}",
             "Done — {o}",
             "Saved it. {o}",
         ],
@@ -514,7 +514,7 @@ _P: dict[tuple, dict] = {
     },
     ("automation_task", "remove_workflow"): {
         "ok": [
-            "Workflow removed, sir.",
+            "Workflow removed.",
             "Done — deleted.",
             "Gone.",
         ],
@@ -522,7 +522,7 @@ _P: dict[tuple, dict] = {
     },
     ("automation_task", "rename_workflow"): {
         "ok": [
-            "Renamed, sir.",
+            "Renamed.",
             "Done.",
             "Updated.",
         ],
@@ -532,21 +532,21 @@ _P: dict[tuple, dict] = {
     # ── CONFIRMATION FLOWS ───────────────────────────────────────────
     ("confirmation", "folder_not_found"): {
         "ask": [
-            "Can't find a folder called '{o}', sir. Want me to create it?",
+            "Can't find a folder called '{o}'. Want me to create it?",
             "No folder named '{o}' anywhere I can see. Shall I make one?",
-            "'{o}' doesn't exist, sir. Create it?",
+            "'{o}' doesn't exist. Create it?",
         ],
     },
     ("confirmation", "create_file"): {
         "ask": [
-            "Are you sure you want to create this file in this folder, sir?\n\n{o}",
+            "Are you sure you want to create this file in this folder?\n\n{o}",
             "Are you sure you wanna create this file in this folder?\n\n{o}",
-            "Shall I create the file at the path below, sir?\n\n{o}",
+            "Shall I create the file at the path below?\n\n{o}",
         ],
     },
     ("confirmation", "confirmed"): {
         "ok": [
-            "Done, sir.",
+            "Done.",
             "Understood — on it.",
             "Consider it done.",
         ],
@@ -560,30 +560,30 @@ _P: dict[tuple, dict] = {
     },
     ("confirmation", "dangerous_action"): {
         "ask": [
-            "Just to confirm, sir — you want me to {o}? That can't be undone.",
-            "Are you sure about that, sir? {o} is irreversible.",
-            "That'll {o} permanently, sir. Confirm?",
+            "Just to confirm — you want me to {o}? That can't be undone.",
+            "Are you sure about that? {o} is irreversible.",
+            "That'll {o} permanently. Confirm?",
         ],
     },
     ("confirmation", "delete_file"): {
         "ask": [
-            "Are you sure you want to delete this, sir?\n\n{o}",
-            "This cannot be undone, sir:\n\n{o}\n\nShall I proceed?",
-            "Confirm permanent deletion, sir:\n\n{o}",
+            "Are you sure you want to delete this?\n\n{o}",
+            "This cannot be undone:\n\n{o}\n\nShall I proceed?",
+            "Confirm permanent deletion:\n\n{o}",
         ],
     },
     ("confirmation", "rename_file"): {
         "ask": [
-            "Shall I rename it, sir?\n\n{o}",
+            "Shall I rename it?\n\n{o}",
             "Confirm the rename below:\n\n{o}",
-            "Ready to rename — confirm, sir?\n\n{o}",
+            "Ready to rename — confirm?\n\n{o}",
         ],
     },
 }
 
 _DEFAULT = {
-    "ok":  ["Done, sir.", "All set.", "Done."],
-    "err": ["That didn't work, sir. {e}", "Something went wrong — {e}"],
+    "ok":  ["Done.", "All set.", "Done."],
+    "err": ["That didn't work. {e}", "Something went wrong — {e}"],
 }
 
 # When a *scheduled* reminder fires and runs an action, the transcript second line
@@ -591,120 +591,120 @@ _DEFAULT = {
 # not a wall of raw executor output. Keys match reminder allowlist in executor.py.
 _SCHEDULED_FOLLOWUP: dict[tuple, list[str]] = {
     ("open_app", "*"): [
-        "There you go — it's open, sir.",
-        "Launched — all yours, sir.",
-        "Up now — you should see it, sir.",
-        "Pulled it up. There you are, sir.",
+        "There you go — it's open.",
+        "Launched — all yours.",
+        "Up now — you should see it.",
+        "Pulled it up. There you are.",
     ],
     ("search_web", "*"): [
-        "There you go — results are up, sir.",
-        "Search is live — have a look, sir.",
-        "On screen — as requested, sir.",
+        "There you go — results are up.",
+        "Search is live — have a look.",
+        "On screen — as requested.",
     ],
     ("system_control", "screenshot"): [
-        "There you go — screen captured, sir.",
-        "Snapped and saved, sir.",
-        "Capture's on disk, sir.",
+        "There you go — screen captured.",
+        "Snapped and saved.",
+        "Capture's on disk.",
     ],
     ("system_control", "volume_up"): [
-        "There you go — volume up, sir.",
-        "Dialed it louder, sir.",
+        "There you go — volume up.",
+        "Dialed it louder.",
     ],
     ("system_control", "volume_down"): [
-        "There you go — volume down, sir.",
-        "Brought it down a notch, sir.",
+        "There you go — volume down.",
+        "Brought it down a notch.",
     ],
     ("system_control", "volume_mute"): [
-        "There you go — audio muted, sir.",
-        "Muted, sir.",
+        "There you go — audio muted.",
+        "Muted.",
     ],
     ("system_control", "lock_screen"): [
-        "There you go — workstation locked, sir.",
-        "Locked, sir.",
+        "There you go — workstation locked.",
+        "Locked.",
     ],
     ("system_control", "brightness_up"): [
-        "Brightness nudged up, sir.",
-        "A touch brighter, sir.",
+        "Brightness nudged up.",
+        "A touch brighter.",
     ],
     ("system_control", "brightness_down"): [
-        "Brightness nudged down, sir.",
-        "A touch dimmer, sir.",
+        "Brightness nudged down.",
+        "A touch dimmer.",
     ],
     ("browser_automation", "navigate"): [
-        "There you go — page is up, sir.",
-        "Loaded — it's open, sir.",
+        "There you go — page is up.",
+        "Loaded — it's open.",
     ],
     ("browser_automation", "new_tab"): [
-        "There you go — new tab, sir.",
-        "Fresh tab ready, sir.",
+        "There you go — new tab.",
+        "Fresh tab ready.",
     ],
     ("browser_automation", "read_page"): [
-        "There you are — I read the page, sir.",
-        "Pulled the visible text for you, sir.",
+        "There you are — I read the page.",
+        "Pulled the visible text for you.",
     ],
     ("browser_automation", "fill_form"): [
-        "There you go — form filled, sir.",
-        "Fields are in, sir.",
+        "There you go — form filled.",
+        "Fields are in.",
     ],
     ("browser_automation", "click_element"): [
-        "There you go — clicked, sir.",
-        "That click's in, sir.",
+        "There you go — clicked.",
+        "That click's in.",
     ],
     ("browser_automation", "screenshot"): [
-        "There you go — browser capture done, sir.",
-        "Page snap saved, sir.",
+        "There you go — browser capture done.",
+        "Page snap saved.",
     ],
     ("browser_automation", "extract_text"): [
-        "There you are — text pulled, sir.",
-        "Extracted, sir. {o}",
+        "There you are — text pulled.",
+        "Extracted. {o}",
     ],
     ("read_screen", "*"): [
-        "There you go — text from the screen, sir.",
-        "OCR's done, sir.",
+        "There you go — text from the screen.",
+        "OCR's done.",
     ],
     ("jarvis_meta", "tell_time"): [
-        "There you are, sir — {o}.",
+        "There you are — {o}.",
     ],
     ("jarvis_meta", "tell_date"): [
-        "There you are, sir — {o}.",
+        "There you are — {o}.",
     ],
     ("jarvis_meta", "status_report"): [
-        "Here's the readout, sir — {o}.",
+        "Here's the readout — {o}.",
         "Status in — {o}",
     ],
     ("jarvis_meta", "list_voices"): [
-        "Voices on file, sir. {o}",
+        "Voices on file. {o}",
     ],
     # Whole workflow done — used only if last-step ack cannot be chosen
     ("automation_task", "run_workflow"): [
-        "There you go — all steps are done, sir.",
-        "That's the full run, sir.",
-        "All requested steps are through, sir.",
+        "There you go — all steps are done.",
+        "That's the full run.",
+        "All requested steps are through.",
     ],
     ("file_operation", "*"): [
-        "There you go — file op complete, sir.",
-        "All set on disk, sir.",
+        "There you go — file op complete.",
+        "All set on disk.",
     ],
     ("type_text", "*"): [
-        "There you go — input's in, sir.",
-        "Sent to the field, sir.",
+        "There you go — input's in.",
+        "Sent to the field.",
     ],
     ("code_execution", "git_command"): [
-        "There you go — git's done, sir.",
-        "Command's through, sir.",
+        "There you go — git's done.",
+        "Command's through.",
     ],
     ("code_execution", "run_shell"): [
-        "There you go — shell command finished, sir.",
-        "That's the terminal output, sir.",
+        "There you go — shell command finished.",
+        "That's the terminal output.",
     ],
 }
 
 _SCHEDULED_FALLBACK_OK = [
-    "There you go — all set, sir.",
-    "There you go — done, sir.",
-    "That's taken care of, sir.",
-    "Consider it done, sir.",
-    "All finished on schedule, sir.",
+    "There you go — all set.",
+    "There you go — done.",
+    "That's taken care of.",
+    "Consider it done.",
+    "All finished on schedule.",
 ]
 
 
@@ -879,7 +879,7 @@ def action_speech_pair(
         and action == "run_workflow"
     ):
         cr = (claude_response or "").strip()
-        primary = cr or "All steps complete, sir."
+        primary = cr or "All steps complete."
         out = (output or "").strip()
         if not out:
             follow = ack_scheduled_action(intent, action, True, output, error)
