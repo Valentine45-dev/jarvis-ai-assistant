@@ -597,12 +597,31 @@ def _handle_document_creation(action: str, params: dict) -> dict:
 
     # ── 1. Resolve absolute target path ───────────────────────────────────────
     if raw_path:
-        target_path = _resolve_file_operation_path(str(raw_path))
+        raw_path_str = str(raw_path)
+        raw_p        = Path(raw_path_str)
+
+        # Document paths come from natural-language brain output. When the
+        # user says "save it in docs/xlsx", they mean the PROJECT's docs/xlsx
+        # subfolder — but _resolve_file_operation_path fuzzy-matches "docs"
+        # against home (~/Documents), rewriting the first segment. For
+        # multi-segment relative paths whose first segment exists as a real
+        # folder in cwd, prefer cwd-anchored resolution. Otherwise fall back
+        # to the existing file_operation resolver (which is correct for bare
+        # filenames and explicit absolute paths).
+        if not raw_p.is_absolute() and len(raw_p.parts) > 1:
+            first_segment = raw_p.parts[0]
+            if (Path.cwd() / first_segment).is_dir():
+                target_path = Path.cwd() / raw_p
+            else:
+                target_path = _resolve_file_operation_path(raw_path_str)
+        else:
+            target_path = _resolve_file_operation_path(raw_path_str)
+
         # If the user pointed at a folder ("save in docs/pptx"), synthesize a
         # filename inside it. Two folder signals: (a) the path resolves to an
         # existing directory, or (b) the raw path ends with a separator.
         # Without this, "docs/pptx" got `.pptx` appended → docs/pptx.pptx.
-        raw_norm = str(raw_path).rstrip()
+        raw_norm = raw_path_str.rstrip()
         looks_like_folder = (
             target_path.is_dir()
             or raw_norm.endswith("/")
