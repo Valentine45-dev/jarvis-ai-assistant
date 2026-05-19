@@ -352,7 +352,9 @@ def _handle_system_control(action: str, params: dict) -> dict:
             "windows": {
                 "shutdown": [_win_shutdown, "/s", "/t", "5"],
                 "restart":  [_win_shutdown, "/r", "/t", "5"],
-                "sleep":    ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+                # SetSuspendState(Hibernate, ForceCritical, DisableWakeEvent):
+                # ForceCritical=1 may close apps without warning — use 0,0,0.
+                "sleep":    ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,0,0"],
             },
             "darwin": {
                 "shutdown": ["sudo", "shutdown", "-h", "now"],

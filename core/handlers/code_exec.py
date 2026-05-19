@@ -421,7 +421,13 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
 
 
 def _post_execute(block: CommandBlock, cwd: str | None) -> dict | None:
-    """Run fix (on failure) then explain. Returns override result dict or None."""
+    """Run fix (on failure) then explain. Returns override result dict or None.
+
+    When the explanation replaces the user-facing `output`, the original raw
+    subprocess text is preserved on the result dict under `raw_output` so the
+    terminal panel can still show what actually printed (the spoken response
+    uses the explanation, the panel uses raw_output).
+    """
     if block.exit_code != 0 and not block.fix_applied:
         fix = _attempt_fix(block, cwd)
         if fix:
@@ -430,7 +436,9 @@ def _post_execute(block: CommandBlock, cwd: str | None) -> dict | None:
     explanation = _explain_output(block)
     if explanation:
         block.explanation = explanation
-        return _ok(explanation) if block.exit_code == 0 else _err(explanation)
+        result = _ok(explanation) if block.exit_code == 0 else _err(explanation)
+        result["raw_output"] = block.output
+        return result
     return None
 
 
@@ -534,10 +542,15 @@ def _handle_code_execution(action: str, params: dict) -> dict:
         if danger:
             return danger
 
+    # ── Single empty-code guard for actions that require `code` ───────────────
+    if not code and action in (
+        "run_powershell", "run_cmd", "run_background",
+        "run_python", "run_shell", "git_command", "npm_command", "run_script",
+    ):
+        return _err("No code or command provided")
+
     # ── PowerShell ────────────────────────────────────────────────────────────
     if action == "run_powershell":
-        if not code:
-            return _err("No PowerShell command provided")
         t0 = time.monotonic()
         try:
             result = subprocess.run(
@@ -559,8 +572,6 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
     # ── Command Prompt ────────────────────────────────────────────────────────
     if action == "run_cmd":
-        if not code:
-            return _err("No CMD command provided")
         t0 = time.monotonic()
         try:
             result = subprocess.run(
@@ -622,8 +633,6 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
     # ── Background execution ──────────────────────────────────────────────────
     if action == "run_background":
-        if not code:
-            return _err("No command provided")
         try:
             args = shlex.split(code) if isinstance(code, str) else code
             proc = subprocess.Popen(
@@ -674,9 +683,6 @@ def _handle_code_execution(action: str, params: dict) -> dict:
         return _err("Provide pid or process_name to kill a process")
 
     # ── Standard actions ──────────────────────────────────────────────────────
-    if not code:
-        return _err("No code or command provided")
-
     if action == "run_python":
         out, exit_code, duration_ms = _stream_execute(
             [sys.executable, "-c", code], cwd=cwd, timeout=30,

@@ -27,11 +27,7 @@ except ImportError:
 
 # ── Result helpers ────────────────────────────────────────────────────────────
 
-def _ok(output: str = "") -> dict:
-    return {"success": True, "output": output, "error": ""}
-
-def _err(msg: str) -> dict:
-    return {"success": False, "output": "", "error": msg}
+from core.handlers.shared import _ok, _err
 
 
 # ── Lazy import guards ────────────────────────────────────────────────────────

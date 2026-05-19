@@ -23,7 +23,7 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
     if not browser.is_ready:
         browser.start()
         if not browser.is_ready:
-            return _err(browser._start_err or "Browser failed to start.")
+            return _err(browser.start_error or "Browser failed to start.")
 
     url = params.get("url", "")
 
@@ -96,6 +96,12 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
             title_contains=((params.get("title_contains") or params.get("title", "") or "")).strip(),
             url_contains=((params.get("url_contains") or params.get("url_match", "") or "")).strip(),
             match=((params.get("match") or params.get("tab") or params.get("target", "") or "")).strip(),
+        )
+
+    if action == "scroll":
+        return browser.scroll(
+            direction=(params.get("direction") or "down"),
+            amount=params.get("amount", 3),
         )
 
     return _err(f"Browser action not implemented: {action}")

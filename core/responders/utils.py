@@ -61,14 +61,25 @@ def in_rule_set(intent: str, action: str, s: frozenset) -> bool:
     return (intent, action) in s or (intent, "*") in s
 
 
+def path_basename(s: str, cap: int = 80) -> str:
+    """Canonical last-segment extractor for any path-like string.
+
+    Returns the trailing component after splitting on '/' or '\\', truncated to
+    `cap`. Used by `filename`, `_brief_scheduled_output`, and `_trim` so the
+    rules live in one place."""
+    if not s:
+        return ""
+    parts = s.replace("\\", "/").split("/")
+    name = next((p for p in reversed(parts) if p), s)
+    return name[:cap]
+
+
 def filename(path: str) -> str:
     if not path:
         return ""
     if path.startswith("http"):
         return path[:60]
-    parts = path.replace("\\", "/").split("/")
-    name = next((p for p in reversed(parts) if p), path)
-    return name[:80]
+    return path_basename(path, cap=80)
 
 
 def domain(url: str) -> str:

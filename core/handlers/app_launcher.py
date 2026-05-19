@@ -16,6 +16,14 @@ from urllib.parse import quote_plus
 
 from core.handlers.shared import _OS, _ok, _err
 
+# Bounds for Program Files / AppData exe scanning — keep cold lookups snappy.
+_APP_SCAN_TIME_BUDGET_S = 5.0
+_APP_SCAN_CANDIDATE_CAP = 50
+_APP_SCAN_PRUNE_DIRS: frozenset[str] = frozenset({
+    "node_modules", "__pycache__", ".git", ".venv", "common files",
+    "windows kits", "microsoft",  # AppData/Local/Microsoft and shared SDKs
+})
+
 
 # ── Windows alias table ───────────────────────────────────────────────────────
 
@@ -326,8 +334,6 @@ def _find_app_windows(name: str) -> str | None:
 
     alias = _WIN_ALIASES.get(n_lower)
     if alias:
-        if shutil.which(alias):
-            return alias
         return alias
 
     start_rows = _get_all_startapp_rows()
@@ -420,17 +426,35 @@ def _find_app_windows(name: str) -> str | None:
     ]
     best_exe: str | None = None
     best_r_exe = 0.0
+    candidates_seen = 0
+    deadline = time.monotonic() + _APP_SCAN_TIME_BUDGET_S
+    timed_out = False
     for base in prog_dirs:
+        if timed_out:
+            break
         if not base.exists():
             continue
         try:
-            for exe in base.rglob("*.exe"):
-                stem = exe.stem.lower()
-                r = _name_similarity(n_compact, stem.replace(" ", ""))
-                if (r >= 0.90) or (r >= 0.84 and _exe_stem_matches_query(n_user, stem)):
-                    if r > best_r_exe:
-                        best_r_exe = r
-                        best_exe = str(exe)
+            for dirpath, dirs, files in os.walk(str(base)):
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    break
+                dirs[:] = [d for d in dirs if d.lower() not in _APP_SCAN_PRUNE_DIRS]
+                for fname in files:
+                    if not fname.lower().endswith(".exe"):
+                        continue
+                    stem = fname[:-4].lower()
+                    r = _name_similarity(n_compact, stem.replace(" ", ""))
+                    if (r >= 0.90) or (r >= 0.84 and _exe_stem_matches_query(n_user, stem)):
+                        if r > best_r_exe:
+                            best_r_exe = r
+                            best_exe = str(Path(dirpath) / fname)
+                        candidates_seen += 1
+                        if candidates_seen >= _APP_SCAN_CANDIDATE_CAP:
+                            timed_out = True
+                            break
+                if timed_out:
+                    break
         except (PermissionError, OSError):
             pass
     if best_exe and best_r_exe >= 0.8:

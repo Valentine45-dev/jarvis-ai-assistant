@@ -28,6 +28,7 @@ import wave
 from typing import Callable
 
 from config.settings import config
+from core.log import debug as _dbg
 
 
 # ── ElevenLabs voice profile map ─────────────────────────────────────────────
@@ -268,7 +269,7 @@ class AudioCapture:
 
         device = config.mic_device if config.mic_device >= 0 else None
         try:
-            print(f"[capture] opening mic stream (threshold={silence_threshold:.0f}, device={device})")
+            _dbg("capture", f"opening mic stream (threshold={silence_threshold:.0f}, device={device})")
             with sd.RawInputStream(
                 samplerate=self.RATE,
                 channels=self.CHANNELS,
@@ -276,7 +277,7 @@ class AudioCapture:
                 blocksize=self.CHUNK,
                 device=device,
             ) as stream:
-                print("[capture] stream open — listening for speech")
+                _dbg("capture", "stream open — listening for speech")
                 for frame_idx in range(max_frames):
                     data, _ = stream.read(self.CHUNK)
                     raw = bytes(data)
@@ -300,6 +301,9 @@ class AudioCapture:
             # closed during shutdown or a device change — not a hard failure.
             # Fall through to the phrase_started check so callers get None
             # (no speech) instead of an exception that crashes the voice thread.
+            # Any frames already collected in this iteration are intentionally
+            # dropped: the stream went away mid-utterance, so the partial audio
+            # would be incomplete anyway.
             if "stream is stopped" not in str(exc).lower():
                 raise RuntimeError(f"Mic capture failed: {exc}") from exc
 
@@ -346,8 +350,7 @@ class SttEngine:
 
         try:
             text = recognizer.recognize_google(audio)
-            if config.debug_mode:
-                print(f"[stt] Heard: {text!r}")
+            _dbg("stt", f"Heard: {text!r}")
             return text
 
         except sr.UnknownValueError:
@@ -433,7 +436,7 @@ class TtsEngine:
                         return
                     except Exception as exc:
                         self._last_provider_error = _classify_elevenlabs_error(exc)
-                        print(f"[tts] ElevenLabs FAILED, falling back to pyttsx3: {exc}")
+                        _dbg("tts", f"ElevenLabs FAILED, falling back to pyttsx3: {exc}")
                         if ready_called.is_set():
                             self._notify(on_done)
                             return
@@ -457,8 +460,7 @@ class TtsEngine:
         try:
             cb()
         except Exception as exc:
-            if config.debug_mode:
-                print(f"[tts] callback error: {exc}")
+            _dbg("tts", f"callback error: {exc}")
 
     def _say_local(
         self,
@@ -519,12 +521,12 @@ class TtsEngine:
                         engine.setProperty("voice", v.id)
                         selected_voice_name = v.name
                         break
-            print(f"[tts] pyttsx3 → profile={config.tts_voice!r}  sapi={selected_voice_name!r}")
+            _dbg("tts", f"pyttsx3 → profile={config.tts_voice!r}  sapi={selected_voice_name!r}")
             self._notify(on_ready)
             engine.say(text)
             engine.runAndWait()
         except Exception as exc:
-            print(f"[tts] pyttsx3 fallback failed: {exc}")
+            _dbg("tts", f"pyttsx3 fallback failed: {exc}")
             self._notify(on_ready)
-            print(f"[JARVIS] {text}")
+            _dbg("JARVIS", text)
         self._notify(on_done)

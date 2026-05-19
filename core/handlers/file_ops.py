@@ -123,17 +123,28 @@ def _strip_llm_path_placeholders(p: Path) -> Path:
 
 
 def _locate_file(name: str) -> Path | None:
+    """Find a file by exact name under common user roots. Bounded by
+    _SEARCH_TIME_BUDGET_S and the prune list so a deep $HOME walk can't freeze
+    the UI."""
     roots = [
         Path.home() / "Desktop",
         Path.home() / "Documents",
         Path.home() / "Downloads",
         Path.home(),
     ]
+    deadline = time.monotonic() + _SEARCH_TIME_BUDGET_S
     for root in roots:
+        if not root.exists():
+            continue
         try:
-            for p in root.rglob(name):
-                if p.is_file():
-                    return p
+            for dirpath, dirs, files in os.walk(str(root)):
+                if time.monotonic() > deadline:
+                    return None
+                dirs[:] = [d for d in dirs if d.lower() not in _SEARCH_PRUNE_DIRS]
+                if name in files:
+                    candidate = Path(dirpath) / name
+                    if candidate.is_file():
+                        return candidate
         except (PermissionError, OSError):
             pass
     return None
@@ -158,19 +169,34 @@ def _resolved_missing_path(path: Path) -> str:
 
 
 def _find_existing_item(path: Path) -> Path | None:
+    """Locate a file OR directory by name. Bounded by _SEARCH_TIME_BUDGET_S and
+    the prune list so a wildcard walk can't freeze the UI."""
     target = path.name
     if not target:
+        return None
+
+    deadline = time.monotonic() + _SEARCH_TIME_BUDGET_S
+
+    def _walk_for(root: Path) -> Path | None:
+        try:
+            for dirpath, dirs, files in os.walk(str(root)):
+                if time.monotonic() > deadline:
+                    return None
+                dirs[:] = [d for d in dirs if d.lower() not in _SEARCH_PRUNE_DIRS]
+                if target in files:
+                    return Path(dirpath) / target
+                if target in dirs:
+                    return Path(dirpath) / target
+        except (PermissionError, OSError):
+            return None
         return None
 
     ancestor = path.parent
     while ancestor != ancestor.parent:
         if ancestor.exists() and ancestor.is_dir():
-            try:
-                for found in ancestor.rglob(target):
-                    if found.exists():
-                        return found
-            except (PermissionError, OSError):
-                pass
+            hit = _walk_for(ancestor)
+            if hit is not None:
+                return hit
             break
         ancestor = ancestor.parent
 
@@ -182,12 +208,9 @@ def _find_existing_item(path: Path) -> Path | None:
     ):
         if not root.exists():
             continue
-        try:
-            for found in root.rglob(target):
-                if found.exists():
-                    return found
-        except (PermissionError, OSError):
-            pass
+        hit = _walk_for(root)
+        if hit is not None:
+            return hit
     return None
 
 
@@ -223,7 +246,6 @@ def _file_op_create_directory(params: dict) -> dict:
 def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -> dict:
     raw_path = params.get("path", "")
     path     = _resolve_file_operation_path(raw_path) if raw_path else Path.home() / "jarvis_file.txt"
-    dest     = _resolve_file_operation_path(params["destination"]) if params.get("destination") else None
 
     if action == "create_directory":
         return _file_op_create_directory(params)
@@ -432,10 +454,14 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                 path = found
             else:
                 return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
+
+        # Resolve destination once, here, so the flow is readable:
+        # single-segment ("desktop") goes through the shortcut/fuzzy matcher;
+        # anything else goes through the standard file-operation resolver.
         raw_dest_str = (params.get("destination") or "").strip()
-        if raw_dest_str and "/" not in raw_dest_str and "\\" not in raw_dest_str:
-            # Natural-language suffix strip: "desktop folder" → "desktop"
-            # so _find_folder() can match the shortcut map (and fuzzy matcher).
+        if not raw_dest_str:
+            return _err("No destination provided")
+        if "/" not in raw_dest_str and "\\" not in raw_dest_str:
             cleaned_dest = raw_dest_str
             lc = cleaned_dest.lower()
             for suffix in (" folder", " directory", " dir"):
@@ -444,12 +470,9 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                     break
             lookup = cleaned_dest or raw_dest_str
             found_folder = _find_folder(lookup)
-            if found_folder:
-                dest = found_folder
-            else:
-                dest = path.parent / lookup
-        if dest is None:
-            return _err("No destination provided")
+            dest = found_folder if found_folder else (path.parent / lookup)
+        else:
+            dest = _resolve_file_operation_path(raw_dest_str)
 
         # shutil.move drops the source into `dest` when `dest` is an existing dir.
         final_path = (dest / path.name) if (dest.exists() and dest.is_dir()) else dest
@@ -482,8 +505,10 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         return request_confirmation(move_desc, _do_move)
 
     if action == "copy_file":
-        if dest is None:
+        raw_dest_str = (params.get("destination") or "").strip()
+        if not raw_dest_str:
             return _err("No destination provided")
+        dest = _resolve_file_operation_path(raw_dest_str)
         try:
             shutil.copy2(str(path), str(dest))
             return _ok(f"Copied {path.name}")

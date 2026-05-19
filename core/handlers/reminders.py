@@ -10,7 +10,6 @@ from core.handlers.shared import _ok, _err
 from core.handlers.automation_handler import (
     _DANGEROUS_STEPS,
     _CONFIRMATION_REQUIRED_ACTIONS,
-    _BLOCKED_INTENTS,
 )
 
 _active_reminders: dict[str, threading.Timer] = {}
@@ -135,7 +134,12 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
         }
         mins = delay // 60
         secs = delay % 60
-        time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+        if mins and secs:
+            time_str = f"{mins}m {secs}s"
+        elif mins:
+            time_str = f"{mins}m"
+        else:
+            time_str = f"{secs}s"
         if run_norm:
             summ = _format_run_summary(run_norm)
             return _ok(f"In {time_str}: {summ}")

@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.log import debug as _dbg
+
 _DB_PATH = Path(__file__).parent.parent / "data" / "session_history.db"
 
 _CREATE_SQL = """
@@ -77,7 +79,7 @@ class HistoryStore:
             self._conn.execute(_CREATE_SQL)
             self._conn.commit()
         except Exception as exc:
-            print(f"[history_store] Failed to open DB: {exc}")
+            _dbg("history_store", f"Failed to open DB: {exc}")
             self._conn = None
 
     def save_entry(self, entry: dict[str, Any]) -> None:
@@ -104,7 +106,7 @@ class HistoryStore:
                 self._conn.execute(_INSERT_SQL, row)
                 self._conn.commit()
             except Exception as exc:
-                print(f"[history_store] save_entry error: {exc}")
+                _dbg("history_store", f"save_entry error: {exc}")
 
     def load_last_n(self, n: int = 100) -> list[dict[str, Any]]:
         """Return the last n entries in chronological order (oldest first)."""
@@ -118,7 +120,7 @@ class HistoryStore:
                 # Reverse: DB gives newest-first (ORDER BY id DESC); we want oldest-first
                 return [dict(zip(cols, row)) for row in reversed(rows)]
             except Exception as exc:
-                print(f"[history_store] load_last_n error: {exc}")
+                _dbg("history_store", f"load_last_n error: {exc}")
                 return []
 
     def clear(self) -> None:
@@ -130,7 +132,7 @@ class HistoryStore:
                 self._conn.execute(_CLEAR_SQL)
                 self._conn.commit()
             except Exception as exc:
-                print(f"[history_store] clear error: {exc}")
+                _dbg("history_store", f"clear error: {exc}")
 
     def close(self) -> None:
         if self._conn:

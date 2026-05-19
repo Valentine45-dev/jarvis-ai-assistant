@@ -1,9 +1,29 @@
-"""Shared utilities: result helpers, confirmation system, page cache."""
+"""Shared utilities: result helpers, confirmation system, page cache.
+
+Confirmation matrix — who shows the confirm card for what:
+
+  | Intent / Action                                  | Where confirm fires       |
+  |--------------------------------------------------|---------------------------|
+  | system_control: shutdown / restart / sleep       | executor (_CONFIRMATION_  |
+  | close_app: force_quit                            |  REQUIRED_ACTIONS gate)   |
+  | code_execution: kill_process                     | executor                  |
+  | automation_task: remove_workflow                 | executor                  |
+  | file_operation: delete_file                      | brain sets requires_      |
+  |                                                  |  confirmation=true        |
+  | file_operation: create_file / create_directory / | handler calls             |
+  |  rename_file / move_file / replace_in_file /     |  request_confirmation()   |
+  |  batch_delete                                    |  (brain leaves rc=false)  |
+  | code_execution: any with _danger_check hit       | handler (in-flight prompt)|
+
+  Verify each path under: (a) direct command, (b) auto-confirm ON,
+  (c) inside a workflow step.
+"""
 
 from __future__ import annotations
 
 import platform
 import re
+import threading
 import uuid
 from typing import Any
 
@@ -72,27 +92,34 @@ class _PendingConfirmation:
 
 
 _pending_confirmation: _PendingConfirmation | None = None
+# All access to _pending_confirmation goes through this lock so the brain
+# thread, voice thread, and Qt main thread can't race when a new command
+# arrives while a confirmation is in flight.
+_pending_lock = threading.Lock()
 
 
 def get_pending_confirmation() -> dict | None:
-    if _pending_confirmation is None:
-        return None
-    return {
-        "fn": _pending_confirmation.fn,
-        "prompt": _pending_confirmation.prompt,
-        "confirm_id": _pending_confirmation.confirm_id,
-    }
+    with _pending_lock:
+        if _pending_confirmation is None:
+            return None
+        return {
+            "fn": _pending_confirmation.fn,
+            "prompt": _pending_confirmation.prompt,
+            "confirm_id": _pending_confirmation.confirm_id,
+        }
 
 
 def abandon_pending_confirmation() -> None:
     global _pending_confirmation
-    _pending_confirmation = None
+    with _pending_lock:
+        _pending_confirmation = None
 
 
 def request_confirmation(prompt: str, fn: Any) -> dict:
     global _pending_confirmation
     cid = str(uuid.uuid4())
-    _pending_confirmation = _PendingConfirmation(cid, fn, prompt)
+    with _pending_lock:
+        _pending_confirmation = _PendingConfirmation(cid, fn, prompt)
     return _confirm(prompt)
 
 
@@ -115,11 +142,19 @@ def _is_affirmative_reply(user_response: str) -> bool:
 
 
 def resolve_confirmation(user_response: str) -> dict:
+    """Pop the pending confirmation and either invoke it or stand down.
+
+    The pending slot is cleared BEFORE pc.fn() runs so the callback can register
+    a fresh confirmation (e.g. a workflow continuation that itself prompts).
+    The lock is released before pc.fn() so the callback can call other
+    confirmation APIs without deadlocking.
+    """
     global _pending_confirmation
-    if _pending_confirmation is None:
-        return _err("No pending action to confirm.")
-    pc = _pending_confirmation
-    _pending_confirmation = None
+    with _pending_lock:
+        if _pending_confirmation is None:
+            return _err("No pending action to confirm.")
+        pc = _pending_confirmation
+        _pending_confirmation = None
     if _is_affirmative_reply(user_response):
         if pc.fn:
             try:

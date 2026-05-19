@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QStackedWidget,
     QShortcut,
+    QLabel,
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
@@ -78,6 +79,9 @@ class JarvisWindow(QMainWindow):
     _voice_text_ready    = pyqtSignal(str)           # transcribed speech text
     _voice_error_ready   = pyqtSignal(str)           # STT failure message
     _confirmation_resolved_ready = pyqtSignal(object)  # resolved confirmation dict
+    # Bridges a UI confirm click back onto the Qt main thread so the executor
+    # callback (and any subsequent Playwright/dispatch calls) run thread-affine.
+    _resume_executor_confirm = pyqtSignal(str)  # "yes" | "no"
     _tts_ready           = pyqtSignal(object)        # transcript payload after TTS is ready
     _tts_done_signal     = pyqtSignal(int)           # fires (with token) when TTS audio ends
     _wake_word_signal    = pyqtSignal()              # wake word detected on detector thread
@@ -118,8 +122,7 @@ class JarvisWindow(QMainWindow):
 
         # Persistent amber warning banner — only shown when auto-confirm is active.
         # Sits between the TopBar and the content stack so it is always visible.
-        from PyQt5.QtWidgets import QLabel as _QLabel
-        self._auto_confirm_banner = _QLabel(
+        self._auto_confirm_banner = QLabel(
             "⚠  AUTO-CONFIRM ACTIVE — DESTRUCTIVE ACTIONS WILL EXECUTE WITHOUT PROMPT"
         )
         self._auto_confirm_banner.setAlignment(Qt.AlignCenter)
@@ -185,6 +188,9 @@ class JarvisWindow(QMainWindow):
         self._voice_text_ready.connect(self._on_voice_heard)
         self._voice_error_ready.connect(self._on_voice_error_ui)
         self._confirmation_resolved_ready.connect(self._on_confirmation_resolved)
+        self._resume_executor_confirm.connect(
+            self._on_resume_executor_confirm, Qt.QueuedConnection
+        )
         self._tts_ready.connect(self._on_tts_ready)
         self._tts_done_signal.connect(self._on_tts_done, Qt.QueuedConnection)
         self._wake_word_signal.connect(self._on_wake_word, Qt.QueuedConnection)
@@ -540,19 +546,22 @@ class JarvisWindow(QMainWindow):
 
     # Intent → HUD status label mapping
     _INTENT_HUD = {
-        "open_app":        "LAUNCHING APP",
-        "close_app":       "TERMINATING",
-        "search_web":      "WEB SEARCH",
-        "type_text":       "INPUT MODE",
-        "control_mouse":   "MOUSE CONTROL",
-        "system_control":  "SYS CONTROL",
-        "automation_task": "AUTOMATION",
-        "read_screen":     "OCR SCAN",
+        "open_app":           "LAUNCHING APP",
+        "close_app":          "TERMINATING",
+        "search_web":         "WEB SEARCH",
+        "type_text":          "INPUT MODE",
+        "control_mouse":      "MOUSE CONTROL",
+        "system_control":     "SYS CONTROL",
+        "automation_task":    "AUTOMATION",
+        "read_screen":        "OCR SCAN",
         "browser_automation": "BROWSER CTRL",
-        "file_operation":  "FILE OPS",
-        "code_execution":  "EXECUTING",
-        "jarvis_meta":     "STANDBY",
-        "unknown":         "UNKNOWN",
+        "file_operation":     "FILE OPS",
+        "code_execution":     "EXECUTING",
+        "jarvis_meta":        "STANDBY",
+        "reminder_task":      "REMINDER SET",
+        "weather":            "WEATHER",
+        "document_creation":  "DOCUMENT",
+        "unknown":            "UNKNOWN",
     }
 
     def _process_cmd(self, cmd: str):
@@ -1065,13 +1074,24 @@ class JarvisWindow(QMainWindow):
                 confirmed=True,
             )
         elif mode == "executor":
-            # Resolve executor confirmation off the UI thread — the callback may
-            # continue a workflow and call Claude for later steps.
-            def _resolve_async() -> None:
-                from core.executor import resolve_confirmation
-                resolved = resolve_confirmation("yes")
-                self._confirmation_resolved_ready.emit(resolved)
-            threading.Thread(target=_resolve_async, daemon=True).start()
+            # Resolve the executor confirmation on the Qt MAIN thread (via signal
+            # + QueuedConnection). The callback may continue a workflow whose
+            # next steps touch Playwright — sync Playwright is thread-affine and
+            # crashes with "Cannot switch to a different thread" if dispatched
+            # from a worker. _yield_ui() also calls processEvents() which is
+            # main-thread-only.
+            self._resume_executor_confirm.emit("yes")
+
+    def _on_resume_executor_confirm(self, answer: str) -> None:
+        """Slot for _resume_executor_confirm — runs on Qt main thread.
+
+        Calls resolve_confirmation() here so the callback (which may continue a
+        workflow + invoke Playwright/dispatch) executes on the same thread as
+        the browser session. Result is forwarded to _on_confirmation_resolved.
+        """
+        from core.executor import resolve_confirmation
+        resolved = resolve_confirmation(answer)
+        self._on_confirmation_resolved(resolved)
 
     def _on_cancelled(self):
         self._hide_confirm_card()
@@ -1251,7 +1271,7 @@ class JarvisWindow(QMainWindow):
         # mic button icon updates correctly.
         if s != "listening":
             from core.voice import voice_engine as _ve
-            _ve._listening.clear()
+            _ve.clear_listening()
 
         # Keep wake detector paused while the system is active.
         # The deferred resume guards against stale QTimer callbacks: if JARVIS

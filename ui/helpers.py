@@ -88,96 +88,10 @@ class PanelFrame(QWidget):
         p.end()
 
 
-class MetricCard(QWidget):
-    """Single stat card with label, large value, progress bar, and hover glow."""
-
-    def __init__(self, label, value, bar_pct=0, bar_color=PRIMARY, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(95)
-        self._bar_pct = bar_pct
-        self._bar_color = bar_color
-        self._hover = False
-        self._glow_alpha = 0.0
-        self._glow_t = QTimer(self)
-        self._glow_t.setInterval(16)
-        self._glow_t.timeout.connect(self._animate_glow)
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 14)
-        lay.setSpacing(4)
-
-        lbl = QLabel(label)
-        lbl.setFont(QFont(FM, 8))
-        lbl.setStyleSheet(
-            "color:rgba(200,215,245,0.32);letter-spacing:0.8px;background:transparent;")
-        lay.addWidget(lbl)
-
-        self.val = QLabel(value)
-        self.val.setFont(QFont(FN, 21, QFont.Bold))
-        self.val.setStyleSheet("color:rgba(210,220,245,0.92);background:transparent;")
-        lay.addWidget(self.val)
-        lay.addStretch()
-
-    def enterEvent(self, _):
-        self._hover = True
-        if not self._glow_t.isActive():
-            self._glow_t.start()
-
-    def leaveEvent(self, _):
-        self._hover = False
-        if not self._glow_t.isActive():
-            self._glow_t.start()
-
-    def _animate_glow(self):
-        target = 1.0 if self._hover else 0.0
-        diff = target - self._glow_alpha
-        if abs(diff) < 0.02:
-            self._glow_alpha = target
-            self._glow_t.stop()
-        else:
-            self._glow_alpha += diff * 0.15
-        self.update()
-
-    def set_bar(self, pct, color=None):
-        self._bar_pct = pct
-        if color:
-            self._bar_color = color
-        self.update()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        g = self._glow_alpha
-
-        border_a = int(18 + 32 * g)
-        p.setPen(QPen(_primary(border_a), 1))
-        p.setBrush(_c(11, 15, 25, 140))
-        p.drawRoundedRect(QRectF(0, 0, w, h), RADIUS_SM, RADIUS_SM)
-
-        if g > 0.01:
-            from PyQt5.QtGui import QRadialGradient
-            glow = QRadialGradient(w / 2, h / 2, max(w, h) * 0.6)
-            glow.setColorAt(0, _primary(int(12 * g)))
-            glow.setColorAt(1, _primary(0))
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(glow))
-            p.drawRoundedRect(QRectF(0, 0, w, h), RADIUS_SM, RADIUS_SM)
-
-        if self._bar_pct > 0:
-            bh, by = 3, h - 10
-            bw = w - 20
-            p.setPen(Qt.NoPen)
-            p.setBrush(_primary(22))
-            p.drawRoundedRect(QRectF(10, by, bw, bh), 1.5, 1.5)
-            p.setBrush(QColor(self._bar_color))
-            p.drawRoundedRect(QRectF(10, by, bw * self._bar_pct / 100, bh), 1.5, 1.5)
-
-        p.end()
-
-
-class MetricCell(QWidget):
-    """Grid cell matching MetricCard style with hover glow."""
+class _HoverGlowWidget(QWidget):
+    """Base widget — animated hover glow + rounded background. Subclass and
+    override paintEvent if extra layers are needed (call _paint_glow_background
+    first)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -208,11 +122,10 @@ class MetricCell(QWidget):
             self._glow_alpha += diff * 0.15
         self.update()
 
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+    def _paint_glow_background(self, p: QPainter) -> None:
         w, h = self.width(), self.height()
         g = self._glow_alpha
+
         border_a = int(18 + 32 * g)
         p.setPen(QPen(_primary(border_a), 1))
         p.setBrush(_c(11, 15, 25, 140))
@@ -227,7 +140,64 @@ class MetricCell(QWidget):
             p.setBrush(QBrush(glow))
             p.drawRoundedRect(QRectF(0, 0, w, h), RADIUS_SM, RADIUS_SM)
 
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        self._paint_glow_background(p)
         p.end()
+
+
+class MetricCard(_HoverGlowWidget):
+    """Single stat card with label, large value, progress bar, and hover glow."""
+
+    def __init__(self, label, value, bar_pct=0, bar_color=PRIMARY, parent=None):
+        super().__init__(parent)
+        self._bar_pct = bar_pct
+        self._bar_color = bar_color
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 14)
+        lay.setSpacing(4)
+
+        lbl = QLabel(label)
+        lbl.setFont(QFont(FM, 8))
+        lbl.setStyleSheet(
+            "color:rgba(200,215,245,0.32);letter-spacing:0.8px;background:transparent;")
+        lay.addWidget(lbl)
+
+        self.val = QLabel(value)
+        self.val.setFont(QFont(FN, 21, QFont.Bold))
+        self.val.setStyleSheet("color:rgba(210,220,245,0.92);background:transparent;")
+        lay.addWidget(self.val)
+        lay.addStretch()
+
+    def set_bar(self, pct, color=None):
+        self._bar_pct = pct
+        if color:
+            self._bar_color = color
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        self._paint_glow_background(p)
+
+        if self._bar_pct > 0:
+            w, h = self.width(), self.height()
+            bh, by = 3, h - 10
+            bw = w - 20
+            p.setPen(Qt.NoPen)
+            p.setBrush(_primary(22))
+            p.drawRoundedRect(QRectF(10, by, bw, bh), 1.5, 1.5)
+            p.setBrush(QColor(self._bar_color))
+            p.drawRoundedRect(QRectF(10, by, bw * self._bar_pct / 100, bh), 1.5, 1.5)
+
+        p.end()
+
+
+class MetricCell(_HoverGlowWidget):
+    """Grid cell matching MetricCard style with hover glow."""
+    # Inherits glow + background paint from _HoverGlowWidget unchanged.
 
 
 class QuickActionBtn(QWidget):

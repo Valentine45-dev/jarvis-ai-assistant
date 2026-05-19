@@ -18,8 +18,6 @@ _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
     ("code_execution",  "kill_process"),  # destructive — must run standalone
 })
 
-_BLOCKED_INTENTS: frozenset[str] = frozenset()  # code_execution is now allowed in workflows
-
 _CONFIRMATION_REQUIRED_ACTIONS: frozenset[tuple[str, str]] = frozenset({
     ("automation_task", "remove_workflow"),
     ("system_control",  "shutdown"),
@@ -80,8 +78,6 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             s_action = step.get("action", "")
             if not s_intent:
                 return _err(f"Step {i} is missing 'intent'.")
-            if s_intent in _BLOCKED_INTENTS:
-                return _err(f"Step {i} uses blocked intent '{s_intent}'.")
             if s_intent not in _KNOWN_STEP_INTENTS:
                 return _err(f"Step {i} has unrecognised intent '{s_intent}'.")
             if (s_intent, s_action) in _DANGEROUS_STEPS:
@@ -145,8 +141,6 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             continue  # string steps are parsed at runtime
         intent   = step.get("intent", "")
         s_action = step.get("action", "")
-        if intent in _BLOCKED_INTENTS:
-            return _err(f"Workflow contains a '{intent}' step requiring manual confirmation.")
         if (intent, s_action) in _DANGEROUS_STEPS:
             return _err(f"Workflow contains dangerous step '{s_action}' — run manually.")
 
@@ -165,6 +159,24 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         state["results"].append(
             f"Step {idx}: {'OK' if sub.get('success') else 'FAIL'} — {sub.get('output') or sub.get('error')}"
         )
+
+    def _absorb_step_into_state(step: dict, sub: dict) -> None:
+        """Mirror the post-step state updates: last_step_*, last_python_file,
+        last_directory, quit_application. Called after both confirm-resume and
+        direct-success paths."""
+        state["last_step_intent"] = (step.get("intent") or "").strip()
+        state["last_step_action"] = (step.get("action") or "").strip()
+        if sub.get("quit_application"):
+            state["quit_application"] = True
+        if (
+            state["last_step_intent"] == "file_operation"
+            and state["last_step_action"] == "create_file"
+        ):
+            params = step.get("parameters") or {}
+            path = str(params.get("path") or "").strip()
+            if path.lower().endswith(".py"):
+                state["last_python_file"] = path
+                state["last_directory"] = str(Path(path).parent)
 
     def _ask_claude_step(step_text: str, step_n: int) -> dict:
         holder: dict[str, dict] = {}
@@ -242,44 +254,20 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     if not first.get("success"):
                         state["all_ok"] = False
                         return _err("\n".join(state["results"]))
-
-                    state["last_step_intent"] = (step.get("intent") or "").strip()
-                    state["last_step_action"] = (step.get("action") or "").strip()
-                    if first.get("quit_application"):
-                        state["quit_application"] = True
-                    if (
-                        state["last_step_intent"] == "file_operation"
-                        and state["last_step_action"] == "create_file"
-                    ):
-                        params = step.get("parameters") or {}
-                        path = str(params.get("path") or "").strip()
-                        if path.lower().endswith(".py"):
-                            state["last_python_file"] = path
-                            state["last_directory"] = str(Path(path).parent)
-
+                    _absorb_step_into_state(step, first)
                     return _run_from(idx + 1)
 
                 # Re-register pending confirmation with a continuation closure:
                 # UI confirm executes current step, then resumes later steps.
                 return request_confirmation(prompt, _resume_after_confirm)
 
-            if sub.get("quit_application"):
-                state["quit_application"] = True
             _append_step_result(step_n, sub)
             if sub.get("success"):
-                state["last_step_intent"] = (step.get("intent") or "").strip()
-                state["last_step_action"] = (step.get("action") or "").strip()
-                if (
-                    state["last_step_intent"] == "file_operation"
-                    and state["last_step_action"] == "create_file"
-                ):
-                    params = step.get("parameters") or {}
-                    path = str(params.get("path") or "").strip()
-                    if path.lower().endswith(".py"):
-                        state["last_python_file"] = path
-                        state["last_directory"] = str(Path(path).parent)
+                _absorb_step_into_state(step, sub)
             else:
                 state["all_ok"] = False
+                if sub.get("quit_application"):
+                    state["quit_application"] = True
                 return _err("\n".join(state["results"]))
 
         out: dict = _ok("\n".join(state["results"]))

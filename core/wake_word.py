@@ -29,6 +29,7 @@ import wave
 from typing import Callable
 
 from config.settings import config
+from core.log import debug as _dbg
 
 
 def _rms(data: bytes) -> float:
@@ -72,12 +73,12 @@ class WakeWordDetector:
             target=self._run, daemon=True, name="WakeWordDetector"
         )
         self._thread.start()
-        print("[wake] detector started")
+        _dbg("wake", "detector started")
 
     def stop(self) -> None:
         self._running.clear()
         self._paused.clear()
-        print("[wake] detector stopped")
+        _dbg("wake", "detector stopped")
 
     def pause(self) -> None:
         """Yield mic access to the main capture pipeline."""
@@ -97,13 +98,13 @@ class WakeWordDetector:
         try:
             import sounddevice as sd
         except ImportError:
-            print("[wake] sounddevice not installed — wake-word disabled")
+            _dbg("wake", "sounddevice not installed — wake-word disabled")
             return
 
         try:
             import speech_recognition as sr
         except ImportError:
-            print("[wake] SpeechRecognition not installed — wake-word disabled")
+            _dbg("wake", "SpeechRecognition not installed — wake-word disabled")
             return
 
         wake_word  = (config.wake_word or "jarvis").lower().strip()
@@ -138,8 +139,7 @@ class WakeWordDetector:
                             peak_rms = r
 
             except Exception as exc:
-                if config.debug_mode:
-                    print(f"[wake] stream error: {exc}")
+                _dbg("wake", f"stream error: {exc}")
                 time.sleep(0.5)
                 continue
 
@@ -163,11 +163,12 @@ class WakeWordDetector:
             try:
                 with sr.AudioFile(io.BytesIO(buf.getvalue())) as source:
                     audio = recognizer.record(source)
+                # Each ~2.5s window with sound above the floor calls Google STT.
+                # Cheap on the free tier; revisit if hitting quota.
                 text = recognizer.recognize_google(audio).lower()
-                if config.debug_mode:
-                    print(f"[wake] heard: {text!r}")
+                _dbg("wake", f"heard: {text!r}")
                 if wake_word in text:
-                    print(f"[wake] WAKE WORD: {text!r}")
+                    _dbg("wake", f"WAKE WORD: {text!r}")
                     # Pause BEFORE callback so the main capture can open the mic
                     self.pause()
                     if self._callback:

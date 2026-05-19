@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Sequence
 
@@ -24,6 +25,7 @@ _TCP_PORT = 443
 
 # Round-robin index (module-level: advanced probe alternation).
 _icmp_index = 0
+_icmp_index_lock = threading.Lock()
 
 
 def _subprocess_kw() -> dict:
@@ -109,8 +111,9 @@ def probe_internet_rtt(hosts: Sequence[str] | None = None) -> int | None:
     global _icmp_index
     hlist: Sequence[str] = hosts if hosts is not None else _PING_HOSTS_ICMP
     if hlist:
-        i = _icmp_index % len(hlist)
-        _icmp_index += 1
+        with _icmp_index_lock:
+            i = _icmp_index % len(hlist)
+            _icmp_index += 1
         host = hlist[i]
         ms = icmp_ping_ms(host)
         if ms is not None:

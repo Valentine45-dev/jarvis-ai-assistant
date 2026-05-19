@@ -19,10 +19,13 @@ an automation_task/run_workflow command with task_name but no inline steps.
 from __future__ import annotations
 
 import json
+import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from core.log import debug as _dbg
 
 _WORKFLOWS_PATH = Path(__file__).parent.parent / "data" / "workflows.json"
 
@@ -54,12 +57,24 @@ class WorkflowLibrary:
                 self._workflows = {w["id"]: w for w in data.get("workflows", [])}
         except Exception as exc:
             # Surface the error so a malformed workflows.json is diagnosable.
-            print(f"[automation] Failed to load {_WORKFLOWS_PATH}: {exc}")
+            _dbg("automation", f"Failed to load {_WORKFLOWS_PATH}: {exc}")
 
     def _save(self) -> None:
         # Caller must hold self._lock.
+        # Write atomically via tmp+os.replace so a crash mid-write leaves the
+        # previous version of workflows.json intact rather than truncated.
         data = {"workflows": list(self._workflows.values())}
-        _WORKFLOWS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp = _WORKFLOWS_PATH.with_suffix(_WORKFLOWS_PATH.suffix + ".tmp")
+        try:
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp, _WORKFLOWS_PATH)
+        except Exception as exc:
+            _dbg("automation", f"Failed to save {_WORKFLOWS_PATH}: {exc}")
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -134,7 +149,7 @@ class WorkflowLibrary:
         with self._lock:
             if workflow_id in self._workflows:
                 self._workflows[workflow_id]["last_run"] = (
-                    datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 )
                 self._save()
                 changed = True

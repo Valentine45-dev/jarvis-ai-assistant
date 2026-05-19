@@ -80,15 +80,15 @@ TAG_INTENT_MAP: dict[str, str] = {
 }
 
 
-def extract_tag(text: str) -> tuple[str | None, str]:
-    """Return (intent_override | None, cleaned_text).
+def extract_tag(text: str) -> tuple[str | None, str, str | None]:
+    """Return (intent_override | None, cleaned_text, unknown_tag | None).
 
     Handles two forms:
-      - Typed:  "@Browser check the news"  → ("browser_automation", "check the news")
-      - Voice:  "at browser check the news" → ("browser_automation", "check the news")
+      - Typed:  "@Browser check the news"  -> ("browser_automation", "check the news", None)
+      - Voice:  "at browser check the news" -> ("browser_automation", "check the news", None)
 
-    If the tag is present but unrecognised, returns (None, original_text) so
-    the caller can show a warning rather than silently misfiring.
+    If a typed @tag is present but unrecognised, the third element holds the raw
+    tag name so the caller can show a warning, and intent_override is None.
     """
     text = text.strip()
 
@@ -98,18 +98,18 @@ def extract_tag(text: str) -> tuple[str | None, str]:
         remainder = parts[1].strip() if len(parts) > 1 else ""
         intent = TAG_INTENT_MAP.get(tag)
         if intent:
-            return intent, remainder
-        # Unrecognised @tag — signal with sentinel so caller can warn the user.
-        return f"__unknown_tag__{tag}", text
+            return intent, remainder, None
+        # Unrecognised @tag — return the raw tag in the third slot.
+        return None, text, tag
 
     # Voice-transcribed form: "at <tag> ..."
     lower = text.lower()
     for tag, intent in TAG_INTENT_MAP.items():
         prefix = f"at {tag} "
         if lower.startswith(prefix):
-            return intent, text[len(prefix):].strip()
+            return intent, text[len(prefix):].strip(), None
 
-    return None, text
+    return None, text, None
 
 
 def _extract_first_json_object(text: str) -> str | None:
@@ -234,16 +234,7 @@ def ask_claude(
     text = re.sub(r"([.!?])\1+", r"\1", text)
 
     # 2. @tag extraction
-    tag_result, cleaned = extract_tag(text)
-
-    # Unrecognised tag sentinel — pass through to NLP, surface warning via _error
-    unrecognised_tag: str | None = None
-    if isinstance(tag_result, str) and tag_result.startswith("__unknown_tag__"):
-        unrecognised_tag = tag_result.replace("__unknown_tag__", "")
-        tag_result = None
-        cleaned = text
-
-    tag_override: str | None = tag_result
+    tag_override, cleaned, unrecognised_tag = extract_tag(text)
 
     # Fast-path deterministic routine creation parser:
     # "create a night routine ... <steps>" should directly create a workflow

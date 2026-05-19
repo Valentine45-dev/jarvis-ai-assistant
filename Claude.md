@@ -170,7 +170,7 @@ Control mouse position, clicks, and scrolling.
 - `click` — Click at current or specified position
 - `double_click` — Double click
 - `right_click` — Right click
-- `scroll` — Scroll up or down
+- `scroll` — Scroll up or down at the **OS / desktop** level (uses the operating system's mouse wheel). For scrolling inside a **web page** the user is viewing, route to `browser_automation/scroll` instead — see the disambiguation rule below.
 - `drag` — Drag from one position to another
 
 **Parameters:**
@@ -183,6 +183,19 @@ Control mouse position, clicks, and scrolling.
 ```
 
 **HUD Label:** `MOUSE CONTROL`
+
+**Scroll-routing disambiguation (read this before emitting any scroll intent):**
+
+A bare *"scroll down"* / *"scroll up"* command is ambiguous between OS-level mouse scroll and web-page scroll. Use these rules:
+
+- **Route to `browser_automation/scroll`** when:
+  - The user explicitly says *"on that page"*, *"on the webpage"*, *"on this page"*, *"down the page"*, *"on the site"*
+  - The user is mid-conversation about a website (`context.active_window` mentions a browser, OR `context.last_page_content` is present, OR a prior turn in this conversation was `browser_automation/*` or `search_web/*`)
+  - The user just had results pulled up in Chrome and continues with *"scroll down"*
+- **Route to `control_mouse/scroll`** only when:
+  - The user explicitly says *"with the mouse"*, *"the desktop"*, *"the window"*, names a non-browser application, OR
+  - There is **no** browser context whatsoever and the user is interacting with the OS / file manager / a non-browser app
+- **Tie-breaker:** when in genuine doubt, **prefer `browser_automation/scroll`** — JARVIS is more often used with a browser open than not, and a no-op scroll on a non-browser context is cheaper than the wrong-target scroll on a real browser session.
 
 -----
 
@@ -301,6 +314,7 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `screenshot` — Full-page screenshot or element screenshot
 - `new_tab` — Open a new tab and optionally navigate to a URL
 - `close_tab` — Close one tab. **Without** `match` / `url_contains` / `title_contains`, closes the **active** tab only. **When the user names a site or topic** (e.g. *“close the YouTube tab”*, *“close the Google results tab”*), you **must** set at least one filter so the correct tab is closed — not whichever tab has focus. Prefer **`url_contains`** (e.g. `youtube.com`, `google.com`) for sites; use **`title_contains`** for a phrase in the document title, or **`match`** for a short keyword phrase (tokenised; URL substrings count more than title text).
+- `scroll` — Scroll the active browser page (NOT the OS desktop). Use this — **not** `control_mouse/scroll` — whenever the user wants to scroll a web page they're viewing. Params: `direction` (`"up"` | `"down"`) and `amount` (int, default 3, clamped [1, 50]). Each amount unit ≈ 300 px (one click of a mouse wheel). See the scroll-routing disambiguation in §5 (`control_mouse`) for OS-vs-page tie-breaking.
 
 **Parameters:**
 
@@ -319,6 +333,8 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 { "url_match": "string — alias of url_contains for close_tab" }
 { "target": "string — alias of match for close_tab" }
 { "tab": "string — alias of match for close_tab" }
+{ "direction": "string — for scroll: 'up' or 'down'" }
+{ "amount": "int — for scroll: scroll ticks (1-50), default 3" }
 ```
 
 **Snapshot-driven element picker (preferred for click / fill):**
@@ -1364,6 +1380,38 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "parameters": {},
   "confidence": 0.95,
   "response": "Reading the current page.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Scroll down on that page"` (or any scroll command after a browser turn)
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "scroll",
+  "parameters": { "direction": "down", "amount": 3 },
+  "confidence": 0.96,
+  "response": "Scrolling down the page.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Scroll back up to the top"`
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "scroll",
+  "parameters": { "direction": "up", "amount": 50 },
+  "confidence": 0.94,
+  "response": "Scrolling back up, Valentine.",
   "hud_status": "BROWSER CTRL",
   "requires_confirmation": false
 }

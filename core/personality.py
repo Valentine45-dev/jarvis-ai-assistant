@@ -821,6 +821,7 @@ _SCHEDULED_FALLBACK_OK = [
 
 def _brief_scheduled_output(output: str, cap: int = 120) -> str:
     """One short fragment for {o} in scheduled follow-ups — no essay."""
+    from core.responders.utils import path_basename
     s = (output or "").strip().replace("\r\n", "\n")
     if not s:
         return ""
@@ -828,9 +829,7 @@ def _brief_scheduled_output(output: str, cap: int = 120) -> str:
         s = s.split("\n", 1)[0].strip()
     s = s[:cap] + "…" if len(s) > cap else s
     if ("/" in s or "\\" in s) and not s.startswith("http") and cap > 30:
-        parts = s.replace("\\", "/").split("/")
-        last = next((p for p in reversed(parts) if p), s)
-        return last.strip()[:80]
+        return path_basename(s, cap=80).strip()
     return s
 
 
@@ -917,15 +916,14 @@ def say(intent: str, action: str, status: str, output: str = "", error: str = ""
     variants = pool.get(status) or _DEFAULT.get(status, ["Done."])
 
     def _trim(s: str, cap: int = 100) -> str:
+        from core.responders.utils import path_basename
         if not s:
             return ""
         if len(s) > cap:
             s = s[:cap] + "…"
         # Show only filename/folder name for path-like strings (not URLs)
         if ("\\" in s or ("/" in s and not s.startswith("http"))) and cap > 40:
-            parts = s.replace("\\", "/").split("/")
-            last  = next((p for p in reversed(parts) if p), s)
-            return last
+            return path_basename(s, cap=cap)
         return s
 
     def _trim_error(s: str, cap: int = 500) -> str:

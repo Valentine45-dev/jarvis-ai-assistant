@@ -35,6 +35,7 @@ from pathlib import Path
 import anthropic
 
 from config.settings import config
+from core.log import debug as _dbg
 from core.handlers.paths import _resolve_file_operation_path
 from core.handlers.shared import _err, _ok, request_confirmation
 from core.signals import signals
@@ -580,9 +581,8 @@ def _handle_document_creation(action: str, params: dict) -> dict:
     action_default = _DEFAULT_DOC_TYPE.get(action, "report")
     doc_type_raw = (params.get("doc_type") or "").strip().lower()
     if doc_type_raw and doc_type_raw not in action_known:
-        if getattr(config, "debug_mode", False):
-            # ASCII-only — Windows cp1252 stdout crashes on Unicode arrows.
-            print(f"[doc] unknown {action} doc_type {doc_type_raw!r} -> falling back to {action_default!r}")
+        # core.log._safe() sanitises non-ASCII for cp1252 stdout.
+        _dbg("doc", f"unknown {action} doc_type {doc_type_raw!r} -> falling back to {action_default!r}")
         doc_type = action_default
     else:
         doc_type = doc_type_raw or action_default
@@ -624,10 +624,15 @@ def _handle_document_creation(action: str, params: dict) -> dict:
         # existing directory, or (b) the raw path ends with a separator.
         # Without this, "docs/pptx" got `.pptx` appended → docs/pptx.pptx.
         raw_norm = raw_path_str.rstrip()
+        # Trailing separators only count when the resolved target isn't an
+        # existing file — otherwise "report.docx\" would wrongly synthesize a
+        # nested name inside a real file path.
         looks_like_folder = (
             target_path.is_dir()
-            or raw_norm.endswith("/")
-            or raw_norm.endswith("\\")
+            or (
+                (raw_norm.endswith("/") or raw_norm.endswith("\\"))
+                and not target_path.is_file()
+            )
         )
         if looks_like_folder:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -17,6 +17,8 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
+from core.log import debug as _dbg
+
 
 # ── Lazy ElevenLabs SDK import ────────────────────────────────────────────────
 
@@ -153,7 +155,7 @@ def say_elevenlabs(
     if el is None:
         raise RuntimeError("elevenlabs package not installed")
 
-    print(f"[tts] ElevenLabs → voice_id={voice_id!r}")
+    _dbg("tts", f"ElevenLabs voice_id={voice_id!r}")
     client = el.ElevenLabs(api_key=api_key)
 
     stream_fn = getattr(client.text_to_speech, "stream", None)

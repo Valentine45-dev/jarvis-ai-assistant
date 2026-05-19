@@ -44,11 +44,7 @@ _INTERACTIVE_ROLES: frozenset[str] = frozenset({
 })
 
 
-def _ok(output: str = "") -> dict:
-    return {"success": True, "output": output, "error": ""}
-
-def _err(msg: str) -> dict:
-    return {"success": False, "output": "", "error": msg}
+from core.handlers.shared import _ok, _err
 
 
 # Search boxes — shared by fill_form and click (Enter submit fallback)
@@ -153,6 +149,11 @@ class BrowserSession:
     def is_ready(self) -> bool:
         return self._ready
 
+    @property
+    def start_error(self) -> str:
+        """Public read of the most recent start() failure message (empty if none)."""
+        return self._start_err
+
     def _not_ready(self) -> dict | None:
         """Return _err if session is not ready after one auto-restart attempt, else None.
 
@@ -173,6 +174,29 @@ class BrowserSession:
         self.stop()
         self.start()
         return self._ready
+
+    def _with_recovery(self, label: str, fn):
+        """Run a Playwright op; on 'closed' errors, restart Chrome once + retry.
+
+        Caller must hold self._lock. fn() should perform the op and return an
+        _ok/_err dict. Mirrors the recovery branch in navigate() so other ops
+        survive an external Chrome close.
+        """
+        try:
+            return fn()
+        except Exception as exc:
+            msg = str(exc)
+            if "closed" in msg.lower():
+                self._ready = False
+                if self._recover():
+                    try:
+                        return fn()
+                    except Exception as exc2:
+                        return _err(str(exc2))
+                return _err("Browser session lost — Chrome was closed externally")
+            if "timeout" in msg.lower():
+                return _err(f"{label} timed out: {msg}")
+            return _err(msg)
 
     # ── Phase 1: Navigation ───────────────────────────────────────────────────
 
@@ -512,6 +536,31 @@ class BrowserSession:
                     return _err(f"Element not found: {selector!r}")
                 return _err(msg)
 
+    def scroll(self, direction: str = "down", amount: int = 3) -> dict:
+        """Scroll the active page. ``amount`` = scroll ticks (~300 px each).
+
+        Matches the typical mouse-wheel feel — `amount: 3` ≈ one viewport on
+        a 1080p screen. Clamped to [1, 50] so a bad model emit can't scroll
+        forever."""
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                return guard
+            dir_norm = (direction or "down").strip().lower()
+            if dir_norm not in ("up", "down"):
+                return _err(f"Invalid direction: {direction!r} (use 'up' or 'down')")
+            try:
+                n = max(1, min(int(amount), 50))
+            except (TypeError, ValueError):
+                n = 3
+            delta_y = n * 300 * (1 if dir_norm == "down" else -1)
+
+            def _do() -> dict:
+                self._page.mouse.wheel(0, delta_y)
+                return _ok(f"Scrolled {dir_norm} {n} tick{'s' if n != 1 else ''}.")
+
+            return self._with_recovery("scroll", _do)
+
     # ── Phase 2: Snapshot-driven element picker ───────────────────────────────
 
     def snapshot(self) -> str:
@@ -694,23 +743,45 @@ class BrowserSession:
         if os.getenv("JARVIS_BROWSER_USE_LLM_PICKER", "true").lower() == "false":
             return self._find_legacy_fallback(goal, action, value)
 
+        # Lazy import config so the debug check is cheap when disabled.
+        try:
+            from config.settings import config as _cfg
+            _debug = bool(getattr(_cfg, "debug_mode", False))
+        except Exception:
+            _cfg = None  # type: ignore[assignment]
+            _debug = False
+
+        def _dlog(msg: str) -> None:
+            """Print a [find_and_act] diagnostic line when debug_mode is on.
+
+            Sanitises non-ASCII characters first — Haiku replies often contain
+            em-dashes / arrows / curly quotes that crash Windows cp1252 stdout.
+            """
+            if _debug:
+                safe = msg.encode("ascii", "replace").decode("ascii")
+                print(f"[find_and_act] {safe}")
+
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _dlog(f"goal={goal!r} action={action!r} -> not_ready guard fired")
                 return guard
 
             tree_text = self.snapshot()
             if not tree_text or not self._ref_map:
+                _dlog(f"goal={goal!r} -> empty snapshot, falling back to legacy click")
                 return self._find_legacy_fallback(goal, action, value)
+            _dlog(f"goal={goal!r} action={action!r} snapshot_chars={len(tree_text)} refs={len(self._ref_map)}")
 
             # Lazy import keeps anthropic out of the start-up critical path.
             try:
                 import anthropic  # type: ignore
-                from config.settings import config as _cfg
             except Exception:
+                _dlog("anthropic import failed -> legacy fallback")
                 return self._find_legacy_fallback(goal, action, value)
 
-            if not _cfg.anthropic_api_key:
+            if not (_cfg and _cfg.anthropic_api_key):
+                _dlog("no anthropic_api_key -> legacy fallback")
                 return self._find_legacy_fallback(goal, action, value)
 
             # The accessibility tree is UNTRUSTED page content. Wrap it in tags and
@@ -749,16 +820,23 @@ class BrowserSession:
 
             ref_num = self._parse_haiku_ref(raw)
             if ref_num is None or ref_num not in self._ref_map:
+                _dlog(f"haiku pick failed/out-of-range raw={raw!r} parsed={ref_num} -> legacy fallback")
                 return self._find_legacy_fallback(goal, action, value)
 
             node = self._ref_map[ref_num]
             role = (node.get("role") or "").strip()
             name = (node.get("raw_name") or node.get("name") or "").strip()
+            _dlog(
+                f"goal={goal!r} -> ref_{ref_num} role={role!r} name={name!r} "
+                f"(haiku raw: {raw[:120]!r})"
+            )
 
             if action == "find":
                 return _ok(f"Found ref_{ref_num}: role={role!r} name={name!r}")
             if action == "click":
-                return self._exec_click_by_role(role, name, goal)
+                result = self._exec_click_by_role(role, name, goal)
+                _dlog(f"click result: success={result.get('success')} err={result.get('error', '')!r}")
+                return result
             # action == "fill"
             return self._exec_fill_by_role(role, name, value, goal)
 

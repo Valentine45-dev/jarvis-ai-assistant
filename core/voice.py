@@ -27,6 +27,7 @@ from typing import Callable
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from config.settings import config
+from core.log import debug as _dbg
 from core.audio_pipeline import (
     _EL_VOICES,
     _SttErrorExc,
@@ -122,6 +123,14 @@ class VoiceEngine:
     def is_listening(self) -> bool:
         return self._listening.is_set()
 
+    def clear_listening(self) -> None:
+        """Public reset of the listening flag.
+
+        Used by the HUD's state machine when leaving the "listening" state.
+        Avoids reaching into _listening directly from main.py.
+        """
+        self._listening.clear()
+
     @property
     def is_speaking(self) -> bool:
         return self._tts.is_speaking
@@ -201,14 +210,14 @@ class VoiceEngine:
         phrase_time_limit: float = 12.0,
     ) -> None:
         """Capture mic → transcribe → call *callback(text)*. Non-blocking."""
-        print("[voice] listen() called")
+        _dbg("voice", "listen() called")
         if self._mic_muted:
-            print("[voice] mic is muted — aborting")
+            _dbg("voice", "mic is muted — aborting")
             if on_error is not None:
                 on_error("Microphone muted.")
             return
 
-        print("[voice] starting _listen_thread (Google STT)")
+        _dbg("voice", "starting _listen_thread (Google STT)")
         threading.Thread(
             target=self._listen_thread,
             args=(callback, on_error, timeout, phrase_time_limit),
@@ -223,7 +232,7 @@ class VoiceEngine:
         phrase_time_limit: float,
     ) -> None:
         import time as _time
-        print("[voice] _listen_thread running")
+        _dbg("voice", "_listen_thread running")
         self._listening.set()
         # Brief yield so the wake detector (if mid-window) can finish its chunk
         # loop and close its RawInputStream before we open ours.
@@ -233,13 +242,13 @@ class VoiceEngine:
                 duration=0.3,
                 sensitivity=config.mic_sensitivity,
             )
-            print(f"[voice] calibrated threshold: {threshold:.0f}")
+            _dbg("voice", f"calibrated threshold: {threshold:.0f}")
             wav_bytes = self._capture.capture(
                 timeout=timeout,
                 phrase_time_limit=phrase_time_limit,
                 threshold=threshold,
             )
-            print(f"[voice] capture() returned: {'WAV bytes' if wav_bytes else 'None (no speech)'}")
+            _dbg("voice", f"capture() returned: {'WAV bytes' if wav_bytes else 'None (no speech)'}")
             if wav_bytes is None:
                 if on_error:
                     try:
@@ -247,9 +256,9 @@ class VoiceEngine:
                     except RuntimeError:
                         pass
                 return
-            print("[voice] calling STT recognise()...")
+            _dbg("voice", "calling STT recognise()...")
             text = self._stt.recognise(wav_bytes)
-            print(f"[voice] recognise() returned: {text!r}")
+            _dbg("voice", f"recognise() returned: {text!r}")
             if text:
                 callback(text)
             else:
@@ -259,14 +268,14 @@ class VoiceEngine:
                     except RuntimeError:
                         pass
         except _SttErrorExc as exc:
-            print(f"[voice] SttError: {exc}")
+            _dbg("voice", f"SttError: {exc}")
             if on_error:
                 try:
                     on_error(str(exc))
                 except RuntimeError:
                     pass
         except Exception as exc:
-            print(f"[voice] Exception in _listen_thread: {type(exc).__name__}: {exc}")
+            _dbg("voice", f"Exception in _listen_thread: {type(exc).__name__}: {exc}")
             if on_error:
                 try:
                     on_error(f"Voice error: {exc}")
@@ -274,7 +283,7 @@ class VoiceEngine:
                     pass
         finally:
             self._listening.clear()
-            print("[voice] _listen_thread done")
+            _dbg("voice", "_listen_thread done")
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
