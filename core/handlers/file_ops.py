@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from core.handlers.shared import _ok, _err, request_confirmation
+from core.handlers.shared import _ok, _err, _tlog, request_confirmation
 from core.handlers.paths import _resolve_file_operation_path, _find_folder
 from core.signals import signals
 
@@ -218,9 +218,12 @@ def _file_op_create_directory(params: dict) -> dict:
     raw_path = params.get("path", "")
     s = (raw_path or "").strip()
     if not s:
+        _tlog("✗ no path provided")
         return _err("No path provided")
     path = _strip_llm_path_placeholders(_resolve_file_operation_path(s))
+    _tlog(f"❯ mkdir {path.name or s}")
     if path.exists() and path.is_file():
+        _tlog(f"✗ that path is already a file: {path.name}")
         return _err(f"That path is already a file: {path.name}")
     try:
         target_display = str(path.resolve())
@@ -234,10 +237,13 @@ def _file_op_create_directory(params: dict) -> dict:
     def _do_mkdir() -> dict:
         try:
             path.mkdir(parents=True, exist_ok=True)
+            _tlog(f"✓ created — {path.name}")
             return _ok(f"Created folder: {path.name}")
         except PermissionError:
+            _tlog(f"✗ permission denied: {path}")
             return _err(f"Permission denied: {path}")
         except Exception as exc:
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
     return request_confirmation(prompt, _do_mkdir)
@@ -258,10 +264,13 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         has_trailing = len(raw_n) > 0 and raw_n.rstrip().endswith("/")
 
         if not path.suffix and not has_trailing and not content_stripped:
+            # Falls through to create_directory which emits its own ❯/✓/✗.
             return _file_op_create_directory({"path": str(path), **{k: v for k, v in params.items() if k != "path"}})
 
         if not path.suffix:
             path = path / "jarvis_note.txt"
+
+        _tlog(f"❯ create {path.name}")
 
         parent = path.parent
         try:
@@ -280,21 +289,34 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             )
         path_summary = "\n".join(lines)
 
+        captured_path = path
+        captured_parent = parent
+
         def _do_create() -> dict:
             try:
-                if not parent.exists():
-                    parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content, encoding="utf-8")
-                return _ok(f"Created: {path.name}")
+                if not captured_parent.exists():
+                    captured_parent.mkdir(parents=True, exist_ok=True)
+                captured_path.write_text(content, encoding="utf-8")
+                try:
+                    size = _format_human_size(captured_path.stat().st_size)
+                except OSError:
+                    size = "?"
+                _tlog(f"✓ created — {captured_path.name} ({size})")
+                return _ok(f"Created: {captured_path.name}")
             except PermissionError:
-                return _err(f"Permission denied: {path}")
+                _tlog(f"✗ permission denied: {captured_path}")
+                return _err(f"Permission denied: {captured_path}")
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
         from core.personality import ask as _ask
+        _tlog(f"⚠ awaiting confirmation — {target_display}")
         return request_confirmation(_ask("create_file", path_summary), _do_create)
 
     if action == "read_file":
+        _tlog(f"❯ read {path.name}")
+
         # Optional line-range slicing. start_line is 1-indexed; end_line=-1 means EOF.
         try:
             start_line = max(1, int(params.get("start_line", 1)))
@@ -305,6 +327,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         except (TypeError, ValueError):
             end_line = -1
         if end_line != -1 and end_line < start_line:
+            _tlog(f"✗ end_line ({end_line}) must be >= start_line ({start_line})")
             return _err(f"end_line ({end_line}) must be >= start_line ({start_line})")
 
         if not path.exists():
@@ -313,6 +336,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                 path = found
             else:
                 result = _err(f"File not found: {_resolved_missing_path(path)}")
+                _tlog(f"✗ {result['error']}")
                 _emit_to_terminal(result["error"], success=False)
                 return result
 
@@ -320,10 +344,12 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             size = path.stat().st_size
         except OSError as exc:
             result = _err(str(exc))
+            _tlog(f"✗ {exc}")
             _emit_to_terminal(result["error"], success=False)
             return result
 
         if size > _READ_FILE_MAX_BYTES:
+            _tlog(f"✗ file too large: {_format_human_size(size)}")
             return _err(
                 f"File too large to read: {_format_human_size(size)} "
                 f"(cap: {_format_human_size(_READ_FILE_MAX_BYTES)}) — "
@@ -334,10 +360,12 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             content = path.read_text(encoding="utf-8", errors="replace")
         except PermissionError:
             result = _err(f"Permission denied reading: {path.name}")
+            _tlog(f"✗ permission denied: {path.name}")
             _emit_to_terminal(result["error"], success=False)
             return result
         except Exception as exc:
             result = _err(str(exc))
+            _tlog(f"✗ {exc}")
             _emit_to_terminal(result["error"], success=False)
             return result
 
@@ -369,14 +397,17 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         for line in body_out.splitlines():
             signals.terminal_line_ready.emit(line)
         signals.terminal_done.emit(0)
+        _tlog(f"✓ {path.name} — {total_lines:,} lines, {_format_human_size(size)}")
         return _ok(body_out)
 
     if action == "delete_file":
+        _tlog(f"❯ delete {path.name}")
         if not path.exists():
             found = _find_existing_item(path) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
+                _tlog(f"✗ cannot find {_resolved_missing_path(path)!r}")
                 return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
         try:
             full_path_str = str(path.resolve())
@@ -385,6 +416,10 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         is_dir = path.is_dir()
         kind   = "Folder" if is_dir else "File"
         lines  = [f"{kind}: {full_path_str}"]
+        try:
+            size_label = _format_human_size(path.stat().st_size) if not is_dir else "folder"
+        except OSError:
+            size_label = "?"
         if is_dir:
             try:
                 n = sum(1 for _ in path.rglob("*"))
@@ -393,23 +428,30 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                 lines.append("Note: all contents will be permanently removed")
         item_desc = "\n".join(lines)
 
+        captured_path = path
+        captured_name = path.name
+
         def _do_delete() -> dict:
             try:
-                if path.is_dir():
-                    shutil.rmtree(path)
+                if captured_path.is_dir():
+                    shutil.rmtree(captured_path)
                 else:
-                    path.unlink()
-                return _ok(f"Deleted: {path.name}")
+                    captured_path.unlink()
+                _tlog(f"✓ deleted — {captured_name}")
+                return _ok(f"Deleted: {captured_name}")
             except PermissionError:
-                msg = f"Permission denied: {path.name}"
+                msg = f"Permission denied: {captured_name}"
+                _tlog(f"✗ {msg}")
                 return {"success": False, "output": msg, "error": msg}
             except Exception as exc:
                 msg = str(exc)
+                _tlog(f"✗ {msg}")
                 return {"success": False, "output": msg, "error": msg}
 
         from core.personality import ask as _ask
         if confirmed:
             return _do_delete()
+        _tlog(f"⚠ awaiting confirmation — {captured_name} ({size_label})")
         return request_confirmation(_ask("delete_file", item_desc), _do_delete)
 
     if action == "rename_file":
@@ -418,33 +460,47 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found:
                 path = found
             else:
+                _tlog(f"❯ rename {path.name}")
+                _tlog(f"✗ cannot find {_resolved_missing_path(path)!r}")
                 return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
         new_name_raw = (params.get("new_name") or params.get("destination") or "").strip()
         if not new_name_raw:
+            _tlog(f"❯ rename {path.name}")
+            _tlog("✗ no new name provided")
             return _err("No new name provided for rename.")
         new_filename = Path(new_name_raw).name or new_name_raw
         dest_path    = path.parent / new_filename
+        _tlog(f"❯ rename {path.name} → {new_filename}")
         try:
             loc_str = str(path.parent.resolve())
         except (OSError, ValueError):
             loc_str = str(path.parent)
         rename_desc = f"From: {path.name}\nTo:   {new_filename}\nIn:   {loc_str}"
 
+        captured_path = path
+        captured_dest = dest_path
+        captured_new = new_filename
+
         def _do_rename() -> dict:
             try:
-                if dest_path.exists():
-                    msg = f"'{new_filename}' already exists in that location"
+                if captured_dest.exists():
+                    msg = f"'{captured_new}' already exists in that location"
+                    _tlog(f"✗ {msg}")
                     return {"success": False, "output": msg, "error": msg}
-                path.rename(dest_path)
-                return _ok(f"Renamed to {new_filename}")
+                captured_path.rename(captured_dest)
+                _tlog("✓ renamed")
+                return _ok(f"Renamed to {captured_new}")
             except PermissionError:
                 msg = "Permission denied"
+                _tlog(f"✗ {msg}")
                 return {"success": False, "output": msg, "error": msg}
             except Exception as exc:
                 msg = str(exc)
+                _tlog(f"✗ {msg}")
                 return {"success": False, "output": msg, "error": msg}
 
         from core.personality import ask as _ask
+        _tlog("⚠ awaiting confirmation")
         return request_confirmation(_ask("rename_file", rename_desc), _do_rename)
 
     if action == "move_file":
@@ -453,6 +509,8 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found:
                 path = found
             else:
+                _tlog(f"❯ move {path.name}")
+                _tlog(f"✗ cannot find {_resolved_missing_path(path)!r}")
                 return _err(f"Cannot find {_resolved_missing_path(path)!r} — check the path and try again.")
 
         # Resolve destination once, here, so the flow is readable:
@@ -460,6 +518,8 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         # anything else goes through the standard file-operation resolver.
         raw_dest_str = (params.get("destination") or "").strip()
         if not raw_dest_str:
+            _tlog(f"❯ move {path.name}")
+            _tlog("✗ no destination provided")
             return _err("No destination provided")
         if "/" not in raw_dest_str and "\\" not in raw_dest_str:
             cleaned_dest = raw_dest_str
@@ -495,11 +555,15 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         captured_dest  = dest
         captured_final = final_path
 
+        _tlog(f"❯ move {captured_path.name} → {captured_dest.name or captured_dest}")
+
         def _do_move() -> dict:
             try:
                 shutil.move(str(captured_path), str(captured_dest))
+                _tlog("✓ moved")
                 return _ok(f"Moved {captured_path.name} → {captured_final}")
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
         return request_confirmation(move_desc, _do_move)
@@ -507,12 +571,17 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
     if action == "copy_file":
         raw_dest_str = (params.get("destination") or "").strip()
         if not raw_dest_str:
+            _tlog(f"❯ copy {path.name}")
+            _tlog("✗ no destination provided")
             return _err("No destination provided")
         dest = _resolve_file_operation_path(raw_dest_str)
+        _tlog(f"❯ copy {path.name} → {dest.name or dest}")
         try:
             shutil.copy2(str(path), str(dest))
+            _tlog("✓ copied")
             return _ok(f"Copied {path.name}")
         except Exception as exc:
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
     if action == "list_directory":
@@ -586,13 +655,19 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         elif path.exists() and path.is_dir():
             base = path
         elif path.exists():
+            _tlog(f"❯ search files {pattern!r} in {path.name}")
+            _tlog(f"✗ not a directory: {path}")
             return _err(f"Not a directory: {path}")
         else:
             found_dir = _find_folder(raw_path)
             if found_dir:
                 base = found_dir
             else:
+                _tlog(f"❯ search files {pattern!r} in {raw_path or path.name}")
+                _tlog(f"✗ directory not found: {_resolved_missing_path(path)}")
                 return _err(f"Directory not found: {_resolved_missing_path(path)}")
+
+        _tlog(f"❯ search files {pattern!r} in {base.name or base}")
 
         # Parse filters up-front so bad input fails fast with a helpful message.
         after_ts: float | None = None
@@ -600,13 +675,16 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             try:
                 after_ts = datetime.strptime(str(modified_after).strip(), "%Y-%m-%d").timestamp()
             except (ValueError, TypeError):
+                _tlog("✗ invalid modified_after — use YYYY-MM-DD")
                 return _err("Invalid modified_after — use YYYY-MM-DD")
 
         size_gt = _parse_size_spec(size_gt_raw) if size_gt_raw is not None else None
         if size_gt_raw is not None and size_gt is None:
+            _tlog("✗ invalid size_gt — use e.g. '1MB', '500KB'")
             return _err("Invalid size_gt — use e.g. '1MB', '500KB'")
         size_lt = _parse_size_spec(size_lt_raw) if size_lt_raw is not None else None
         if size_lt_raw is not None and size_lt is None:
+            _tlog("✗ invalid size_lt — use e.g. '1MB', '500KB'")
             return _err("Invalid size_lt — use e.g. '1MB', '500KB'")
 
         deadline = time.monotonic() + _SEARCH_TIME_BUDGET_S
@@ -641,11 +719,13 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                     break
         except Exception as exc:
             result = _err(str(exc))
+            _tlog(f"✗ {exc}")
             _emit_to_terminal(result["error"], success=False)
             return result
 
         cmd_label = f"find '{pattern}' in {base.name}/"
         if not matches:
+            _tlog("✗ nothing found")
             _emit_to_terminal("No matching files found.", command=cmd_label)
             return _ok("No matching files found.")
 
@@ -655,12 +735,15 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         if truncated_reason:
             body_lines.append(f"[partial: {truncated_reason}]")
 
+        _tlog(f"✓ {len(matches)} file{'s' if len(matches) != 1 else ''} found")
         _emit_to_terminal("\n".join(body_lines), command=cmd_label)
         return _ok("\n".join(p.name for p in matches))
 
     if action == "append_file":
+        _tlog(f"❯ append → {path.name}")
         content = params.get("content", "")
         if not isinstance(content, str) or content == "":
+            _tlog("✗ missing 'content' to append")
             return _err("Missing 'content' to append")
         use_timestamp = bool(params.get("timestamp", False))
 
@@ -669,10 +752,12 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found:
                 path = found
             else:
+                _tlog(f"✗ file not found: {_resolved_missing_path(path)}")
                 return _err(
                     f"File not found: {_resolved_missing_path(path)} — use create_file to make a new one"
                 )
         if path.is_dir():
+            _tlog(f"✗ {path.name} is a directory")
             return _err(f"{path.name} is a directory — append_file only works on files")
 
         chunk = content
@@ -699,8 +784,10 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             with path.open("a", encoding="utf-8") as fh:
                 written = fh.write(chunk)
         except PermissionError:
+            _tlog(f"✗ permission denied: {path.name}")
             return _err(f"Permission denied writing: {path.name}")
         except Exception as exc:
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
         try:
@@ -711,19 +798,23 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             f"Appended {written} chars to {full_path_str}",
             command=f"append → {path.name}",
         )
+        _tlog("✓ appended")
         return _ok(f"Appended {written} chars to {path.name}")
 
     if action == "file_info":
+        _tlog(f"❯ info {path.name}")
         if not path.exists():
             found = _find_existing_item(path) if _raw_path_is_bare_filename(raw_path) else None
             if found:
                 path = found
             else:
+                _tlog(f"✗ not found: {_resolved_missing_path(path)}")
                 return _err(f"Not found: {_resolved_missing_path(path)}")
 
         try:
             st = path.stat()
         except OSError as exc:
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
         try:
@@ -793,9 +884,15 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
 
         body = "\n".join(info_lines)
         _emit_to_terminal(body, command=f"info {path.name}")
+        if path.is_dir():
+            _tlog(f"✓ {_format_human_size(total_size)}, {file_count + dir_count} items, modified {mod_str}")
+        else:
+            line_summary = line_count_line.split(":", 1)[-1].strip() if ":" in line_count_line else "?"
+            _tlog(f"✓ {_format_human_size(st.st_size)}, {line_summary} lines, modified {mod_str}")
         return _ok(body)
 
     if action == "replace_in_file":
+        _tlog(f"❯ replace in {path.name}")
         find_text    = params.get("find", "")
         replace_text = params.get("replace", "")
         try:
@@ -804,8 +901,10 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             count_arg = -1
 
         if not isinstance(find_text, str) or find_text == "":
+            _tlog("✗ missing 'find' text to search for")
             return _err("Missing 'find' text to search for")
         if not isinstance(replace_text, str):
+            _tlog("✗ missing 'replace' text")
             return _err("Missing 'replace' text")
 
         if not path.exists():
@@ -813,9 +912,11 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found:
                 path = found
             else:
+                _tlog(f"✗ file not found: {_resolved_missing_path(path)}")
                 return _err(f"File not found: {_resolved_missing_path(path)}")
 
         if _is_probably_binary(path):
+            _tlog(f"✗ {path.name} looks like a binary file")
             return _err(
                 f"{path.name} looks like a binary file — replace_in_file only supports text files."
             )
@@ -823,14 +924,18 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            _tlog(f"✗ {path.name} is not valid UTF-8")
             return _err(f"{path.name} is not valid UTF-8 text — refusing to edit.")
         except PermissionError:
+            _tlog(f"✗ permission denied: {path.name}")
             return _err(f"Permission denied reading: {path.name}")
         except Exception as exc:
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
         occurrences = content.count(find_text)
         if occurrences == 0:
+            _tlog(f"✗ text not found in {path.name}")
             return _err(f"Text not found in {path.name}: {find_text!r}")
 
         # Preview the first match with ±50 chars of context.
@@ -872,12 +977,16 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                     f"── {captured_path.name}: replaced {applied} of {captured_occ} ──",
                     command=f"replace {captured_find!r} → {captured_replace!r}",
                 )
+                _tlog(f"✓ {applied} replacement{'s' if applied != 1 else ''} saved")
                 return _ok(msg)
             except PermissionError:
+                _tlog(f"✗ permission denied: {captured_path.name}")
                 return _err(f"Permission denied writing: {captured_path.name}")
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
+        _tlog("⚠ awaiting confirmation")
         return request_confirmation(prompt, _do_replace)
 
     if action == "batch_delete":
@@ -885,6 +994,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
         recursive = bool(params.get("recursive", False))
 
         if not glob_pat:
+            _tlog("✗ missing 'pattern' (glob, e.g. '*.tmp')")
             return _err("Missing 'pattern' (glob, e.g. '*.tmp')")
 
         if not path.exists():
@@ -892,9 +1002,15 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found_dir:
                 path = found_dir
             else:
+                _tlog(f"❯ batch delete {glob_pat!r} in {raw_path or path.name}")
+                _tlog(f"✗ directory not found: {raw_path or path}")
                 return _err(f"Directory not found: {raw_path or path}")
         if not path.is_dir():
+            _tlog(f"❯ batch delete {glob_pat!r} in {path.name}")
+            _tlog(f"✗ not a directory: {path}")
             return _err(f"Not a directory: {path}")
+
+        _tlog(f"❯ batch delete {glob_pat!r} in {path.name}")
 
         # Files only — globs match dirs too, and we never want to unlink() a folder.
         candidates: list[Path] = []
@@ -916,14 +1032,18 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                         if len(candidates) > _BATCH_DELETE_MAX:
                             break
         except PermissionError:
+            _tlog(f"✗ permission denied scanning: {path}")
             return _err(f"Permission denied scanning: {path}")
         except Exception as exc:
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
         if not candidates:
+            _tlog(f"✓ 0 files matched {glob_pat!r}")
             return _ok(f"No files matched {glob_pat!r} in {path.name}/")
 
         if len(candidates) > _BATCH_DELETE_MAX:
+            _tlog(f"✗ too many matches (>{_BATCH_DELETE_MAX})")
             return _err(
                 f"Too many matches (>{_BATCH_DELETE_MAX}) for {glob_pat!r} — narrow your pattern."
             )
@@ -975,18 +1095,22 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                 err_tail = "; ".join(errors[:3])
                 if len(errors) > 3:
                     err_tail += f"; +{len(errors) - 3} more"
+                _tlog(f"✗ {len(errors)} file(s) could not be deleted (deleted {deleted})")
                 return {
                     "success": deleted > 0,
                     "output":  f"{base_msg}. {len(errors)} failed: {err_tail}",
                     "error":   f"{len(errors)} file(s) could not be deleted",
                 }
+            _tlog(f"✓ deleted {deleted} file{'s' if deleted != 1 else ''}")
             return _ok(base_msg)
 
+        _tlog(f"⚠ awaiting confirmation — {len(candidates)} files")
         return request_confirmation(prompt, _do_batch_delete)
 
     if action == "find_in_files":
         pattern_raw = params.get("pattern", "")
         if not isinstance(pattern_raw, str) or pattern_raw == "":
+            _tlog("✗ missing 'pattern' (content to search for)")
             return _err("Missing 'pattern' (content to search for)")
 
         glob_pat       = (params.get("glob") or "").strip()
@@ -1003,6 +1127,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             if found_dir:
                 base = found_dir
             else:
+                _tlog(f"✗ path not found: {raw_path}")
                 return _err(f"Path not found: {raw_path}")
 
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -1010,6 +1135,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
             try:
                 matcher = re.compile(pattern_raw, flags)
             except re.error as exc:
+                _tlog(f"✗ invalid regex: {exc}")
                 return _err(f"Invalid regex: {exc}")
         else:
             matcher = re.compile(re.escape(pattern_raw), flags)
@@ -1070,6 +1196,7 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
                     break
         except Exception as exc:
             signals.terminal_done.emit(1)
+            _tlog(f"✗ {exc}")
             return _err(str(exc))
 
         if truncated_reason:
@@ -1078,11 +1205,13 @@ def _handle_file_operation(action: str, params: dict, confirmed: bool = False) -
 
         if not matches:
             tail = f" in {glob_pat} files" if glob_pat else ""
+            _tlog(f"✓ 0 matches for {pattern_raw!r}")
             return _ok(f"No matches for {pattern_raw!r}{tail}.")
 
         n         = len(matches)
         m         = len(files_with_matches)
         partial_t = f" (partial: {truncated_reason})" if truncated_reason else ""
+        _tlog(f"✓ {n} match{'es' if n != 1 else ''} across {m} file{'s' if m != 1 else ''}")
         return _ok(
             f"{n} match{'es' if n != 1 else ''} for {pattern_raw!r} "
             f"across {m} file{'s' if m != 1 else ''}{partial_t}."
