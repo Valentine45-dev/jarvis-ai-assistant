@@ -45,6 +45,15 @@ class AppConfig:
     # before sandbox execution. Useful during the document_creation rollout;
     # noisy long-term — flip to False once the pipeline is trusted.
     document_show_code: bool = True
+    # Universal terminal streaming — emit one-line action summaries from every
+    # handler (browser, files, system, etc.). Existing in-flight streamers
+    # (code_exec, document_handler, find_in_files) are not gated by this flag.
+    terminal_show_actions: bool = True
+    # Show the raw Haiku reasoning line behind a browser picker pick. Off by
+    # default — only useful when debugging element-selection misses.
+    browser_show_picker_reasoning: bool = False
+    # Mirror every _tlog line to logs/terminal.log (5MB rotating, 3 backups).
+    terminal_log_to_file: bool = False
 
     @classmethod
     def from_env(cls):

@@ -21,10 +21,13 @@ Confirmation matrix — who shows the confirm card for what:
 
 from __future__ import annotations
 
+import logging
 import platform
 import re
 import threading
 import uuid
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 _OS = platform.system().lower()  # "windows" | "darwin" | "linux"
@@ -163,3 +166,144 @@ def resolve_confirmation(user_response: str) -> dict:
                 return _err(str(exc))
         return _err("Action missing.")
     return {"success": False, "output": "Understood — standing down.", "error": ""}
+
+
+# ── Terminal panel streaming ──────────────────────────────────────────────────
+#
+# _tlog is the single emit point used by every handler that wants to surface an
+# action-summary line to the terminal panel. It also mirrors the same line to
+# logs/terminal.log when config.terminal_log_to_file is true.
+#
+# Format conventions (callers pick the glyph):
+#   ❯  action starting
+#   ✓  success
+#   ✗  failure
+#   ⚠  confirmation pending / warning
+#   ↳  sub-detail (picker result, path, etc.)
+#
+# Never raises. Real failures are surfaced to stderr via core.log.error so they
+# remain debuggable without crashing the handler that called us.
+
+_LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
+_FILE_LOGGER: logging.Logger | None = None
+_FILE_LOGGER_LOCK = threading.Lock()
+
+
+def _ensure_file_logger() -> logging.Logger | None:
+    """Lazy-init a 5MB×3 rotating logger writing to logs/terminal.log."""
+    global _FILE_LOGGER
+    if _FILE_LOGGER is not None:
+        return _FILE_LOGGER
+    with _FILE_LOGGER_LOCK:
+        if _FILE_LOGGER is not None:
+            return _FILE_LOGGER
+        try:
+            _LOG_DIR.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                _LOG_DIR / "terminal.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+            handler.setFormatter(logging.Formatter(
+                "[%(asctime)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            ))
+            logger = logging.getLogger("jarvis.terminal")
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+            if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+                logger.addHandler(handler)
+            _FILE_LOGGER = logger
+            return _FILE_LOGGER
+        except Exception as exc:
+            try:
+                from core.log import error
+                error("tlog", f"file logger init failed: {exc}")
+            except Exception:
+                pass
+            return None
+
+
+def _tlog(line: str) -> None:
+    """Emit one action-summary line to the terminal panel.
+
+    Gated by `config.terminal_show_actions`. When `config.terminal_log_to_file`
+    is also true, mirrors the line to logs/terminal.log via a rotating handler.
+    """
+    try:
+        from config.settings import config
+        if not config.terminal_show_actions:
+            return
+        from core.signals import signals
+        signals.terminal_line_ready.emit(line)
+        if getattr(config, "terminal_log_to_file", False):
+            logger = _ensure_file_logger()
+            if logger is not None:
+                try:
+                    logger.info(line)
+                except Exception as exc:
+                    try:
+                        from core.log import error
+                        error("tlog", f"file write failed: {exc}")
+                    except Exception:
+                        pass
+    except Exception as exc:
+        try:
+            from core.log import error
+            error("tlog", f"emit failed: {exc}")
+        except Exception:
+            pass
+
+
+# ── Redaction for fill/type values ────────────────────────────────────────────
+#
+# _redact_value masks sensitive values before they reach the terminal panel.
+# Applied in order:
+#   1. Field goal/selector mentions a sensitive keyword → "••••"
+#   2. Email-shaped value → "v•••@domain.com"
+#   3. Single token >24 chars (no whitespace) → "<redacted N chars>"
+#   4. Otherwise → truncate at 60 chars with ellipsis
+#
+# "key" and "token" alone are too ambiguous (cf. "key takeaway",
+# "token of appreciation") so they only mask when paired with an auth-context
+# modifier (api key, access token, ssh key, etc.).
+
+_REDACT_GOAL_RE = re.compile(
+    r"""
+    \b(?:
+        password | passwd | pwd | pin | ssn | cvv | secret | otp |
+        api[\s_-]?key | api[\s_-]?token |
+        access[\s_-]?token | auth[\s_-]?token | refresh[\s_-]?token |
+        bearer[\s_-]?token | session[\s_-]?token | csrf[\s_-]?token |
+        private[\s_-]?key | public[\s_-]?key | ssh[\s_-]?key |
+        encryption[\s_-]?key | security[\s_-]?key | license[\s_-]?key
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_EMAIL_RE = re.compile(r"^([^\s@]+)@([^\s@]+\.[^\s@]+)$")
+
+
+def _redact_value(goal: str, value: str) -> str:
+    """Mask sensitive values for terminal display. Never raises."""
+    try:
+        if value is None:
+            return ""
+        s = str(value)
+        g = str(goal or "")
+        if _REDACT_GOAL_RE.search(g):
+            return "••••"
+        m = _EMAIL_RE.match(s.strip())
+        if m:
+            local, domain = m.group(1), m.group(2)
+            head = local[:1] if local else ""
+            return f"{head}•••@{domain}"
+        if len(s) > 24 and " " not in s and "\t" not in s:
+            return f"<redacted {len(s)} chars>"
+        if len(s) > 60:
+            return s[:60] + "…"
+        return s
+    except Exception:
+        return "<redact-failed>"
