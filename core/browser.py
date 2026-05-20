@@ -44,7 +44,7 @@ _INTERACTIVE_ROLES: frozenset[str] = frozenset({
 })
 
 
-from core.handlers.shared import _ok, _err
+from core.handlers.shared import _ok, _err, _tlog, _redact_value
 
 
 # Search boxes — shared by fill_form and click (Enter submit fallback)
@@ -205,13 +205,17 @@ class BrowserSession:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
+        _tlog(f"❯ navigate {url}")
+
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 self._page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT)
                 title = self._page.title()
+                _tlog(f"✓ loaded \"{title}\"")
                 return _ok(f"Navigated to {url!r} — {title}")
             except Exception as exc:
                 msg = str(exc)
@@ -220,12 +224,17 @@ class BrowserSession:
                     if self._recover():
                         try:
                             self._page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT)
+                            _tlog(f"✓ loaded \"{self._page.title()}\"")
                             return _ok(f"Navigated to {url!r} — {self._page.title()}")
                         except Exception as exc2:
+                            _tlog(f"✗ {exc2}")
                             return _err(str(exc2))
+                    _tlog("✗ browser session lost — Chrome was closed externally")
                     return _err("Browser session lost — Chrome was closed externally")
                 if "timeout" in msg.lower():
+                    _tlog(f"✗ timed out (>15 s): {url}")
                     return _err(f"Page took too long to load (>15 s): {url}")
+                _tlog(f"✗ {msg}")
                 return _err(msg)
 
     # ── Phase 2: Interaction ──────────────────────────────────────────────────
@@ -355,9 +364,13 @@ class BrowserSession:
         Priority: selector (with search fallbacks) → optional text if selector fails
         (when both are given) → text-only. Then (x, y) only when no text/selector.
         """
+        click_label = selector or text or (f"({x},{y})" if x is not None and y is not None else "")
+        _tlog(f"❯ click {click_label!r}")
+
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 if selector:
@@ -371,33 +384,44 @@ class BrowserSession:
                     for s in list(dict.fromkeys(chain)):
                         r = self._try_click_locator(f"selector {s!r}", self._page.locator(s))
                         if r:
+                            _tlog("✓ clicked")
                             return r
 
                     if searchish:
                         r = self._try_search_role_buttons()
                         if r:
+                            _tlog("✓ clicked")
                             return r
                         r = self._try_submit_search_by_enter()
                         if r:
+                            _tlog("✓ clicked")
                             return r
 
                     if (text or "").strip():
                         tr = self._click_by_visible_text(text)
                         if tr.get("success"):
+                            _tlog("✓ clicked")
                             return tr
 
+                    _tlog(f"✗ element not found: {selector!r}")
                     return _err(f"Element not found: {selector!r}")
                 if text:
-                    return self._click_by_visible_text(text)
+                    tr = self._click_by_visible_text(text)
+                    _tlog("✓ clicked" if tr.get("success") else f"✗ {tr.get('error') or 'not found'}")
+                    return tr
                 if x is not None and y is not None:
                     self._page.mouse.click(x, y)
+                    _tlog("✓ clicked")
                     return _ok(f"Clicked at ({x}, {y})")
+                _tlog("✗ provide selector, text, or (x, y) coordinates")
                 return _err("Provide selector, text, or (x, y) coordinates")
             except Exception as exc:
                 msg = str(exc)
                 if "timeout" in msg.lower() or type(exc).__name__ == "TimeoutError":
                     target = selector or text or f"({x},{y})"
+                    _tlog(f"✗ element not found: {target!r}")
                     return _err(f"Element not found: {target!r}")
+                _tlog(f"✗ {msg}")
                 return _err(msg)
 
     def fill_form(self, fields: dict) -> dict:
@@ -407,9 +431,16 @@ class BrowserSession:
         Uses click + Ctrl+A + Delete + press_sequentially so SPA event handlers
         (YouTube, React, etc.) fire on every keystroke rather than a silent value set.
         """
+        if isinstance(fields, dict) and len(fields) == 1:
+            _k, _v = next(iter(fields.items()))
+            _tlog(f"❯ fill {_k!r} = {_redact_value(_k, _v)}")
+        else:
+            _tlog(f"❯ fill {len(fields) if isinstance(fields, dict) else 0} field(s)")
+
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             filled, errors = [], []
             for key, value in fields.items():
@@ -476,15 +507,19 @@ class BrowserSession:
                     errors.append(f"{key} ({exc})")
 
             if errors:
+                _tlog(f"✗ could not fill: {', '.join(errors)}")
                 return _err(f"Could not fill: {', '.join(errors)}")
+            _tlog("✓ filled")
             return _ok(f"Filled {len(filled)} field(s): {', '.join(filled)}")
 
     def read_page(self) -> dict:
         """Read tab metadata plus visible page text: document title, URL, then body (capped)."""
         _PAGE_CAP = 4_000
+        _tlog("❯ read_page")
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 url = self._page.url
@@ -509,31 +544,41 @@ class BrowserSession:
                         continue
 
                 if not text:
+                    _tlog(f"✓ \"{title or '(no title)'}\" — 0 chars extracted")
                     return _ok(header + "(no visible text in main/article/body — try navigating or use read_screen.)")
 
                 truncated = len(text) > _PAGE_CAP
                 snippet = text[:_PAGE_CAP]
                 if truncated:
                     snippet += f"\n\n[... truncated — showing {_PAGE_CAP} of {len(text)} chars]"
+                _tlog(f"✓ \"{title or '(no title)'}\" — {len(text)} chars extracted")
                 return _ok(header + snippet)
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
     def extract_content(self, selector: str = "") -> dict:
         """Return inner text of the first element matching selector."""
         if not selector:
+            _tlog("✗ extract: no selector provided")
             return _err("No selector provided")
+        _tlog(f"❯ extract {selector!r}")
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 text = self._page.locator(selector).first.inner_text(timeout=_TIMEOUT)
-                return _ok(text.strip()[:2000])
+                clipped = text.strip()[:2000]
+                _tlog(f"✓ {len(clipped)} chars extracted")
+                return _ok(clipped)
             except Exception as exc:
                 msg = str(exc)
                 if "timeout" in msg.lower() or type(exc).__name__ == "TimeoutError":
+                    _tlog(f"✗ element not found: {selector!r}")
                     return _err(f"Element not found: {selector!r}")
+                _tlog(f"✗ {msg}")
                 return _err(msg)
 
     def scroll(self, direction: str = "down", amount: int = 3) -> dict:
@@ -545,21 +590,30 @@ class BrowserSession:
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"❯ scroll {direction} {amount}")
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             dir_norm = (direction or "down").strip().lower()
             if dir_norm not in ("up", "down"):
+                _tlog(f"❯ scroll {direction} {amount}")
+                _tlog(f"✗ invalid direction: {direction!r}")
                 return _err(f"Invalid direction: {direction!r} (use 'up' or 'down')")
             try:
                 n = max(1, min(int(amount), 50))
             except (TypeError, ValueError):
                 n = 3
             delta_y = n * 300 * (1 if dir_norm == "down" else -1)
+            _tlog(f"❯ scroll {dir_norm} {n}")
 
             def _do() -> dict:
                 self._page.mouse.wheel(0, delta_y)
+                _tlog(f"✓ scrolled ~{abs(delta_y)}px")
                 return _ok(f"Scrolled {dir_norm} {n} tick{'s' if n != 1 else ''}.")
 
-            return self._with_recovery("scroll", _do)
+            result = self._with_recovery("scroll", _do)
+            if not result.get("success"):
+                _tlog(f"✗ {result.get('error') or 'scroll failed'}")
+            return result
 
     # ── Phase 2: Snapshot-driven element picker ───────────────────────────────
 
@@ -716,9 +770,13 @@ class BrowserSession:
     def _find_legacy_fallback(self, goal: str, action: str, value: str) -> dict:
         """Bypass Haiku and use the legacy chain (called when snapshot/Haiku unusable)."""
         if action == "click":
-            return self._click_by_visible_text(goal)
+            result = self._click_by_visible_text(goal)
+            _tlog("✓ clicked" if result.get("success") else f"✗ {result.get('error') or 'click failed'}")
+            return result
         if action == "fill":
+            # fill_form emits its own ✓/✗ — no extra emission here.
             return self.fill_form({goal: value})
+        _tlog("✗ find_and_act: cannot 'find' without a snapshot")
         return _err("find_and_act: cannot 'find' without a snapshot")
 
     def find_and_act(self, goal: str, action: str, value: str = "") -> dict:
@@ -733,10 +791,19 @@ class BrowserSession:
         ``"fill"``. Returns the standard ``{success, output, error}`` envelope.
         """
         if action not in ("click", "fill", "find"):
+            _tlog(f"✗ find_and_act: unsupported action {action!r}")
             return _err(f"find_and_act: unsupported action {action!r}")
         goal = (goal or "").strip()
         if not goal:
+            _tlog("✗ find_and_act: empty goal")
             return _err("find_and_act: empty goal")
+
+        if action == "fill":
+            _tlog(f"❯ fill {goal!r} = {_redact_value(goal, value)}")
+        elif action == "click":
+            _tlog(f"❯ click {goal!r}")
+        else:
+            _tlog(f"❯ find {goal!r}")
 
         # Kill switch — skip the LLM picker entirely when disabled by env.
         import os
@@ -831,57 +898,83 @@ class BrowserSession:
                 f"(haiku raw: {raw[:120]!r})"
             )
 
+            # Picker line — always shown when terminal_show_actions is on.
+            _tlog(f"↳ picked ref_{ref_num} ({role} \"{name}\")")
+            # Optional Haiku raw reasoning — gated by browser_show_picker_reasoning.
+            try:
+                if _cfg and getattr(_cfg, "browser_show_picker_reasoning", False):
+                    from core.log import _safe
+                    _tlog(f"↳ haiku: {_safe(raw[:120])}")
+            except Exception:
+                pass
+
             if action == "find":
+                _tlog(f"✓ found ref_{ref_num}")
                 return _ok(f"Found ref_{ref_num}: role={role!r} name={name!r}")
             if action == "click":
                 result = self._exec_click_by_role(role, name, goal)
                 _dlog(f"click result: success={result.get('success')} err={result.get('error', '')!r}")
+                _tlog("✓ clicked" if result.get("success") else f"✗ {result.get('error') or 'click failed'}")
                 return result
             # action == "fill"
-            return self._exec_fill_by_role(role, name, value, goal)
+            result = self._exec_fill_by_role(role, name, value, goal)
+            _tlog("✓ filled" if result.get("success") else f"✗ {result.get('error') or 'fill failed'}")
+            return result
 
     # ── Phase 2: Screenshots ──────────────────────────────────────────────────
 
     def screenshot_page(self, path: str | None = None) -> dict:
         """Full-page screenshot. Saves to Desktop if no path given."""
         from pathlib import Path
+        _tlog("❯ browser screenshot")
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 save_path = path or str(Path.home() / "Desktop" / "jarvis_browser_screenshot.png")
                 self._page.screenshot(path=save_path, full_page=True)
+                _tlog(f"✓ saved → {Path(save_path).name}")
                 return _ok(f"Screenshot saved: {save_path}")
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
     def screenshot_element(self, selector: str = "", path: str | None = None) -> dict:
         """Screenshot a specific element matching selector."""
         from pathlib import Path
         if not selector:
+            _tlog("✗ browser screenshot: no selector provided")
             return _err("No selector provided")
+        _tlog(f"❯ browser screenshot {selector!r}")
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 save_path = path or str(Path.home() / "Desktop" / "jarvis_element_screenshot.png")
                 self._page.locator(selector).first.screenshot(path=save_path, timeout=_TIMEOUT)
+                _tlog(f"✓ saved → {Path(save_path).name}")
                 return _ok(f"Element screenshot saved: {save_path}")
             except Exception as exc:
                 msg = str(exc)
                 if "timeout" in msg.lower() or type(exc).__name__ == "TimeoutError":
+                    _tlog(f"✗ element not found: {selector!r}")
                     return _err(f"Element not found: {selector!r}")
+                _tlog(f"✗ {msg}")
                 return _err(msg)
 
     # ── Phase 2: Tab management ───────────────────────────────────────────────
 
     def new_tab(self, url: str = "") -> dict:
         """Open a new tab and optionally navigate to url. Makes the new tab active."""
+        _tlog(f"❯ new tab → {url or 'blank'}")
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 self._page = self._context.new_page()
@@ -889,9 +982,13 @@ class BrowserSession:
                     if not url.startswith(("http://", "https://")):
                         url = "https://" + url
                     self._page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT)
-                    return _ok(f"New tab → {url!r} — {self._page.title()}")
+                    title = self._page.title()
+                    _tlog(f"✓ loaded \"{title}\"")
+                    return _ok(f"New tab → {url!r} — {title}")
+                _tlog("✓ loaded \"(blank)\"")
                 return _ok("New blank tab opened")
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
     @staticmethod
@@ -995,9 +1092,12 @@ class BrowserSession:
         can be closed without making it active first). ``match`` is a free-text phrase;
         substrings are tokenised and scored (URL match beats title match).
         """
+        _filter_label = url_contains or title_contains or match or "active"
+        _tlog(f"❯ close tab ({_filter_label})")
         with self._lock:
             guard = self._not_ready()
             if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
                 target, _reason = self._find_page_to_close(
@@ -1006,6 +1106,7 @@ class BrowserSession:
                     match=match,
                 )
                 if target is None and (title_contains or url_contains or match):
+                    _tlog("✗ no open tab matched that description")
                     return _err(
                         f"No open tab matched that description. Open tabs: {self._list_tabs_brief()}"
                     )
@@ -1017,17 +1118,21 @@ class BrowserSession:
                 remaining = list(self._context.pages)
                 if not remaining:
                     self._page = self._context.new_page()
+                    _tlog("✓ closed (opened new blank tab)")
                     return _ok("All tabs were closed; opened a new blank tab.")
 
                 if (not was_active) and any(self._page is p for p in remaining):
+                    _tlog("✓ closed")
                     return _ok(
                         f"Tab closed (matched request) — active tab: {self._safe_title(self._page)!r}"
                     )
                 self._page = remaining[-1]
+                _tlog("✓ closed")
                 return _ok(
                     f"Tab closed — active tab: {self._safe_title(self._page)!r}"
                 )
             except Exception as exc:
+                _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
 
