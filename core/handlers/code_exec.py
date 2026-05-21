@@ -1,4 +1,37 @@
-"""Handler: code_execution."""
+"""Handler: code_execution.
+
+WARNING — DELIBERATE-RCE ENDPOINT
+=================================
+This handler executes arbitrary user- or AI-generated commands and Python code
+in the JARVIS process tree. There is no sandbox; the gates below are
+defence-in-depth and must be kept in place.
+
+Gates, in order of trust:
+
+  1. `config.code_exec_enabled` (R2-5) — master kill switch. When False, every
+     action short-circuits with an explicit "disabled" reply. Use this to run
+     JARVIS on a shared machine without exposing the RCE endpoint.
+  2. `_danger_check` — narrow regex that catches the loudest destructive
+     shell patterns (rm -rf, format C:, Remove-Item -Recurse -Force, …) and
+     returns a confirm card before subprocess launch. Treat as best-effort
+     defence-in-depth, not a sandbox.
+  3. AI-generated shell commands from `_nl_to_command`, `_attempt_fix`, and
+     `_run_plan` (R2-1, R2-7) require explicit user confirmation by default.
+     The escape hatch is `config.allow_ai_command_autorun=True` — only enable
+     it on a trusted single-user machine; Sonnet's `auto_safe` self-rating is
+     trusted ONLY when the user has explicitly opted in.
+  4. `run_python` requests a session-first-use confirm (R2-5) because Python
+     bytecode bypasses the shell danger regex entirely. The session flag
+     clears on JARVIS restart, never via a runtime path.
+  5. `install_package` only accepts PEP 508 / npm safelisted specs (R2-6) —
+     flags and shell metas are rejected before subprocess launch.
+
+`executor.py` strips underscore-prefixed keys from `params` before dispatch
+(R2-2), so the brain can't inject `_danger_confirmed`, `_run_python_session_
+confirmed`, or any other internal gate-state magic key from here.
+
+Do not relax any of these gates without an explicit security review.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +52,31 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.handlers.shared import _ok, _err, request_confirmation
+
+
+# ── Config probes (R2-1 / R2-5 / R2-7) ────────────────────────────────────────
+# Lazy-imported so tests can monkeypatch config without touching this module.
+
+def _code_exec_enabled() -> bool:
+    """Return False when the handler should refuse every action."""
+    try:
+        from config.settings import config
+        return bool(getattr(config, "code_exec_enabled", True))
+    except Exception:
+        return True
+
+
+def _autorun_allowed() -> bool:
+    """Return True when AI-generated shell commands may run without user confirm.
+
+    Default is False — every command from `_nl_to_command`, `_attempt_fix`, and
+    `_run_plan` shows a confirm card before subprocess launch.
+    """
+    try:
+        from config.settings import config
+        return bool(getattr(config, "allow_ai_command_autorun", False))
+    except Exception:
+        return False
 
 # Background processes launched via run_background — pid → Popen
 # R2-14: guarded by _bg_procs_lock. Read/write happens from the dispatch
@@ -244,8 +302,23 @@ def _danger_check(command: str, on_confirm: Callable[[], dict] | None = None) ->
     return None
 
 
-def _manual_command_confirmation(prompt: str, command: str, cwd: str | None) -> dict:
-    """Ask before running a non-auto-safe command suggestion."""
+def _ai_command_confirmation(
+    prompt: str,
+    command: str,
+    cwd: str | None,
+    *,
+    confirm_type: str = "ai_command",
+) -> dict:
+    """R2-1: confirm an AI-generated shell command before subprocess launch.
+
+    The registered callback runs `command` directly via `_stream_execute` —
+    it never re-enters `_nl_to_command` / `_attempt_fix` / `_plan_steps`, so
+    confirming this card cannot trigger a second Sonnet call.
+
+    `confirm_type` is surfaced on the result dict for the UI ("ai_command",
+    "fix", "ai_plan"); `fix_applied` is set only on the fix path so retry
+    logic in `_post_execute` doesn't loop on the same failure.
+    """
     def _run_confirmed() -> dict:
         try:
             args = shlex.split(command)
@@ -255,12 +328,53 @@ def _manual_command_confirmation(prompt: str, command: str, cwd: str | None) -> 
         _store_block(CommandBlock(
             command=command, output=out, exit_code=exit_code,
             duration_ms=dur, cwd=os.getcwd(),
-            ai_generated=True, fix_applied=True,
+            ai_generated=True,
+            fix_applied=(confirm_type == "fix"),
         ))
         return _ok(out) if exit_code == 0 else _err(out)
 
     result = request_confirmation(prompt, _run_confirmed)
-    result.update({"confirm_type": "fix", "subject": command})
+    result.update({"confirm_type": confirm_type, "subject": command})
+    return result
+
+
+# ── run_python first-use gate (R2-5) ──────────────────────────────────────────
+# Python code is not gated by `_danger_check` (which is shell-pattern only), so
+# the first `run_python` call this session shows a confirmation card explaining
+# that Python runs in the JARVIS process tree. The flag clears on restart; it
+# has no runtime-reachable reset path so a confused workflow can't accidentally
+# silence the gate.
+
+_run_python_session_confirmed: bool = False
+_run_python_session_lock = threading.Lock()
+
+
+def _run_python_first_use_gate(code: str, cwd: str | None) -> dict | None:
+    """Return a confirmation dict on the first run_python this session, else None."""
+    with _run_python_session_lock:
+        if _run_python_session_confirmed:
+            return None
+
+    def _on_confirm() -> dict:
+        global _run_python_session_confirmed
+        with _run_python_session_lock:
+            _run_python_session_confirmed = True
+        # Recursive dispatch — the gate is now satisfied so this falls through
+        # to the real run_python branch.
+        return _handle_code_execution(
+            "run_python",
+            {"code": code, "working_directory": cwd},
+        )
+
+    snippet = code if len(code) <= 200 else code[:200] + "…"
+    prompt = (
+        "run_python executes arbitrary Python in the JARVIS process tree — "
+        "this bypasses the shell danger regex. Confirm once to enable for "
+        "the rest of this session.\n\n"
+        f"  {snippet}"
+    )
+    result = request_confirmation(prompt, _on_confirm)
+    result.update({"confirm_type": "run_python_first_use", "subject": code[:200]})
     return result
 
 
@@ -474,7 +588,11 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
         # Danger-check the AI-generated fix before touching anything
         if _danger_check(fix_cmd):
             auto_safe = False
-        if auto_safe:
+        # R2-7: `auto_safe` is Sonnet's self-rating of the fix command — trust
+        # it ONLY when the user has explicitly opted into AI autorun. The
+        # default posture surfaces every Sonnet-generated command to the user
+        # before subprocess launch.
+        if auto_safe and _autorun_allowed():
             try:
                 fix_args = shlex.split(fix_cmd)
             except Exception:
@@ -489,7 +607,7 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
                 return _ok(f"{explain} — fix applied automatically.")
             return _err(f"Auto-fix also failed: {out}")
         prompt = f"{explain} Suggested fix: {fix_cmd}"
-        return _manual_command_confirmation(prompt, fix_cmd, cwd)
+        return _ai_command_confirmation(prompt, fix_cmd, cwd, confirm_type="fix")
     except Exception:
         return None
 
@@ -529,6 +647,28 @@ _FAILURE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Windows cmd.exe built-ins — these are NOT standalone executables. Calling
+# subprocess.run(["cd"]) on Windows fails with WinError 2 because cd lives
+# inside cmd.exe, not on PATH. When run_shell receives one of these as the
+# first token, we wrap the whole command as `cmd /c {code}` before execution.
+_WIN_CMD_BUILTINS: frozenset[str] = frozenset({
+    "cd", "dir", "echo", "cls", "set", "type", "copy", "move",
+    "del", "mkdir", "rmdir", "ren", "attrib",
+})
+
+
+def _wrap_win_builtin(code: str) -> str:
+    """If on Windows and `code` starts with a cmd built-in, wrap as cmd /c."""
+    if sys.platform != "win32":
+        return code
+    stripped = code.lstrip()
+    if not stripped:
+        return code
+    first = stripped.split(None, 1)[0].lower()
+    if first in _WIN_CMD_BUILTINS:
+        return f'cmd /c {code}'
+    return code
+
 
 def _plan_steps(goal: str, env_ctx: dict) -> list[str] | None:
     """Break a multi-step goal into ordered shell commands via Claude Sonnet.
@@ -565,8 +705,8 @@ def _plan_steps(goal: str, env_ctx: dict) -> list[str] | None:
         return None
 
 
-def _run_plan(steps: list[str], cwd: str | None) -> dict:
-    """Execute steps sequentially. Stop on first failure and explain it."""
+def _execute_plan(steps: list[str], cwd: str | None) -> dict:
+    """Execute a confirmed Sonnet plan step-by-step. Stop on first failure."""
     from core.signals import signals
     n = len(steps)
     for i, cmd in enumerate(steps, 1):
@@ -599,15 +739,47 @@ def _run_plan(steps: list[str], cwd: str | None) -> dict:
     return _ok(f"Done — ran {n} step{plural}, all succeeded.")
 
 
+def _run_plan(steps: list[str], cwd: str | None) -> dict:
+    """R2-1 / R2-7: confirm the full Sonnet plan before subprocess launch.
+
+    Confirming once per plan (rather than once per step) keeps multi-step
+    routines usable while still gating Sonnet's authority to autonomously
+    fan out shell commands. With `config.allow_ai_command_autorun=True`,
+    runs immediately — but each step is still danger-regex-checked inside
+    `_execute_plan`, so the loud destructive patterns still surface a card.
+    """
+    if not steps:
+        return _err("Empty plan — nothing to run.")
+    if _autorun_allowed():
+        return _execute_plan(steps, cwd)
+    plan_view = "\n".join(f"  {i}. {cmd}" for i, cmd in enumerate(steps, 1))
+    prompt = f"Sonnet drafted a {len(steps)}-step plan. Run it?\n{plan_view}"
+    result = request_confirmation(prompt, lambda: _execute_plan(steps, cwd))
+    result.update({"confirm_type": "ai_plan", "subject": " && ".join(steps)})
+    return result
+
+
 # ── Main handler ──────────────────────────────────────────────────────────────
 
 def _handle_code_execution(action: str, params: dict) -> dict:
+    # R2-5: master kill switch. If the operator has disabled code execution in
+    # settings, refuse every action up-front — no danger check, no AI calls,
+    # no subprocess.
+    if not _code_exec_enabled():
+        return _err(
+            "Code execution is disabled (config.code_exec_enabled=False). "
+            "Enable it in settings to run shell, scripts, or run_python."
+        )
+
     code = params.get("code", params.get("script_path", ""))
     cwd_raw = params.get("working_directory", None)
     cwd = _valid_cwd(cwd_raw)
     danger_confirmed = bool(params.get("_danger_confirmed", False))
 
     # ── Danger check (runs before anything else, no exceptions) ───────────────
+    # NOTE: the danger regex is shell-pattern only, so it is best-effort for
+    # `run_python` (Python doesn't speak shell). The run_python branch below
+    # has its own session-first-use gate that fires regardless of this check.
     if code and not danger_confirmed:
         def _run_after_danger_confirm() -> dict:
             return _handle_code_execution(action, {**params, "_danger_confirmed": True})
@@ -768,6 +940,12 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
     # ── Standard actions ──────────────────────────────────────────────────────
     if action == "run_python":
+        # R2-5: session-first-use confirm. Python code bypasses the shell danger
+        # regex entirely, so the first call this session shows a confirm card.
+        # Subsequent calls run directly until JARVIS restarts.
+        first_use = _run_python_first_use_gate(code, cwd_raw)
+        if first_use:
+            return first_use
         out, exit_code, duration_ms = _stream_execute(
             [sys.executable, "-c", code], cwd=cwd, timeout=30,
         )
@@ -798,8 +976,28 @@ def _handle_code_execution(action: str, params: dict) -> dict:
                 danger = _danger_check(generated)
                 if danger:
                     return danger
+                # R2-1: every Sonnet-generated shell command is surfaced to the
+                # user before subprocess launch. The card shows the original
+                # natural-language phrasing AND the translated command so the
+                # user can see how JARVIS interpreted the request. Bypass by
+                # opting into `config.allow_ai_command_autorun=True`.
+                if not _autorun_allowed():
+                    prompt = (
+                        f'AI translated "{code}" into:\n  {generated}\n\n'
+                        "Run it?"
+                    )
+                    return _ai_command_confirmation(
+                        prompt, generated, cwd, confirm_type="ai_command",
+                    )
                 code = generated
                 ai_generated = True
+
+        # Windows cmd built-ins (cd, dir, echo, …) aren't standalone executables
+        # — wrap them as `cmd /c …` so subprocess can find a real binary on PATH.
+        # Only applies to run_shell; git_command and npm_command are real exes.
+        if action == "run_shell":
+            code = _wrap_win_builtin(code)
+
         try:
             args = shlex.split(code) if isinstance(code, str) else code
         except Exception as exc:

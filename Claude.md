@@ -497,6 +497,23 @@ Execute code, scripts, or terminal commands.
 | "kill process X", "terminate PID …" | `kill_process` |
 | "run git …" | `git_command` |
 | "run python …", inline snippet | `run_python` |
+| "what's my current directory", "what folder am I in", "show me my CWD", "where am I", "print working directory" | `run_python` with `code`: `"import os; print(os.getcwd())"` |
+
+**Working-directory queries — route to `run_python`, never `run_shell`:**
+
+*"what is my current working directory"*, *"what folder am I in"*, *"show me my CWD"*, *"where am I"*, *"pwd"*, *"print working directory"* — emit `run_python` with **`code`: `"import os; print(os.getcwd())"`**. Do **not** emit `run_shell` with `code: "cd"` or `code: "pwd"` — on Windows, `cd` is a `cmd.exe` built-in (not a standalone executable) and fails with `WinError 2` when called directly. `run_python` works the same on every OS and avoids the shell-builtin trap entirely. (Note: the executor also auto-wraps Windows `cmd` built-ins as `cmd /c …` in `run_shell`, but it's still cleaner to route CWD queries straight to `run_python`.)
+
+```json
+{
+  "intent": "code_execution",
+  "action": "run_python",
+  "parameters": { "code": "import os; print(os.getcwd())" },
+  "confidence": 0.96,
+  "response": "Pulling your current directory.",
+  "hud_status": "EXECUTING",
+  "requires_confirmation": false
+}
+```
 
 **Parameters:**
 
