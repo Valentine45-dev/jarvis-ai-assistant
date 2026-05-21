@@ -50,6 +50,10 @@ _FIRST_MESSAGE = "JARVIS online — at your service, Valentine."
 # ── Module-level state ────────────────────────────────────────────────────────
 _assistant_id: Optional[str] = None
 _sync_lock = threading.Lock()
+# Set once per process after the first sync failure; gates subsequent error
+# logging so a persistent Vapi API issue (bad key, schema drift, etc.) doesn't
+# spam stderr on every launch. Cleared only by restarting the process.
+_sync_failed_logged: bool = False
 
 
 def get_assistant_id() -> Optional[str]:
@@ -73,37 +77,43 @@ def sync_assistant(force_update: bool = False) -> Optional[str]:
     with _sync_lock:
         try:
             from vapi import Vapi
-            import vapi.types as VT
 
             client = Vapi(token=config.vapi_api_key)
 
             voice_id = _EL_VOICE_IDS.get(config.tts_voice, _EL_VOICE_IDS["male-british"])
 
-            # ── Build typed Vapi config objects ──────────────────────────────
+            # ── Build Vapi config dicts ───────────────────────────────────────
+            # The Fern-generated VT.AnthropicModel class does NOT expose a
+            # `provider` field, but Vapi's REST API requires `model.provider`
+            # to discriminate between LLM backends. Using the typed class
+            # silently produces a 400 — "model.provider must be one of …".
+            # We send plain dicts here so the discriminator is present.
+            # Same shape we'd build by hand from the Vapi docs.
 
-            model_cfg = VT.AnthropicModel(
-                model=config.claude_model,
-                messages=[{"role": "system", "content": _SYSTEM_PROMPT}],
-                max_tokens=512,
-                temperature=0.7,
-            )
+            model_cfg = {
+                "provider": "anthropic",
+                "model": config.claude_model,
+                "messages": [{"role": "system", "content": _SYSTEM_PROMPT}],
+                "maxTokens": 512,
+                "temperature": 0.7,
+            }
 
-            voice_cfg = VT.AssistantVoice_11Labs(
-                provider="11labs",
-                voice_id=voice_id,
-                stability=0.50,
-                similarity_boost=0.75,
-                style=0.0,
-                use_speaker_boost=True,
-                optimize_streaming_latency=3,
-            )
+            voice_cfg = {
+                "provider": "11labs",
+                "voiceId": voice_id,
+                "stability": 0.50,
+                "similarityBoost": 0.75,
+                "style": 0.0,
+                "useSpeakerBoost": True,
+                "optimizeStreamingLatency": 3,
+            }
 
-            transcriber_cfg = VT.AssistantTranscriber_Deepgram(
-                provider="deepgram",
-                model="nova-2",
-                language="en",
-                smart_format=True,
-            )
+            transcriber_cfg = {
+                "provider": "deepgram",
+                "model": "nova-2",
+                "language": "en",
+                "smartFormat": True,
+            }
 
             # ── Create or update ─────────────────────────────────────────────
 
@@ -154,8 +164,15 @@ def sync_assistant(force_update: bool = False) -> Optional[str]:
             return _assistant_id
 
         except Exception as exc:
-            if config.debug_mode:
-                print(f"[vapi] Sync failed: {exc}")
+            global _sync_failed_logged
+            if not _sync_failed_logged:
+                # First failure of the session prints a short summary (avoid
+                # dumping the full 800-char response with cf-ray headers).
+                short = str(exc)
+                if len(short) > 240:
+                    short = short[:240] + "…"
+                print(f"[vapi] Sync failed (once per session): {short}")
+                _sync_failed_logged = True
             return None
 
 
