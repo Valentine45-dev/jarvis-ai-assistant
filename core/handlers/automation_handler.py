@@ -27,7 +27,6 @@ _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
 
 _CONFIRMATION_REQUIRED_ACTIONS: frozenset[tuple[str, str]] = frozenset({
     ("automation_task", "remove_workflow"),
-    ("automation_task", "remove_all_workflows"),
     ("system_control",  "shutdown"),
     ("system_control",  "restart"),
     ("system_control",  "sleep"),

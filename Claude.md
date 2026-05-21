@@ -295,7 +295,7 @@ Execute a multi-step workflow or predefined routine.
 - `create_workflow` — Define and persist a new automation
 - `list_workflows` — List available automations
 - `remove_workflow` — Delete a named workflow (destructive — always `requires_confirmation: true`)
-- `remove_all_workflows` — Delete every saved workflow. Use when the user says *"delete all workflows"*, *"clear all my workflows"*, *"remove every workflow"*, *"wipe my workflows"*. Always `requires_confirmation: true`. No parameters needed — the handler counts the saved workflows itself and shows a confirmation card listing how many will be deleted.
+- `remove_all_workflows` — Delete every saved workflow. Use when the user says *"delete all workflows"*, *"clear all my workflows"*, *"remove every workflow"*, *"wipe my workflows"*. No parameters needed. Confirmed in-app — the handler counts the saved workflows and shows a confirmation card with the count. Keep `requires_confirmation` **`false`** in JSON (avoid double prompt — same pattern as `batch_delete` / `replace_in_file`).
 - `rename_workflow` — Rename an existing workflow
 
 **Parameters:**
@@ -308,7 +308,7 @@ Execute a multi-step workflow or predefined routine.
 ```
 
 **HUD Label:** `AUTOMATION`
-**Confirmation:** `true` for `remove_workflow` and `remove_all_workflows`
+**Confirmation:** `true` for `remove_workflow`. `remove_all_workflows` is confirmed in-app — keep `requires_confirmation` **`false`** in JSON.
 
 **Executor — steps that need a UI confirm (e.g. `create_file` / `delete_file`):** Keep the file/document confirmation card visible. After the user confirms, the workflow must resume automatically from the next step and continue sequentially until completion (or first real failure). Multiple confirmation-required steps in one workflow are supported.
 
