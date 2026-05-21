@@ -484,6 +484,70 @@ _P: dict[tuple, dict] = {
         ],
     },
 
+    # ── VISION ANALYSIS ─────────────────────────────────────────────
+    # Pools are short preambles — the actual analysis text streams in
+    # via the OUTPUT_IS_RESPONSE rule for these actions, so we
+    # deliberately keep the preamble lightweight (or empty) and let
+    # Claude's vision response carry the substance.
+    ("vision_analysis", "describe"): {
+        "ok": [
+            "Taking a look.",
+            "Here's what I see.",
+            "Got it —",
+            "On it.",
+        ],
+        "err": [
+            "Couldn't analyze that. {e}",
+            "Vision check failed. {e}",
+            "Didn't get a result. {e}",
+        ],
+    },
+    ("vision_analysis", "read_text"): {
+        "ok": [
+            "Here's the text.",
+            "Read it.",
+            "Text extracted.",
+        ],
+        "err": [
+            "Couldn't analyze that. {e}",
+            "Vision check failed. {e}",
+            "Didn't get a result. {e}",
+        ],
+    },
+    ("vision_analysis", "find_ui_element"): {
+        "ok": [
+            "Found it.",
+            "Located —",
+            "There it is.",
+        ],
+        "err": [
+            "Couldn't analyze that. {e}",
+            "Vision check failed. {e}",
+            "Didn't get a result. {e}",
+        ],
+    },
+    ("vision_analysis", "answer_question"): {
+        # Output IS the answer — empty preamble so the analysis text
+        # gets spoken on its own, no JARVIS framing in front.
+        "ok": [""],
+        "err": [
+            "Couldn't analyze that. {e}",
+            "Vision check failed. {e}",
+            "Didn't get a result. {e}",
+        ],
+    },
+    ("vision_analysis", "screenshot_and_describe"): {
+        "ok": [
+            "Screenshot taken.",
+            "Here's what's on screen.",
+        ],
+        "err": [
+            "Couldn't analyze that. {e}",
+            "Vision check failed. {e}",
+            "Didn't get a result. {e}",
+        ],
+    },
+
     # ── JARVIS META ──────────────────────────────────────────────────
     ("jarvis_meta", "list_voices"): {
         "ok": [
