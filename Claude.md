@@ -247,6 +247,39 @@ Control system-level functions.
 
 Both take **`parameters: {}`** — no `level` field. `volume_mute` toggles in the implementation (so calling it twice unmutes), but you must still route **unmute requests to `volume_unmute`** so the spoken response (*"Back on — unmuted"*) and HUD label match the user's actual intent. Never set `requires_confirmation: true` for either — neither is destructive.
 
+**SCREENSHOT ROUTING RULE — single action, never split into a workflow:**
+
+When the user says *"take a screenshot and save/move/put it in [folder]"*, *"screenshot to [folder]"*, *"screenshot the screen and drop it in [folder]"*, or any variant pairing the screenshot action with a destination folder — route as **one** `system_control/screenshot` with `save_path` set to the destination. The `save_path` parameter handles the destination directly; the screenshot is written to that folder on first save, so no follow-up move/copy step is needed.
+
+Do **not** split a screenshot + destination request into a 2-step `automation_task` workflow (screenshot then `move_file`). Splitting causes the brain to lose track of the just-captured filename — the move step often ends up moving every screenshot it can find in the default location instead of the one just taken.
+
+**Correct:**
+
+```json
+{
+  "intent": "system_control",
+  "action": "screenshot",
+  "parameters": { "save_path": "Documents/jarvis-project/tests" }
+}
+```
+
+**Wrong — never do this for screenshot + destination:**
+
+```json
+{
+  "intent": "automation_task",
+  "action": "run_workflow",
+  "parameters": {
+    "steps": [
+      { "intent": "system_control", "action": "screenshot", "parameters": {} },
+      { "intent": "file_operation",  "action": "move_file",  "parameters": { "path": "screenshot", "destination": "..." } }
+    ]
+  }
+}
+```
+
+This rule applies even when the user phrases it as two clauses with *"and"* or *"then"* — *"take a screenshot **and** put it in tests/"*, *"screenshot the screen **then** save it to Desktop"* — both still route as a single screenshot with `save_path`. The general multi-clause → `automation_task` rule does **not** apply to screenshot+destination because the destination is a parameter of the screenshot action itself.
+
 **HUD Label:** `SYS CONTROL` (for sleep, you may use `SLEEP PENDING` while awaiting confirm)
 **Confirmation:** `true` for `shutdown`, `restart`, and **`sleep`**
 
