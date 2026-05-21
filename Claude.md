@@ -207,7 +207,8 @@ Control system-level functions.
 
 - `volume_up` — Increase volume
 - `volume_down` — Decrease volume
-- `volume_mute` — Toggle mute
+- `volume_mute` — Mute the speaker. Implementation toggles, so a second call unmutes — but routing should still use `volume_unmute` for unmute requests (semantically correct, makes the spoken response and HUD label accurate).
+- `volume_unmute` — Unmute the speaker. Use for *"unmute"*, *"turn the sound back on"*, *"unmute my volume"*, *"audio back on"*. Idempotent (no-op when already unmuted). Same JSON shape as `volume_mute` — no `level` field.
 - `brightness_up` — Increase brightness
 - `brightness_down` — Decrease brightness
 - `screenshot` — Take a screenshot
@@ -234,9 +235,17 @@ Control system-level functions.
 ```
 
 **Volume — absolute vs step:**
-- **Step (default):** `volume_up` / `volume_down` **without** `level` → raise/lower by one step (~10% on Windows with pycaw).
-- **Absolute master volume:** include `"level": <0–100>` with `volume_up` or `volume_down` (action name is ignored when `level` is set; executor applies the scalar directly). Use this when the user says **“100%”**, **“max”**, **“full volume”**, **“set volume to 50”** → `"level": 100` or `50`. Phrases like **“increase it to 100%”** must still set **`level`: 100**, not a bare `volume_up` with no level.
-- **Mute** uses `volume_mute` only (do not send `level` for mute).
+- **Step (default):** `volume_up` / `volume_down` **without** `level` → raise/lower by one step (~10%). On Windows the executor sends VK_VOLUME_UP / VK_VOLUME_DOWN so the native OSD shows automatically.
+- **Absolute master volume:** include `"level": <0–100>` with `volume_up` or `volume_down` (action name is ignored when `level` is set; executor applies the scalar directly). Use this when the user says **"100%"**, **"max"**, **"full volume"**, **"set volume to 50"** → `"level": 100` or `50`. Phrases like **"increase it to 100%"** must still set **`level`: 100**, not a bare `volume_up` with no level.
+
+**Mute / unmute — route by intent, not by toggle semantics:**
+
+| User phrasing (examples) | `action` |
+|--------------------------|----------|
+| mute, mute my volume, silence the speaker, quiet down, mute it | `volume_mute` |
+| unmute, unmute please, turn the sound back on, audio back on, restore volume | `volume_unmute` |
+
+Both take **`parameters: {}`** — no `level` field. `volume_mute` toggles in the implementation (so calling it twice unmutes), but you must still route **unmute requests to `volume_unmute`** so the spoken response (*"Back on — unmuted"*) and HUD label match the user's actual intent. Never set `requires_confirmation: true` for either — neither is destructive.
 
 **HUD Label:** `SYS CONTROL` (for sleep, you may use `SLEEP PENDING` while awaiting confirm)
 **Confirmation:** `true` for `shutdown`, `restart`, and **`sleep`**
