@@ -14,7 +14,7 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from core.handlers.shared import _OS, _ok, _err
+from core.handlers.shared import _OS, _ok, _err, _tlog
 
 # Bounds for Program Files / AppData exe scanning — keep cold lookups snappy.
 _APP_SCAN_TIME_BUDGET_S = 5.0
@@ -470,6 +470,15 @@ def _find_app_windows(name: str) -> str | None:
 # ── Intent handlers ───────────────────────────────────────────────────────────
 
 def _handle_open_app(action: str, params: dict) -> dict:
+    result = _handle_open_app_inner(action, params)
+    if result.get("success"):
+        _tlog("✓ launched")
+    else:
+        _tlog(f"✗ {result.get('error') or 'launch failed'}")
+    return result
+
+
+def _handle_open_app_inner(action: str, params: dict) -> dict:
     from core.browser import browser
 
     app = params.get("app_name", "")
@@ -479,6 +488,7 @@ def _handle_open_app(action: str, params: dict) -> dict:
         target = url or app
         if not target.startswith(("http://", "https://")):
             target = "https://" + target
+        _tlog(f"❯ launch {target}")
         if not browser.is_ready:
             browser.start()
         if browser.is_ready:
@@ -488,6 +498,7 @@ def _handle_open_app(action: str, params: dict) -> dict:
 
     if action == "open_browser":
         browser_name = params.get("browser", "chrome").lower()
+        _tlog(f"❯ launch {browser_name}")
         if not browser.is_ready:
             browser.start()
         if browser.is_ready:
@@ -502,7 +513,10 @@ def _handle_open_app(action: str, params: dict) -> dict:
 
     name = app or action.replace("open_", "").replace("_", " ")
     if not name:
+        _tlog("❯ launch (no app name)")
         return _err("No app name provided")
+
+    _tlog(f"❯ launch {name}")
 
     if _OS == "windows":
         found = _find_app_windows(name)
@@ -584,8 +598,12 @@ def _handle_open_app(action: str, params: dict) -> dict:
 
 def _handle_close_app(action: str, params: dict) -> dict:
     name = params.get("app_name", params.get("process_name", ""))
+    is_force = action == "force_quit"
     if not name:
+        _tlog(f"❯ {'force quit' if is_force else 'close'} (no name)")
+        _tlog("✗ no app name provided")
         return _err("No app name provided")
+    _tlog(f"❯ {'force quit' if is_force else 'close'} {name}")
     if _OS == "windows":
         exe = name if name.endswith(".exe") else name + ".exe"
         # Always use /F on Windows — graceful close often fails for multi-process
@@ -593,10 +611,19 @@ def _handle_close_app(action: str, params: dict) -> dict:
         result = subprocess.run(
             ["taskkill", "/F", "/IM", exe], capture_output=True, text=True
         )
-        return _ok(result.stdout.strip()) if result.returncode == 0 else _err(result.stderr.strip())
-    flag = "-9" if action == "force_quit" else "-15"
+        if result.returncode == 0:
+            _tlog("✓ terminated" if is_force else "✓ closed")
+            return _ok(result.stdout.strip())
+        err_msg = result.stderr.strip()
+        _tlog(f"✗ {err_msg or 'close failed'}")
+        return _err(err_msg)
+    flag = "-9" if is_force else "-15"
     result = subprocess.run(["pkill", flag, name], capture_output=True, text=True)
-    return _ok() if result.returncode == 0 else _err(f"Process not found: {name}")
+    if result.returncode == 0:
+        _tlog("✓ terminated" if is_force else "✓ closed")
+        return _ok()
+    _tlog(f"✗ process not found: {name}")
+    return _err(f"Process not found: {name}")
 
 
 def _handle_search_web(action: str, params: dict) -> dict:
@@ -604,6 +631,7 @@ def _handle_search_web(action: str, params: dict) -> dict:
 
     query        = params.get("query", "")
     platform_key = params.get("platform", "google")
+    _tlog(f"❯ search {query!r} on {platform_key}")
     urls = {
         "google":        f"https://www.google.com/search?q={quote_plus(query)}",
         "youtube":       f"https://www.youtube.com/results?search_query={quote_plus(query)}",
@@ -615,6 +643,16 @@ def _handle_search_web(action: str, params: dict) -> dict:
     if not browser.is_ready:
         browser.start()
     if browser.is_ready:
-        return browser.navigate(url)
-    webbrowser.open(url)
-    return _ok(f"Searching {platform_key} for: {query}")
+        result = browser.navigate(url)
+        if result.get("success"):
+            _tlog("✓ opened")
+        else:
+            _tlog(f"✗ {result.get('error') or 'navigation failed'}")
+        return result
+    try:
+        webbrowser.open(url)
+        _tlog("✓ opened")
+        return _ok(f"Searching {platform_key} for: {query}")
+    except Exception as exc:
+        _tlog(f"✗ {exc}")
+        return _err(str(exc))
