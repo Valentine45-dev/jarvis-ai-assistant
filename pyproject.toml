@@ -34,6 +34,8 @@ dependencies = [
     "sounddevice>=0.5.5",
     "speechrecognition>=3.16.0",
     "vapi-server-sdk>=1.11.0",
+    "mss>=10.2.0",
+    "opencv-python>=4.13.0.92",
 ]
 
 [dependency-groups]

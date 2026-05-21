@@ -157,6 +157,8 @@ mdurl==0.1.2
     # via markdown-it-py
 mouseinfo==0.1.3
     # via pyautogui
+mss==10.2.0
+    # via jarvis-project
 multidict==6.7.1
     # via
     #   aiohttp
@@ -173,10 +175,13 @@ numpy==2.4.4
     #   livekit-plugins-silero
     #   matplotlib
     #   onnxruntime
+    #   opencv-python
 onnxruntime==1.25.1
     # via livekit-plugins-silero
 openai==2.33.0
     # via livekit-agents
+opencv-python==4.13.0.92
+    # via jarvis-project
 openpyxl==3.1.5
     # via jarvis-project
 opentelemetry-api==1.39.1
