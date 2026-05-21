@@ -311,18 +311,28 @@ def _handle_system_control(action: str, params: dict) -> dict:
 
     if action in ("volume_mute", "volume_unmute"):
         _tlog(f"❯ {'mute' if action == 'volume_mute' else 'unmute'}")
+        try:
+            from core.voice import get_app_audio_muted, set_app_audio_muted
+            pre_muted = get_app_audio_muted()
+        except Exception:
+            pre_muted = False
+            set_app_audio_muted = lambda _v: None  # type: ignore[assignment]
+
+        if action == "volume_unmute" and not pre_muted:
+            # Idempotent unmute: already unmuted (per our tracked state).
+            # Don't press the hotkey (it would mute) — just report success.
+            _tlog("✓ already unmuted")
+            return _ok("Unmuted")
+
         result = cc.set_volume(action, level=None)
         if result.get("success"):
-            # The toggle in cc.set_volume returns "Muted" or "Unmuted" in
-            # `output` — that's the source of truth (not the action name),
-            # since volume_mute now toggles.
-            now_muted = (result.get("output") or "").strip().lower() == "muted"
-            try:
-                from core.voice import set_app_audio_muted
-                set_app_audio_muted(now_muted)
-            except Exception:
-                pass
-            _tlog(f"✓ {'muted' if now_muted else 'unmuted'}")
+            # The OS hotkey toggles state; new state is the inverse of what
+            # we tracked before. (For volume_unmute we got here only when
+            # pre_muted was True, so the new state is False.)
+            new_muted = (not pre_muted) if action == "volume_mute" else False
+            set_app_audio_muted(new_muted)
+            _tlog(f"✓ {'muted' if new_muted else 'unmuted'}")
+            result["output"] = "Muted" if new_muted else "Unmuted"
         else:
             _tlog(f"✗ {result.get('error') or 'mute toggle failed'}")
         return result

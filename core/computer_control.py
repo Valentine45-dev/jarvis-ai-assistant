@@ -318,7 +318,18 @@ def _press_mute_hotkey() -> None:
 
 
 def set_volume(action: str, level: int | None = None) -> dict:
-    # pycaw gives precise Windows volume control
+    # ── Mute path — pure OS hotkey, no pycaw, no COM proxies. ─────────────────
+    # Kept above the pycaw block so a mute toggle never instantiates a
+    # comtypes COM proxy. pycaw proxies accumulate as stale references that
+    # later crash with `ValueError: COM method call without VTable` when
+    # Python GC reaps them on a thread without a live COM apartment.
+    # Mute state is tracked at the handler layer via _app_audio_muted.
+    if action in ("volume_mute", "volume_unmute"):
+        _press_mute_hotkey()
+        time.sleep(0.08)
+        return _ok("toggled")
+
+    # ── Volume control path — needs pycaw for absolute / stepped level. ──────
     pycaw_missing = False
     try:
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
@@ -330,31 +341,6 @@ def set_volume(action: str, level: int | None = None) -> dict:
         raw = getattr(device, '_dev', device)
         interface = raw.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
         vol       = cast(interface, POINTER(IAudioEndpointVolume))
-
-        if action == "volume_mute":
-            # Toggle. Use the OS hotkey instead of pycaw SetMute — see
-            # _press_mute_hotkey() for why. GetMute() is read-only and safe.
-            pre_muted = bool(vol.GetMute())
-            _press_mute_hotkey()
-            time.sleep(0.08)
-            post_muted = bool(vol.GetMute())
-            # If the hotkey didn't take effect (no audio device, hotkey
-            # intercepted by another process, etc.), surface that as an error
-            # instead of returning a false "Muted" / "Unmuted" label.
-            if post_muted == pre_muted:
-                return _err("Mute toggle had no effect (OS hotkey not delivered)")
-            return _ok("Muted" if post_muted else "Unmuted")
-
-        if action == "volume_unmute":
-            # Force-unmute. Hotkey is a toggle, so only press if currently muted.
-            pre_muted = bool(vol.GetMute())
-            if not pre_muted:
-                return _ok("Unmuted")
-            _press_mute_hotkey()
-            time.sleep(0.08)
-            if bool(vol.GetMute()):
-                return _err("Unmute had no effect (OS hotkey not delivered)")
-            return _ok("Unmuted")
 
         if level is not None:
             scalar = max(0.0, min(1.0, level / 100.0))

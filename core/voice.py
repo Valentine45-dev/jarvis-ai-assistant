@@ -48,62 +48,34 @@ __all__ = [
 ]
 
 
-# ── System mute probe ─────────────────────────────────────────────────────────
-# Two layers of defense:
-#   1. App-level flag (`_app_audio_muted`) — set deterministically whenever
-#      JARVIS itself mutes/unmutes via the system_control handler. Always
-#      reliable, no COM dependency.
-#   2. pycaw probe (`_pycaw_audio_muted`) — catches the case where the user
-#      mutes via the Windows taskbar / hotkey directly.
-# A TTS call is skipped if EITHER layer reports the speaker is muted.
+# ── Mute state tracking ───────────────────────────────────────────────────────
+# Source of truth is an app-level flag, updated by core.handlers.system when
+# JARVIS mutes/unmutes via the OS hotkey path. We do NOT query pycaw GetMute:
+# each pycaw call creates comtypes COM proxies that later crash with
+# `ValueError: COM method call without VTable` when Python GC reaps them on
+# a thread without a live COM apartment. Trade-off: if the user mutes via
+# the Windows taskbar/hotkey directly, JARVIS won't know — TTS will still
+# attempt to play to the muted endpoint. That's acceptable (OS handles muted
+# output without crashing; only pycaw triggers the crash).
 
-import time as _time
-_MUTE_CACHE_TTL_S = 0.25
-_mute_cache_lock = threading.Lock()
-_mute_cache: dict = {"value": False, "checked_at": 0.0}
-_app_audio_muted: bool = False  # set by core.handlers.system on mute/unmute
+_app_audio_muted: bool = False
 
 
 def set_app_audio_muted(value: bool) -> None:
-    """Called by the volume_mute/volume_unmute handler to mirror its own state.
-
-    Deterministic side of the mute-aware TTS skip. The pycaw GetMute probe
-    is a useful secondary signal (catches manual Windows mute) but can be
-    flaky across thread contexts; this flag is not.
-    """
+    """Called by the volume_mute/volume_unmute handler after toggling mute."""
     global _app_audio_muted
     _app_audio_muted = bool(value)
 
 
-def _pycaw_audio_muted() -> bool:
-    """Cached pycaw GetMute() probe. Returns False on any failure (never raises)."""
-    try:
-        now = _time.monotonic()
-        with _mute_cache_lock:
-            if now - _mute_cache["checked_at"] < _MUTE_CACHE_TTL_S:
-                return bool(_mute_cache["value"])
-        try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from ctypes import cast, POINTER
-            from comtypes import CLSCTX_ALL
-            device = AudioUtilities.GetSpeakers()
-            raw = getattr(device, "_dev", device)
-            iface = raw.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            vol = cast(iface, POINTER(IAudioEndpointVolume))
-            muted = bool(vol.GetMute())
-        except Exception:
-            muted = False
-        with _mute_cache_lock:
-            _mute_cache["value"] = muted
-            _mute_cache["checked_at"] = now
-        return muted
-    except Exception:
-        return False
+def get_app_audio_muted() -> bool:
+    """Current app-tracked mute state. Used by the system handler to decide
+    label and to compute the post-toggle state without querying pycaw."""
+    return _app_audio_muted
 
 
 def _system_audio_muted() -> bool:
-    """True when TTS should be skipped — muted at app level or system level."""
-    return _app_audio_muted or _pycaw_audio_muted()
+    """True when TTS should be skipped — JARVIS knows the system is muted."""
+    return _app_audio_muted
 
 
 # ── Signal carrier ────────────────────────────────────────────────────────────
