@@ -2,6 +2,10 @@
 Configuration — loads .env, exposes config dataclass.
 API keys, model selection, wake word,
 debug mode, HUD theme preferences.
+
+R2-30: `config` at module bottom is a shared mutable singleton loaded once
+at import. Treat it as read-only outside the Settings UI / explicit save()
+calls — handlers should not assign new attributes on the fly.
 """
 
 import json
@@ -37,6 +41,15 @@ class AppConfig:
     vapi_api_key: str = ""
     vapi_assistant_id: str = ""
     elevenlabs_api_key: str = ""
+    # Gemini Speech Generation key (free tier on Flash TTS as of 2026-05).
+    # Gemini sits between ElevenLabs and pyttsx3 in TtsEngine — used when
+    # ElevenLabs is unset or quota-locked; pyttsx3 stays as the last resort.
+    gemini_api_key: str = ""
+    # Prebuilt voice name passed to gemini-2.5-flash-preview-tts. See
+    # core/tts_gemini.GEMINI_VOICE_BY_PROFILE for the profile→voice mapping;
+    # this field lets a power user override that mapping with a raw voice
+    # name (Kore, Puck, Charon, Zephyr, Aoede, ...).
+    gemini_voice: str = ""
     openweather_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
     wake_word: str = "jarvis"
@@ -69,7 +82,18 @@ class AppConfig:
     # default — only useful when debugging element-selection misses.
     browser_show_picker_reasoning: bool = False
     # Mirror every _tlog line to logs/terminal.log (5MB rotating, 3 backups).
-    terminal_log_to_file: bool = False
+    terminal_log_to_file: bool = True
+    # R2-5: master kill switch for core/handlers/code_exec.py. When False, every
+    # action under intent `code_execution` short-circuits with an explicit
+    # "disabled" reply. Use this to run JARVIS on a shared machine without
+    # exposing the RCE endpoint.
+    code_exec_enabled: bool = True
+    # R2-1 / R2-7: when False (default), every AI-generated shell command from
+    # _nl_to_command, _attempt_fix, and _run_plan shows a confirmation card
+    # before subprocess launch. Flip to True only on a trusted single-user
+    # machine — the danger regex inside code_exec is intentionally narrow and
+    # cannot be relied on alone to gate Sonnet output.
+    allow_ai_command_autorun: bool = False
 
     @classmethod
     def from_env(cls):
@@ -77,6 +101,8 @@ class AppConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             vapi_api_key=os.getenv("VAPI_API_KEY", ""),
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            gemini_voice=os.getenv("GEMINI_VOICE", ""),
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
             claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6"),
             wake_word=os.getenv("WAKE_WORD", "jarvis"),
@@ -99,8 +125,8 @@ class AppConfig:
                 instance = cls(**{k: v for k, v in data.items() if k in fields})
                 # Env vars always win — API keys must come from .env, not JSON.
                 env = cls.from_env()
-                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key",
-                            "claude_model", "wake_word", "debug_mode"):
+                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "gemini_api_key",
+                            "openweather_api_key", "claude_model", "wake_word", "debug_mode"):
                     env_val = getattr(env, key)
                     if env_val:
                         setattr(instance, key, env_val)
@@ -137,7 +163,8 @@ class AppConfig:
         Mirrors the pattern used in core/automation.py for workflows.json.
         """
         _SENSITIVE = {
-            "anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key",
+            "anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "gemini_api_key",
+            "openweather_api_key",
         }
         data = {k: v for k, v in asdict(self).items() if k not in _SENSITIVE}
         tmp = _JSON_PATH.with_suffix(_JSON_PATH.suffix + ".tmp")

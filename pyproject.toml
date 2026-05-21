@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
     "elevenlabs>=2.44.0",
+    "google-genai>=1.0.0",
     "livekit-agents>=1.5.6",
     "livekit-plugins-deepgram>=1.5.6",
     "livekit-plugins-silero>=1.5.6",

@@ -127,6 +127,11 @@ from core.tts_elevenlabs import (
     say_elevenlabs  as _say_elevenlabs_fn,
     probe_voice     as _probe_el_voice_fn,
 )
+from core.tts_gemini import (
+    say_gemini             as _say_gemini_fn,
+    GEMINI_VOICE_BY_PROFILE as _GEMINI_VOICE_BY_PROFILE,
+    DEFAULT_VOICE_NAME     as _GEMINI_DEFAULT_VOICE,
+)
 
 
 # ── Lazy module imports ───────────────────────────────────────────────────────
@@ -388,6 +393,11 @@ class TtsEngine:
         self._lock     = threading.Lock()
         self._speaking = threading.Event()
         self._last_provider_error: TtsProviderError | None = None
+        # Session-scoped lock: once ElevenLabs returns quota_exceeded once, we
+        # stop hammering it on every subsequent line. Cleared on restart (so
+        # a top-up takes effect on the next launch) or whenever the user
+        # changes the ElevenLabs API key in Settings (see clear_quota_lock).
+        self._elevenlabs_quota_locked = False
 
     @property
     def is_speaking(self) -> bool:
@@ -426,7 +436,11 @@ class TtsEngine:
         self._speaking.set()
         try:
             with self._lock:
-                if config.elevenlabs_api_key:
+                # ── Tier 1: ElevenLabs ──────────────────────────────────────
+                # Skipped once a quota_exceeded has been seen this session —
+                # otherwise we'd burn through ElevenLabs latency on every line
+                # only to fall back to Gemini anyway.
+                if config.elevenlabs_api_key and not self._elevenlabs_quota_locked:
                     try:
                         _say_elevenlabs_fn(
                             text, _on_ready_once, on_done, self._notify,
@@ -435,14 +449,50 @@ class TtsEngine:
                         )
                         return
                     except Exception as exc:
-                        self._last_provider_error = _classify_elevenlabs_error(exc)
-                        _dbg("tts", f"ElevenLabs FAILED, falling back to pyttsx3: {exc}")
+                        provider_err = _classify_elevenlabs_error(exc)
+                        self._last_provider_error = provider_err
+                        if provider_err.kind == TtsProviderErrorKind.QUOTA:
+                            self._elevenlabs_quota_locked = True
+                            _dbg("tts", "ElevenLabs quota exceeded — disabling for this session, switching to Gemini")
+                        else:
+                            _dbg("tts", f"ElevenLabs failed ({provider_err.kind.value}), trying Gemini: {exc}")
+                        if ready_called.is_set():
+                            # We already signalled on_ready (some bytes
+                            # streamed) — don't replay the line on the next
+                            # tier or the user hears half of it twice.
+                            self._notify(on_done)
+                            return
+
+                # ── Tier 2: Gemini Flash TTS ────────────────────────────────
+                # Free tier as of 2026-05; speaks inline [chuckles] / [sighs]
+                # tags directly. Skipped if no key is configured.
+                if config.gemini_api_key:
+                    voice_name = (
+                        (config.gemini_voice or "").strip()
+                        or _GEMINI_VOICE_BY_PROFILE.get(config.tts_voice, _GEMINI_DEFAULT_VOICE)
+                    )
+                    try:
+                        _say_gemini_fn(
+                            text, _on_ready_once, on_done, self._notify,
+                            voice_name=voice_name,
+                            api_key=config.gemini_api_key,
+                        )
+                        return
+                    except Exception as exc:
+                        _dbg("tts", f"Gemini failed, falling back to pyttsx3: {exc}")
                         if ready_called.is_set():
                             self._notify(on_done)
                             return
+
+                # ── Tier 3: pyttsx3 local fallback ──────────────────────────
                 self._say_local(text, _on_ready_once, on_done)
         finally:
             self._speaking.clear()
+
+    def clear_elevenlabs_quota_lock(self) -> None:
+        """Re-enable ElevenLabs after the user tops up credits or changes
+        the API key. Called by the Settings UI when the key is edited."""
+        self._elevenlabs_quota_locked = False
 
     def probe_elevenlabs_voice(self, voice_key: str, text: str = "Voice check.") -> None:
         if config.elevenlabs_api_key:
