@@ -83,6 +83,10 @@ class AppConfig:
     browser_show_picker_reasoning: bool = False
     # Mirror every _tlog line to logs/terminal.log (5MB rotating, 3 backups).
     terminal_log_to_file: bool = True
+    # Stream the raw Claude vision response to the terminal panel line by
+    # line BEFORE it's spoken. Useful while rolling out vision_analysis;
+    # noisy long-term — flip to False once the pipeline is trusted.
+    vision_show_analysis: bool = False
     # R2-5: master kill switch for core/handlers/code_exec.py. When False, every
     # action under intent `code_execution` short-circuits with an explicit
     # "disabled" reply. Use this to run JARVIS on a shared machine without
