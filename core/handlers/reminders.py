@@ -6,7 +6,7 @@ import threading
 import uuid
 from typing import Any
 
-from core.handlers.shared import _ok, _err
+from core.handlers.shared import _ok, _err, _tlog
 from core.handlers.automation_handler import (
     _DANGEROUS_STEPS,
     _CONFIRMATION_REQUIRED_ACTIONS,
@@ -90,9 +90,19 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
     if action == "set_reminder":
         msg    = str(params.get("message", "Reminder")).strip() or "Reminder"
         delay  = max(5, int(params.get("delay_seconds", 60)))
+        _entry_mins, _entry_secs = delay // 60, delay % 60
+        if _entry_mins and _entry_secs:
+            _entry_time_str = f"{_entry_mins}m {_entry_secs}s"
+        elif _entry_mins:
+            _entry_time_str = f"{_entry_mins}m"
+        else:
+            _entry_time_str = f"{_entry_secs}s"
+        _tlog(f"❯ reminder — {msg!r} in {_entry_time_str}")
+
         run_raw = params.get("run")
         run_norm, verr = _validate_reminder_run(run_raw)
         if verr:
+            _tlog(f"✗ {verr}")
             return _err(verr)
 
         sched_conf = params.get("schedule_confidence")
@@ -140,6 +150,7 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
             time_str = f"{mins}m"
         else:
             time_str = f"{secs}s"
+        _tlog("✓ scheduled")
         if run_norm:
             summ = _format_run_summary(run_norm)
             return _ok(f"In {time_str}: {summ}")
@@ -147,7 +158,9 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
 
     if action == "cancel_reminder":
         want = str(params.get("message", "")).strip()
+        _tlog(f"❯ cancel reminder — {want!r}")
         if not want:
+            _tlog("✗ no message provided")
             return _err("No message provided for cancel_reminder.")
         to_del: list[str] = []
         for rid, meta in list(_reminder_meta.items()):
@@ -161,11 +174,13 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
                 t.cancel()
                 cancelled += 1
         if cancelled:
+            _tlog(f"✓ cancelled {cancelled} reminder{'s' if cancelled != 1 else ''}")
             return _ok(
                 f"Cancelled {cancelled} reminder(s) for: {want}"
                 if cancelled > 1
                 else f"Reminder cancelled: {want}"
             )
+        _tlog(f"✗ no active reminder matching: {want}")
         return _err(f"No active reminder matching: {want}")
 
     if action == "list_reminders":
