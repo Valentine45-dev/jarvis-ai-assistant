@@ -48,6 +48,43 @@ __all__ = [
 ]
 
 
+# ── System mute probe ─────────────────────────────────────────────────────────
+# Query Windows' default audio endpoint mute state via pycaw. Cached for a brief
+# window so back-to-back TTS calls don't pay the COM cost. Returns False (i.e.
+# "don't skip TTS") on any failure — never raises.
+
+import time as _time
+_MUTE_CACHE_TTL_S = 0.25
+_mute_cache_lock = threading.Lock()
+_mute_cache: dict = {"value": False, "checked_at": 0.0}
+
+
+def _system_audio_muted() -> bool:
+    """Return True if the OS default playback endpoint is currently muted."""
+    try:
+        now = _time.monotonic()
+        with _mute_cache_lock:
+            if now - _mute_cache["checked_at"] < _MUTE_CACHE_TTL_S:
+                return bool(_mute_cache["value"])
+        try:
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from ctypes import cast, POINTER
+            from comtypes import CLSCTX_ALL
+            device = AudioUtilities.GetSpeakers()
+            raw = getattr(device, "_dev", device)
+            iface = raw.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            vol = cast(iface, POINTER(IAudioEndpointVolume))
+            muted = bool(vol.GetMute())
+        except Exception:
+            muted = False
+        with _mute_cache_lock:
+            _mute_cache["value"] = muted
+            _mute_cache["checked_at"] = now
+        return muted
+    except Exception:
+        return False
+
+
 # ── Signal carrier ────────────────────────────────────────────────────────────
 
 class VoiceBridge(QObject):
@@ -146,7 +183,11 @@ class VoiceEngine:
         """Speak *text* (pyttsx3; ElevenLabs via tts_elevenlabs.py when re-enabled). Non-blocking."""
         if not text.strip():
             return
-        if self._tts_muted:
+        if self._tts_muted or _system_audio_muted():
+            # Skip when the app-level TTS mute is on OR when the Windows audio
+            # endpoint is currently muted. Playing to a muted endpoint after a
+            # pycaw SetMute toggle has been observed to hard-crash the audio
+            # backend (process dies during ElevenLabs/pyaudio stream playback).
             # Fire callbacks so dependent UI animations don't stall.
             self._fire(on_ready)
             self._fire(on_done)
