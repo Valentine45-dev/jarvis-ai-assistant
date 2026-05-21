@@ -317,6 +317,37 @@ def _press_mute_hotkey() -> None:
             pass
 
 
+def _press_volume_step_hotkey(direction: str, presses: int = 5) -> bool:
+    """Send VK_VOLUME_UP / VK_VOLUME_DOWN N times. Native OSD shows automatically.
+
+    Same rationale as _press_mute_hotkey — avoids the pycaw SetMasterVolumeLevelScalar
+    path on the step branch so we don't leak comtypes COM proxies that later
+    crash with `ValueError: COM method call without VTable` when Python GC
+    reaps them. Returns True if any press landed; False if no backend worked.
+    """
+    pag = _pag()
+    key = "volumeup" if direction == "up" else "volumedown"
+    if pag is not None:
+        try:
+            for _ in range(presses):
+                pag.press(key)
+            return True
+        except Exception:
+            pass
+    if _OS == "windows":
+        try:
+            import ctypes
+            vk = 0xAF if direction == "up" else 0xAE  # VK_VOLUME_UP / VK_VOLUME_DOWN
+            KEYEVENTF_KEYUP = 0x02
+            for _ in range(presses):
+                ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+            return True
+        except Exception:
+            return False
+    return False
+
+
 def set_volume(action: str, level: int | None = None) -> dict:
     # ── Mute path — pure OS hotkey, no pycaw, no COM proxies. ─────────────────
     # Kept above the pycaw block so a mute toggle never instantiates a
@@ -329,8 +360,17 @@ def set_volume(action: str, level: int | None = None) -> dict:
         time.sleep(0.08)
         return _ok("toggled")
 
-    # ── Volume control path — needs pycaw for absolute / stepped level. ──────
-    pycaw_missing = False
+    # ── Step path (volume_up / volume_down without explicit level) ────────────
+    # Pure OS hotkey, native Windows OSD shows automatically. No pycaw, so no
+    # COM proxies to leak. Each press is ~2% on Windows; 5 presses ≈ 10% per
+    # command which matches the prior pycaw step size.
+    if action in ("volume_up", "volume_down") and level is None:
+        direction = "up" if action == "volume_up" else "down"
+        if _press_volume_step_hotkey(direction, presses=5):
+            return _ok("Louder" if direction == "up" else "Softer")
+        return _err("Volume hotkey unavailable — install pyautogui or check OS support")
+
+    # ── Absolute level path — needs pycaw (hotkeys can't target a specific %) ─
     try:
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
         from ctypes import cast, POINTER
@@ -342,51 +382,15 @@ def set_volume(action: str, level: int | None = None) -> dict:
         interface = raw.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
         vol       = cast(interface, POINTER(IAudioEndpointVolume))
 
-        if level is not None:
-            scalar = max(0.0, min(1.0, level / 100.0))
-            vol.SetMasterVolumeLevelScalar(scalar, None)
-            _osd_trigger(vol, scalar)
-            return _ok(f"{level}%")
-
-        current = int(vol.GetMasterVolumeLevelScalar() * 100)
-        if action == "volume_up":
-            new_level = min(100, current + 10)
-        else:
-            new_level = max(0, current - 10)
-        vol.SetMasterVolumeLevelScalar(new_level / 100.0, None)
-        _osd_trigger(vol, new_level / 100.0)
-        return _ok(f"{new_level}%")
+        scalar = max(0.0, min(1.0, (level or 0) / 100.0))
+        vol.SetMasterVolumeLevelScalar(scalar, None)
+        _osd_trigger(vol, scalar)
+        return _ok(f"{level}%")
 
     except ImportError:
-        pycaw_missing = True
-    except Exception as exc:
-        # Surface the real error — never silently swallow pycaw failures
-        return _err(f"Volume control failed: {exc}")
-
-    # Absolute level requires pycaw — pyautogui keys cannot target a specific %
-    if level is not None:
         return _err("pycaw not installed — run: uv add pycaw  (required for absolute volume)")
-
-    # Fallback: pyautogui media keys for step up/down/mute only (no pycaw)
-    pag = _pag()
-    if pag is None:
-        return _err("pyautogui not installed — run: uv add pyautogui")
-    try:
-        key_map = {
-            "volume_up":   "volumeup",
-            "volume_down": "volumedown",
-            "volume_mute": "volumemute",
-            "volume_unmute": "volumemute",
-        }
-        key = key_map.get(action, "volumeup")
-        presses = 5 if action in ("volume_up", "volume_down") else 1
-        for _ in range(presses):
-            pag.press(key)
-        return _ok(action.replace("_", " ").title())
-    except pag.FailSafeException:
-        return _err("FAILSAFE triggered — mouse moved to corner")
     except Exception as exc:
-        return _err(str(exc))
+        return _err(f"Volume control failed: {exc}")
 
 
 def lock_screen() -> dict:
