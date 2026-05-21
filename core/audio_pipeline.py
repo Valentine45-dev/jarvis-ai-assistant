@@ -91,6 +91,18 @@ class TtsProviderError(Exception):
         self.raw_error = raw_error
 
 
+def _is_gemini_quota_error(exc: Exception) -> bool:
+    """True when a Gemini SDK exception is the daily-free-tier 429.
+
+    The Gemini SDK currently surfaces these as a `google.genai.errors.ClientError`
+    with the literal `RESOURCE_EXHAUSTED` status. We match on the error string
+    rather than the class because the SDK doesn't export the error class
+    cleanly and the textual signal is stable across SDK minor versions.
+    """
+    s = str(exc).lower()
+    return "resource_exhausted" in s or s.lstrip().startswith("429")
+
+
 def _classify_elevenlabs_error(exc: Exception) -> TtsProviderError:
     """Normalize ElevenLabs SDK exceptions into typed provider errors."""
     raw = str(exc)
@@ -398,6 +410,12 @@ class TtsEngine:
         # a top-up takes effect on the next launch) or whenever the user
         # changes the ElevenLabs API key in Settings (see clear_quota_lock).
         self._elevenlabs_quota_locked = False
+        # Same pattern for Gemini Flash TTS — when the free-tier daily limit
+        # (10 calls/day on gemini-2.5-flash-tts as of 2026-05) hits, every
+        # subsequent line wastes ~3-5s on a 429 retry before falling to
+        # pyttsx3. One quota failure flips this flag for the rest of the
+        # session and we go straight to pyttsx3 on every line until restart.
+        self._gemini_quota_locked = False
 
     @property
     def is_speaking(self) -> bool:
@@ -465,8 +483,9 @@ class TtsEngine:
 
                 # ── Tier 2: Gemini Flash TTS ────────────────────────────────
                 # Free tier as of 2026-05; speaks inline [chuckles] / [sighs]
-                # tags directly. Skipped if no key is configured.
-                if config.gemini_api_key:
+                # tags directly. Skipped if no key is configured OR the
+                # session-level quota lock fired earlier this run.
+                if config.gemini_api_key and not self._gemini_quota_locked:
                     voice_name = (
                         (config.gemini_voice or "").strip()
                         or _GEMINI_VOICE_BY_PROFILE.get(config.tts_voice, _GEMINI_DEFAULT_VOICE)
@@ -479,7 +498,11 @@ class TtsEngine:
                         )
                         return
                     except Exception as exc:
-                        _dbg("tts", f"Gemini failed, falling back to pyttsx3: {exc}")
+                        if _is_gemini_quota_error(exc):
+                            self._gemini_quota_locked = True
+                            _dbg("tts", "Gemini daily quota exceeded — disabling for this session, switching to pyttsx3")
+                        else:
+                            _dbg("tts", f"Gemini failed, falling back to pyttsx3: {exc}")
                         if ready_called.is_set():
                             self._notify(on_done)
                             return
@@ -493,6 +516,13 @@ class TtsEngine:
         """Re-enable ElevenLabs after the user tops up credits or changes
         the API key. Called by the Settings UI when the key is edited."""
         self._elevenlabs_quota_locked = False
+
+    def clear_gemini_quota_lock(self) -> None:
+        """Re-enable Gemini after the daily reset or a key change. Useful
+        from the Settings UI when the user edits gemini_api_key, and from
+        any future timer that wants to retry past the daily reset boundary
+        without forcing a full app restart."""
+        self._gemini_quota_locked = False
 
     def probe_elevenlabs_voice(self, voice_key: str, text: str = "Voice check.") -> None:
         if config.elevenlabs_api_key:
