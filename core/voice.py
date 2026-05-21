@@ -61,34 +61,18 @@ import time as _time
 _MUTE_CACHE_TTL_S = 0.25
 _mute_cache_lock = threading.Lock()
 _mute_cache: dict = {"value": False, "checked_at": 0.0}
-_app_audio_muted: bool = False  # set by core.handlers.system after pycaw SetMute
-
-# pycaw's SetMute toggle leaves the Windows audio session in a transient state
-# that crashes the audio backend (pyaudio/sounddevice) when TTS playback is
-# attempted in the first few seconds after the toggle. Empirically observed:
-# mute → unmute → next-command-with-TTS reliably hard-crashes the process.
-# Defence: after every mute/unmute toggle, suppress TTS for this many seconds.
-_POST_TOGGLE_TTS_COOLDOWN_S = 5.0
-_last_toggle_at: float = 0.0
+_app_audio_muted: bool = False  # set by core.handlers.system on mute/unmute
 
 
 def set_app_audio_muted(value: bool) -> None:
     """Called by the volume_mute/volume_unmute handler to mirror its own state.
 
-    Also stamps a cooldown timestamp so subsequent TTS calls within the cooldown
-    window are skipped — the audio backend cannot reliably play immediately
-    after a pycaw SetMute toggle.
+    Deterministic side of the mute-aware TTS skip. The pycaw GetMute probe
+    is a useful secondary signal (catches manual Windows mute) but can be
+    flaky across thread contexts; this flag is not.
     """
-    global _app_audio_muted, _last_toggle_at
+    global _app_audio_muted
     _app_audio_muted = bool(value)
-    _last_toggle_at = _time.monotonic()
-
-
-def _in_post_toggle_cooldown() -> bool:
-    """True if the audio backend is still in the unstable post-toggle window."""
-    if _last_toggle_at <= 0:
-        return False
-    return (_time.monotonic() - _last_toggle_at) < _POST_TOGGLE_TTS_COOLDOWN_S
 
 
 def _pycaw_audio_muted() -> bool:
@@ -118,9 +102,8 @@ def _pycaw_audio_muted() -> bool:
 
 
 def _system_audio_muted() -> bool:
-    """True when TTS should be skipped: muted (app or system) OR within the
-    post-toggle cooldown window where the audio backend is unstable."""
-    return _app_audio_muted or _in_post_toggle_cooldown() or _pycaw_audio_muted()
+    """True when TTS should be skipped — muted at app level or system level."""
+    return _app_audio_muted or _pycaw_audio_muted()
 
 
 # ── Signal carrier ────────────────────────────────────────────────────────────
@@ -223,9 +206,7 @@ class VoiceEngine:
             return
         if self._tts_muted or _system_audio_muted():
             # Skip when the app-level TTS mute is on OR when the Windows audio
-            # endpoint is currently muted. Playing to a muted endpoint after a
-            # pycaw SetMute toggle has been observed to hard-crash the audio
-            # backend (process dies during ElevenLabs/pyaudio stream playback).
+            # endpoint is currently muted (user muted via taskbar/voice/hotkey).
             # Fire callbacks so dependent UI animations don't stall.
             self._fire(on_ready)
             self._fire(on_done)

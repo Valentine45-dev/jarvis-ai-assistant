@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import time
 from pathlib import Path
 
 _OS = platform.system().lower()
@@ -288,6 +289,34 @@ def _osd_trigger(vol, exact_scalar: float) -> None:
         pass  # OSD is cosmetic — never block the caller
 
 
+def _press_mute_hotkey() -> None:
+    """Send VK_VOLUME_MUTE so the OS toggles its own mute state.
+
+    pycaw's IAudioEndpointVolume.SetMute(...) reliably corrupts the audio
+    session in this process for several seconds afterwards — subsequent TTS
+    playback (pyaudio/sounddevice) and STT capture both hard-crash the C
+    extension. Routing through the OS hotkey path keeps our process's audio
+    session untouched. pyautogui first (cross-platform key name); ctypes
+    keybd_event as the bare-metal Windows fallback.
+    """
+    pag = _pag()
+    if pag is not None:
+        try:
+            pag.press("volumemute")
+            return
+        except Exception:
+            pass
+    if _OS == "windows":
+        try:
+            import ctypes
+            VK_VOLUME_MUTE = 0xAD
+            KEYEVENTF_KEYUP = 0x02
+            ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
+            ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+
+
 def set_volume(action: str, level: int | None = None) -> dict:
     # pycaw gives precise Windows volume control
     pycaw_missing = False
@@ -303,20 +332,28 @@ def set_volume(action: str, level: int | None = None) -> dict:
         vol       = cast(interface, POINTER(IAudioEndpointVolume))
 
         if action == "volume_mute":
-            # CLAUDE.md documents this as a TOGGLE — flip current state so both
-            # "mute" and "unmute" route here and produce the right outcome
-            # without requiring the brain to know two separate actions.
-            is_muted = bool(vol.GetMute())
-            vol.SetMute(not is_muted, None)
-            return _ok("Unmuted" if is_muted else "Muted")
+            # Toggle. Use the OS hotkey instead of pycaw SetMute — see
+            # _press_mute_hotkey() for why. GetMute() is read-only and safe.
+            pre_muted = bool(vol.GetMute())
+            _press_mute_hotkey()
+            time.sleep(0.08)
+            post_muted = bool(vol.GetMute())
+            # If the hotkey didn't take effect (no audio device, hotkey
+            # intercepted by another process, etc.), surface that as an error
+            # instead of returning a false "Muted" / "Unmuted" label.
+            if post_muted == pre_muted:
+                return _err("Mute toggle had no effect (OS hotkey not delivered)")
+            return _ok("Muted" if post_muted else "Unmuted")
 
         if action == "volume_unmute":
-            # Force-unmute. Used when the brain explicitly knows it should unmute
-            # (e.g. follows a separate spec where volume_unmute is a distinct
-            # action). Idempotent — safe to call when already unmuted.
-            is_muted = bool(vol.GetMute())
-            if is_muted:
-                vol.SetMute(False, None)
+            # Force-unmute. Hotkey is a toggle, so only press if currently muted.
+            pre_muted = bool(vol.GetMute())
+            if not pre_muted:
+                return _ok("Unmuted")
+            _press_mute_hotkey()
+            time.sleep(0.08)
+            if bool(vol.GetMute()):
+                return _err("Unmute had no effect (OS hotkey not delivered)")
             return _ok("Unmuted")
 
         if level is not None:
