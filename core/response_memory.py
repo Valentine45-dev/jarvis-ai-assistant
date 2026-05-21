@@ -27,10 +27,36 @@ from pathlib import Path
 from typing import Any
 
 _HISTORY_PATH = Path(__file__).parent.parent / "data" / "response_history.jsonl"
+# Committed bootstrap file with ~6 diverse joke responses. Copied to
+# _HISTORY_PATH on first access when the runtime file doesn't exist, so a
+# brand-new install still has anti-repetition context on its very first
+# request — otherwise temperature alone can let Claude collapse onto its
+# single training-modal joke (the dark-mode/bugs one) on cold start.
+_SEED_PATH = Path(__file__).parent.parent / "data" / "response_history.seed.jsonl"
 _MAX_ENTRIES = 200
 _ROTATE_THRESHOLD = int(_MAX_ENTRIES * 1.5)
 
 _lock = threading.Lock()
+
+
+def _bootstrap_from_seed_if_missing() -> None:
+    """Copy the committed seed file to the runtime path on first launch.
+
+    Idempotent: when ``_HISTORY_PATH`` already exists we leave it alone, so
+    a user who's been running JARVIS for a while never has their accumulated
+    history overwritten. If the seed file is missing (e.g. someone deleted
+    it from the repo) we fail silently — the variety system gracefully
+    degrades to "no recent block, only the salt" on first call.
+    """
+    if _HISTORY_PATH.exists():
+        return
+    if not _SEED_PATH.exists():
+        return
+    try:
+        _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _HISTORY_PATH.write_bytes(_SEED_PATH.read_bytes())
+    except OSError:
+        pass
 
 
 def record(intent: str, action: str, response: str) -> None:
@@ -51,6 +77,9 @@ def record(intent: str, action: str, response: str) -> None:
     line = json.dumps(entry, ensure_ascii=False) + "\n"
 
     with _lock:
+        # Lazy bootstrap inside the lock so two concurrent first-callers
+        # don't race the seed copy.
+        _bootstrap_from_seed_if_missing()
         try:
             _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
             with _HISTORY_PATH.open("a", encoding="utf-8") as f:
@@ -87,6 +116,11 @@ def recent(k: int = 8) -> list[dict[str, Any]]:
     file is missing, unreadable, or contains no parseable lines."""
     if k <= 0:
         return []
+    # Seed first-launch installs so the very first variety block isn't empty.
+    # Cheap when _HISTORY_PATH already exists (one exists() syscall).
+    if not _HISTORY_PATH.exists():
+        with _lock:
+            _bootstrap_from_seed_if_missing()
     try:
         with _HISTORY_PATH.open("r", encoding="utf-8", errors="replace") as f:
             tail = list(deque(f, maxlen=k))
