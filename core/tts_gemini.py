@@ -65,13 +65,34 @@ def _genai():
         return None, None
 
 
-def _extract_pcm(response) -> bytes:
-    """Pull the raw PCM payload out of a generate_content response.
+def _parse_rate_from_mime(mime_type: str | None) -> int:
+    """Pull the sample rate out of a Gemini audio mime type.
+
+    Returns ``_PCM_SAMPLE_RATE`` (24000) when the mime type is missing or
+    doesn't include a ``rate=`` parameter. Gemini's mime types look like
+    ``audio/L16;codec=pcm;rate=24000`` — if Google ever changes the rate
+    (16000, 22050, 48000 have all shown up in beta), we follow it.
+    """
+    if not mime_type:
+        return _PCM_SAMPLE_RATE
+    for part in str(mime_type).split(";"):
+        part = part.strip().lower()
+        if part.startswith("rate="):
+            try:
+                return int(part.split("=", 1)[1])
+            except ValueError:
+                return _PCM_SAMPLE_RATE
+    return _PCM_SAMPLE_RATE
+
+
+def _extract_pcm(response) -> tuple[bytes, int]:
+    """Pull the PCM payload + sample rate out of a generate_content response.
 
     The SDK delivers audio under candidates[0].content.parts[N], where the
-    part with inline_data.mime_type=='audio/...' carries the bytes. We
-    iterate parts defensively rather than assuming index 0 because the
-    model can return a small leading text part before the audio.
+    part with ``inline_data.mime_type`` starting with ``audio/`` carries the
+    bytes. We iterate parts defensively rather than assuming index 0
+    because the model can return a small leading text part before the audio.
+    Returns ``(pcm_bytes, sample_rate_hz)``.
     """
     try:
         candidates = getattr(response, "candidates", None) or []
@@ -86,7 +107,8 @@ def _extract_pcm(response) -> bytes:
                     continue
                 data = getattr(inline, "data", None)
                 if data:
-                    return data
+                    mime = getattr(inline, "mime_type", None)
+                    return data, _parse_rate_from_mime(mime)
     except (AttributeError, TypeError, IndexError):
         pass
     raise RuntimeError("Gemini TTS returned no audio bytes")
@@ -128,6 +150,23 @@ def _play_wav_via_mci(
         notify_fn(on_done)
 
 
+# Prefix prepended to every utterance before the SDK call. Two jobs:
+#   1. Tells the Flash TTS model to interpret square-bracket cues
+#      (`[chuckles]`, `[sighs]`, `[whispers]`, ...) as audio expressions
+#      rather than reading them aloud as words or skipping them.
+#   2. Nudges a natural, conversational delivery rather than the slightly
+#      slower default cadence (no rate setting in the SDK; this is the
+#      only handle we have over pace).
+# The instruction itself isn't spoken — Gemini treats it as a directive
+# for how to deliver the body that follows.
+_STYLE_PREFIX = (
+    "Speak the following naturally, at a brisk conversational pace. "
+    "Bracketed cues like [chuckles], [sighs], [whispers], [laughs] are "
+    "non-verbal audio expressions — render each as the actual sound, "
+    "never read the word aloud.\n\n"
+)
+
+
 def say_gemini(
     text: str,
     on_ready: Callable[[], None] | None,
@@ -159,7 +198,7 @@ def say_gemini(
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model,
-        contents=text,
+        contents=_STYLE_PREFIX + text,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -172,7 +211,8 @@ def say_gemini(
         ),
     )
 
-    pcm = _extract_pcm(response)
+    pcm, sample_rate = _extract_pcm(response)
+    _dbg("tts", f"Gemini returned {len(pcm)} bytes PCM at {sample_rate} Hz")
 
     # Write to a uniquely-named temp WAV. We use the same TEMP dir the
     # ElevenLabs plugin uses; MCI cleans up via the close + unlink pair
@@ -186,7 +226,7 @@ def say_gemini(
         with wave.open(wav_path, "wb") as wf:
             wf.setnchannels(_PCM_CHANNELS)
             wf.setsampwidth(_PCM_SAMPLE_WIDTH)
-            wf.setframerate(_PCM_SAMPLE_RATE)
+            wf.setframerate(sample_rate)
             wf.writeframes(pcm)
     except Exception:
         # Best-effort cleanup before re-raising.
@@ -229,4 +269,4 @@ def probe_gemini(
             ),
         ),
     )
-    _extract_pcm(response)  # raises if no audio in the response
+    _extract_pcm(response)  # raises (RuntimeError) if no audio in the response
