@@ -34,3 +34,31 @@ dependencies = [
     "speechrecognition>=3.16.0",
     "vapi-server-sdk>=1.11.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --tb=short"
+markers = [
+    "slow: tests that take more than a few seconds (deselect with -m 'not slow')",
+    "integration: tests that hit external services (network, real subprocess, real browser)",
+    "qt: tests that require a Qt application (auto-skipped on headless CI)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    "E501",  # line-length handled by formatter
+    "B008",  # default arg call — common Qt pattern
+]
+
