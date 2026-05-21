@@ -36,6 +36,7 @@ dependencies = [
     "vapi-server-sdk>=1.11.0",
     "mss>=10.2.0",
     "opencv-python>=4.13.0.92",
+    "croniter>=6.2.2",
 ]
 
 [dependency-groups]

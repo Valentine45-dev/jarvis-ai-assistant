@@ -302,7 +302,7 @@ Execute a multi-step workflow or predefined routine.
 
 ```json
 { "task_name": "string — workflow identifier" }
-{ "task_name": "string", "trigger": "string — optional voice/text trigger phrase", "steps": ["string — one natural-language step per item"] }
+{ "task_name": "string", "trigger": "string — optional voice/text trigger phrase", "steps": ["string — one natural-language step per item"], "schedule": "string — optional cron expression for auto-fire (e.g. '0 9 * * 1-5' for 9 AM weekdays)" }
 { "task_name": "string", "steps": [{ "intent": "string", "action": "string", "parameters": {} }] }
 { "task_name": "string — workflow to rename", "new_name": "string — new display name" }
 ```
@@ -318,6 +318,7 @@ Execute a multi-step workflow or predefined routine.
 - A **single** atomic ask (*“open Notepad”* only) remains a **single** intent (e.g. `open_app`) — no workflow needed.
 - **Saved** workflows: reserve **`task_name`** for routines that **exist in the workflow library**; otherwise use **inline** `steps` only.
 - **Natural-language routine creation:** If the user asks to create/make/build a routine/workflow and provides a name + step list, route to **`automation_task`** with **`action`: `create_workflow`**, filling `task_name`, optional `trigger`, and `steps` as natural-language strings.
+- **Scheduled (cron) workflows (F-3):** If the user asks for a workflow to run **on a schedule** (*"every morning at 9"*, *"every weekday"*, *"daily at midnight"*, *"every hour"*), include a `schedule` field in `create_workflow` with a standard cron expression: minute, hour, day-of-month, month, day-of-week. Examples: *"every weekday at 9 AM"* → `"0 9 * * 1-5"`; *"every day at midnight"* → `"0 0 * * *"`; *"every hour"* → `"0 * * * *"`; *"every 15 minutes"* → `"*/15 * * * *"`. **Safety:** scheduled fires always present confirmation cards for destructive steps even when the user has auto-confirm ON — JARVIS will never silently run a destructive scheduled step while the user is away.
 
 -----
 

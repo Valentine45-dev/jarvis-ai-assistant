@@ -213,6 +213,15 @@ class JarvisWindow(QMainWindow):
         signals.document_generation_done.connect(
             self._on_document_generation_done, Qt.QueuedConnection,
         )
+        # F-3: cron scheduler emits this from a worker thread; QueuedConnection
+        # bridges onto the Qt main thread so the workflow dispatch runs
+        # thread-affine to Playwright etc.
+        signals.scheduled_workflow_fire.connect(
+            self._on_scheduled_workflow_fire, Qt.QueuedConnection,
+        )
+        # Start the scheduler daemon. Idempotent; no-op if croniter missing.
+        from core.scheduler import start as _start_scheduler
+        _start_scheduler()
         self._doc_async_ctx: dict | None = None
         self._last_error_toast_msg = ""
         self._last_error_toast_ts = 0.0
@@ -689,7 +698,10 @@ class JarvisWindow(QMainWindow):
             # Auto-confirm short-circuits the hold — used when the user has
             # explicitly opted in via Quick Settings. The dispatch() gate still
             # enforces _CONFIRMATION_REQUIRED_ACTIONS; we just pass confirmed=True.
-            if self._auto_confirm:
+            # F-3 carve-out: scheduled workflow fires NEVER bypass the card,
+            # even when auto_confirm is on, so a daily cron can't silently
+            # run a destructive step while the user is away from the desk.
+            if self._auto_confirm and not result.get("_scheduled"):
                 self._execute_result(result, intent, conf, resp, hud, confirmed=True)
                 return
             self._pending_result = result
@@ -1286,6 +1298,47 @@ class JarvisWindow(QMainWindow):
             if on else "Auto-confirm OFF — confirmation prompts restored.",
             "error" if on else "info",
         )
+
+    def _on_scheduled_workflow_fire(self, workflow_id: str) -> None:
+        """Slot for `signals.scheduled_workflow_fire` (F-3 cron scheduler).
+
+        Builds a synthetic brain result equivalent to the user typing
+        ``run <workflow_id>`` and routes it through the standard
+        execution path. The ``_scheduled`` flag flips the auto-confirm
+        bypass — even when the user has auto_confirm ON, scheduled fires
+        always present confirmation cards so a long-running cron can't
+        silently kick off a destructive workflow step.
+        """
+        if not workflow_id:
+            return
+        from core.automation import workflow_library
+        wf = workflow_library.get(workflow_id)
+        if wf is None or not wf.get("enabled", True):
+            return
+        result = {
+            "intent": "automation_task",
+            "action": "run_workflow",
+            "parameters": {"task_name": workflow_id},
+            "confidence": 0.99,
+            "response": f"Scheduled workflow firing — {wf.get('name', workflow_id)}.",
+            "hud_status": "AUTOMATION",
+            "requires_confirmation": False,
+            # Sentinel that the auto-confirm guard checks below.
+            "_scheduled": True,
+        }
+        # Synthesize a transcript entry so the user sees what fired.
+        from datetime import datetime as _dt
+        j_time = _dt.now().strftime("%H:%M")
+        if hasattr(self, "_history") and isinstance(self._history, list):
+            self._history.append({
+                "you": f"[scheduled] {wf.get('name', workflow_id)}",
+                "jarvis": result["response"],
+                "jTime": j_time,
+                "intent": "automation_task",
+                "conf": 0.99,
+                "status": "pending",
+            })
+        self._on_brain_result(result)
 
     def _on_dim_toggled(self, on: bool):
         self._dim_mode = bool(on)

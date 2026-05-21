@@ -101,9 +101,16 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             "id": slug, "name": task_name, "trigger": trigger,
             "enabled": True, "last_run": "", "steps": steps,
         }
+        # F-3: optional cron expression for auto-fire. Validated lightly here
+        # (just non-empty); the scheduler itself silently skips invalid
+        # expressions at fire-time rather than blocking workflow creation.
+        schedule = (params.get("schedule") or "").strip()
+        if schedule:
+            wf["schedule"] = schedule
         workflow_library.add(wf)
-        _tlog(f"✓ saved — {len(steps)} step{'s' if len(steps) != 1 else ''}")
-        return _ok(f"Workflow '{task_name}' created with {len(steps)} step(s).")
+        sched_note = f" — scheduled '{schedule}'" if schedule else ""
+        _tlog(f"✓ saved — {len(steps)} step{'s' if len(steps) != 1 else ''}{sched_note}")
+        return _ok(f"Workflow '{task_name}' created with {len(steps)} step(s){sched_note}.")
 
     if action == "remove_workflow":
         task_name = params.get("task_name", "")
