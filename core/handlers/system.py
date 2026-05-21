@@ -109,12 +109,15 @@ def _toggle_wifi_windows() -> dict:
 
 
 def _toggle_wifi_windows_fallback_ui() -> dict:
-    """Best-effort fallback: open Quick Settings then UIAutomation-click the Wi-Fi tile.
+    """Best-effort fallback: open Quick Settings, then activate the Wi-Fi tile.
 
-    Mirrors _toggle_bluetooth_windows_fallback_ui. Finds the Wi-Fi button by
-    name (regex match against "wi-?fi|wifi|wireless"), then tries InvokePattern
-    first and TogglePattern second since Windows uses different patterns
-    across versions.
+    Three layers of finding the Wi-Fi tile, in order of robustness:
+      1. UIA by AutomationId regex (stable across SSID / connection state changes)
+      2. UIA by Name regex (works when name contains "Wi-Fi" / "Wireless")
+      3. Keyboard fallback — Win+A focuses the Wi-Fi tile by default on Win11,
+         so pressing Space toggles it. Used when the Wi-Fi tile's accessibility
+         name is the connected SSID (e.g. "VALENTINE IPHONE XIII") and matches
+         no Wi-Fi keyword.
     """
     try:
         if config.debug_mode:
@@ -128,16 +131,28 @@ def _toggle_wifi_windows_fallback_ui() -> dict:
             "Add-Type -AssemblyName UIAutomationClient | Out-Null;"
             "Add-Type -AssemblyName UIAutomationTypes | Out-Null;"
             "$root = [System.Windows.Automation.AutomationElement]::RootElement;"
-            # Look through all Button-typed elements whose Name matches Wi-Fi /
-            # Wifi / Wireless (regex). Windows appends connection state to the
-            # name (e.g. "Wi-Fi Connected, MyNetwork") so an exact match fails.
             "$btnCond = New-Object System.Windows.Automation.PropertyCondition("
             "  [System.Windows.Automation.AutomationElement]::ControlTypeProperty,"
             "  [System.Windows.Automation.ControlType]::Button);"
             "$buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond);"
             "$el = $null;"
+            # Pass 1: AutomationId regex. Windows 11 Quick Settings tiles have
+            # AutomationIds like "WiFiQuickActionButton" that stay constant
+            # even when the connected SSID changes the visible name.
             "foreach ($b in $buttons) {"
-            "  try { if ($b.Current.Name -match '(?i)wi-?fi|wireless') { $el = $b; break } } catch {}"
+            "  try { if ($b.Current.AutomationId -match '(?i)wifi|wireless|wlan') { $el = $b; break } } catch {}"
+            "};"
+            # Pass 2: Name regex (handles "Wi-Fi" / "Wi-Fi Not connected" / "Wireless").
+            "if (-not $el) {"
+            "  foreach ($b in $buttons) {"
+            "    try { if ($b.Current.Name -match '(?i)wi-?fi|wireless') { $el = $b; break } } catch {}"
+            "  }"
+            "};"
+            # Pass 3: HelpText regex — last accessibility hint we can check.
+            "if (-not $el) {"
+            "  foreach ($b in $buttons) {"
+            "    try { if ($b.Current.HelpText -match '(?i)wi-?fi|wireless') { $el = $b; break } } catch {}"
+            "  }"
             "};"
             "if (-not $el) { Write-Output '__NOT_FOUND__'; exit 0 };"
             "try {"
@@ -154,15 +169,25 @@ def _toggle_wifi_windows_fallback_ui() -> dict:
         if config.debug_mode:
             print(f"[wifi] UIA result: ok={ok} out={out!r}")
 
-        time.sleep(0.2)
-        cc.press_key("escape")
-
         if ok and ("toggled_invoke" in out or "toggled_toggle" in out):
+            time.sleep(0.2)
+            cc.press_key("escape")
             return _ok("Wi-Fi toggled via Quick Settings")
-        if "__NOT_FOUND__" in out:
-            return _err("Wi-Fi tile not found in Quick Settings")
-        if "__NO_PATTERN__" in out:
-            return _err("Wi-Fi tile found but could not be activated")
+
+        # Keyboard fallback: when the Wi-Fi tile's accessibility name is the
+        # connected SSID (e.g. "VALENTINE IPHONE XIII"), the UIA search above
+        # won't match. But Win+A focuses the Wi-Fi tile by default on Win11,
+        # so Space toggles it. We do NOT chain this with a successful UIA
+        # invoke above — that would double-toggle.
+        if "__NOT_FOUND__" in out or "__NO_PATTERN__" in out or not ok:
+            if config.debug_mode:
+                print("[wifi] UIA didn't find / activate tile — sending Space to focused element")
+            cc.press_key("space")
+            time.sleep(0.2)
+            cc.press_key("escape")
+            return _ok("Wi-Fi toggled via Quick Settings (keyboard)")
+
+        cc.press_key("escape")
         return _err(f"Wi-Fi UI automation failed: {out}")
     except Exception as exc:
         return _err(f"Wi-Fi fallback failed: {exc}")
