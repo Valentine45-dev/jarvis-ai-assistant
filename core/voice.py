@@ -49,33 +49,117 @@ __all__ = [
 
 
 # ── Mute state tracking ───────────────────────────────────────────────────────
-# Source of truth is an app-level flag, updated by core.handlers.system when
-# JARVIS mutes/unmutes via the OS hotkey path. We do NOT query pycaw GetMute:
-# each pycaw call creates comtypes COM proxies that later crash with
-# `ValueError: COM method call without VTable` when Python GC reaps them on
-# a thread without a live COM apartment. Trade-off: if the user mutes via
-# the Windows taskbar/hotkey directly, JARVIS won't know — TTS will still
-# attempt to play to the muted endpoint. That's acceptable (OS handles muted
-# output without crashing; only pycaw triggers the crash).
+# Two layers — both designed to never expose comtypes COM proxies to our process
+# (since pycaw proxies crash with `ValueError: COM method call without VTable`
+# when Python GC reaps them on a thread without a live COM apartment):
+#
+#   1. App-level flag (_app_audio_muted) — set deterministically when JARVIS
+#      itself toggles via the OS hotkey. Zero cost. Always trusted when True.
+#   2. Out-of-process pycaw probe — spawns a short-lived `python -c` that
+#      queries IAudioEndpointVolume.GetMute() and prints muted/unmuted. The
+#      subprocess owns its own COM apartment and dies on exit, taking its
+#      proxies with it. Cached for 5 s so back-to-back say() calls don't
+#      pay the spawn cost.
+#
+# The flag is preferred (cheap, instant). The probe is the safety net that
+# catches manual Windows-taskbar mute. JARVIS-initiated toggles refresh the
+# probe cache directly (no subprocess needed) since we know the new state.
+
+import platform as _platform
+import time as _time
+import subprocess as _subprocess
+import sys as _sys
+
+_OS = _platform.system().lower()  # "windows" | "darwin" | "linux"
 
 _app_audio_muted: bool = False
+_PROBE_TTL_S = 5.0
+_probe_lock = threading.Lock()
+_probe_cache: dict = {"value": None, "checked_at": 0.0}  # value: True/False/None
+
+_PROBE_CODE = (
+    "from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume;"
+    "from ctypes import cast, POINTER;"
+    "from comtypes import CLSCTX_ALL;"
+    "d = AudioUtilities.GetSpeakers();"
+    "raw = getattr(d, '_dev', d);"
+    "iface = raw.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None);"
+    "vol = cast(iface, POINTER(IAudioEndpointVolume));"
+    "print('muted' if vol.GetMute() else 'unmuted')"
+)
+
+
+def _run_mute_probe_subprocess() -> bool | None:
+    """Spawn `python -c <probe>` and read its stdout. Returns True/False or None on failure."""
+    try:
+        creationflags = 0
+        if _OS == "windows":
+            # CREATE_NO_WINDOW — no flashing console for the brief subprocess.
+            creationflags = 0x08000000
+        r = _subprocess.run(
+            [_sys.executable, "-c", _PROBE_CODE],
+            capture_output=True,
+            timeout=3.0,
+            creationflags=creationflags,
+        )
+        if r.returncode != 0:
+            return None
+        out = (r.stdout or b"").decode("utf-8", errors="replace").strip().lower()
+        if out == "muted":
+            return True
+        if out == "unmuted":
+            return False
+        return None
+    except Exception:
+        return None
+
+
+def _probed_system_muted() -> bool:
+    """Return True if the OS reports muted (cached). False on unknown or unmuted."""
+    if _OS != "windows":
+        return False
+    now = _time.monotonic()
+    with _probe_lock:
+        cached_value = _probe_cache["value"]
+        cached_at    = _probe_cache["checked_at"]
+        cache_fresh  = (now - cached_at) < _PROBE_TTL_S
+    if cache_fresh and cached_value is not None:
+        return bool(cached_value)
+    # Spawn a probe. This is the cache-miss path.
+    result = _run_mute_probe_subprocess()
+    with _probe_lock:
+        # Only cache definitive answers (True/False), not None failures.
+        if result is not None:
+            _probe_cache["value"] = result
+            _probe_cache["checked_at"] = now
+    return bool(result) if result is not None else False
 
 
 def set_app_audio_muted(value: bool) -> None:
-    """Called by the volume_mute/volume_unmute handler after toggling mute."""
+    """Mirror state set by the volume_mute/unmute handler.
+
+    Also refreshes the probe cache directly (no subprocess) since JARVIS just
+    set the state and knows what it is. Next say() call will hit the cache.
+    """
     global _app_audio_muted
     _app_audio_muted = bool(value)
+    with _probe_lock:
+        _probe_cache["value"] = bool(value)
+        _probe_cache["checked_at"] = _time.monotonic()
 
 
 def get_app_audio_muted() -> bool:
-    """Current app-tracked mute state. Used by the system handler to decide
-    label and to compute the post-toggle state without querying pycaw."""
+    """Current app-tracked mute state. Used by the system handler to compute
+    the post-toggle state."""
     return _app_audio_muted
 
 
 def _system_audio_muted() -> bool:
-    """True when TTS should be skipped — JARVIS knows the system is muted."""
-    return _app_audio_muted
+    """True when TTS should be skipped. App flag wins fast; OS probe catches
+    manual taskbar/hotkey mute the app doesn't know about."""
+    if _app_audio_muted:
+        return True
+    return _probed_system_muted()
 
 
 # ── Signal carrier ────────────────────────────────────────────────────────────
