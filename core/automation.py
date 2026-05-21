@@ -21,13 +21,19 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.log import debug as _dbg
+from core.log import debug as _dbg, info as _info
 
 _WORKFLOWS_PATH = Path(__file__).parent.parent / "data" / "workflows.json"
+
+# How often the mtime watcher checks data/workflows.json. 2s is fast enough
+# that hand-edits show up before the user can ask for "list workflows" again,
+# slow enough to be free at idle.
+_WATCH_POLL_SECONDS = 2.0
 
 
 def _emit_changed() -> None:
@@ -44,7 +50,14 @@ class WorkflowLibrary:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._workflows: dict[str, dict] = {}
+        # mtime of workflows.json the last time we read or wrote it. The
+        # background watcher diffs against this to detect external edits.
+        self._last_mtime: float = 0.0
+        # Set by _save() so the very next watcher tick ignores the mtime bump
+        # that our own write produced. Cleared after one skipped tick.
+        self._jarvis_wrote: bool = False
         self._load()
+        self._start_watcher()
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -55,6 +68,10 @@ class WorkflowLibrary:
             data = json.loads(_WORKFLOWS_PATH.read_text(encoding="utf-8"))
             with self._lock:
                 self._workflows = {w["id"]: w for w in data.get("workflows", [])}
+                try:
+                    self._last_mtime = _WORKFLOWS_PATH.stat().st_mtime
+                except OSError:
+                    self._last_mtime = 0.0
         except Exception as exc:
             # Surface the error so a malformed workflows.json is diagnosable.
             _dbg("automation", f"Failed to load {_WORKFLOWS_PATH}: {exc}")
@@ -68,6 +85,14 @@ class WorkflowLibrary:
         try:
             tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
             os.replace(tmp, _WORKFLOWS_PATH)
+            # Tell the watcher the next mtime change came from us — it must
+            # skip exactly one tick (and refresh _last_mtime) so our own
+            # save() doesn't trigger a spurious "reloaded from disk" log.
+            self._jarvis_wrote = True
+            try:
+                self._last_mtime = _WORKFLOWS_PATH.stat().st_mtime
+            except OSError:
+                pass
         except Exception as exc:
             _dbg("automation", f"Failed to save {_WORKFLOWS_PATH}: {exc}")
             try:
@@ -75,6 +100,64 @@ class WorkflowLibrary:
                     tmp.unlink()
             except OSError:
                 pass
+
+    # ── External-edit watcher ─────────────────────────────────────────────────
+
+    def _start_watcher(self) -> None:
+        """Start a daemon thread that polls workflows.json's mtime.
+
+        When the file changes underneath us (manual hand-edit, git pull, …),
+        reload from disk and emit workflow_library_changed so the UI refreshes.
+        Skips ticks where _jarvis_wrote was just set so our own _save() doesn't
+        cause a phantom reload.
+        """
+        t = threading.Thread(
+            target=self._watch_loop,
+            name="WorkflowLibraryWatcher",
+            daemon=True,
+        )
+        t.start()
+
+    def _watch_loop(self) -> None:
+        while True:
+            time.sleep(_WATCH_POLL_SECONDS)
+            try:
+                mtime = _WORKFLOWS_PATH.stat().st_mtime
+            except OSError:
+                # File temporarily missing (rename-in-progress, network share
+                # hiccup) — skip this tick and try again.
+                continue
+
+            with self._lock:
+                if self._jarvis_wrote:
+                    # Our own save bumped the mtime; eat one tick.
+                    self._jarvis_wrote = False
+                    self._last_mtime = mtime
+                    continue
+                if mtime == self._last_mtime:
+                    continue
+
+            # File changed externally — reload. _load() takes the lock itself.
+            try:
+                raw = _WORKFLOWS_PATH.read_text(encoding="utf-8")
+            except OSError:
+                # Editor mid-write (Notepad truncates then writes). Wait for
+                # the next tick — _last_mtime stays unchanged, so we'll retry.
+                continue
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                # Editor saved a partial/invalid JSON. Don't clobber the
+                # in-memory library; just log and try again next tick.
+                _dbg("automation", f"workflows.json change ignored — invalid JSON: {exc}")
+                continue
+
+            with self._lock:
+                self._workflows = {w["id"]: w for w in data.get("workflows", [])}
+                self._last_mtime = mtime
+                count = len(self._workflows)
+            _info("automation", f"workflows.json changed on disk — reloaded {count} workflows")
+            _emit_changed()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
