@@ -926,6 +926,14 @@ class JarvisWindow(QMainWindow):
             factual_actions=self._FACTUAL_ACTIONS,
         )
 
+        # Mirror the brain debug block — surface the personality follow-up
+        # line (the data-rich tail spoken after the primary response) so
+        # the operator can see what's queued for the second TTS clip.
+        # No-op outside debug_mode and when no follow-up is produced.
+        if follow and config.debug_mode:
+            from core.log import debug as _brain_dbg
+            _brain_dbg("brain", f"FOLLOW  : {follow!r}")
+
         # One dashboard line for the first TTS; a second line is appended when `follow` is set.
         hist_jarvis = (
             primary if (intent in self._ACTION_INTENTS and follow) else display_resp
