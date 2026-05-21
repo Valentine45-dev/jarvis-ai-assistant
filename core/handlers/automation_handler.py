@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import threading
 
-from core.handlers.shared import _ok, _err
+from core.handlers.shared import _ok, _err, _tlog
 
 _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
     # delete_file is NOT here — requires_confirmation:true on the workflow
@@ -62,31 +62,40 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         task_name = params.get("task_name", "")
         steps     = params.get("steps", [])
         trigger   = (params.get("trigger") or "Manual").strip() or "Manual"
+        _tlog(f"❯ create workflow {task_name!r}")
         if not task_name:
+            _tlog("✗ no task_name provided")
             return _err("No task_name provided for workflow creation.")
         if not isinstance(steps, list) or not steps:
+            _tlog("✗ steps must be a non-empty list")
             return _err("Steps must be a non-empty list.")
         slug = task_name.lower().replace(" ", "_")
         if workflow_library.get(slug) is not None:
+            _tlog(f"✗ workflow {task_name!r} already exists")
             return _err(f"Workflow '{task_name}' already exists.")
         for i, step in enumerate(steps, 1):
             if isinstance(step, str):
                 continue  # validated at runtime when ask_claude parses it
             if not isinstance(step, dict):
+                _tlog(f"✗ step {i} must be a dict or string")
                 return _err(f"Step {i} must be a dict or string.")
             s_intent = step.get("intent", "")
             s_action = step.get("action", "")
             if not s_intent:
+                _tlog(f"✗ step {i} is missing 'intent'")
                 return _err(f"Step {i} is missing 'intent'.")
             if s_intent not in _KNOWN_STEP_INTENTS:
+                _tlog(f"✗ step {i} has unrecognised intent {s_intent!r}")
                 return _err(f"Step {i} has unrecognised intent '{s_intent}'.")
             if (s_intent, s_action) in _DANGEROUS_STEPS:
+                _tlog(f"✗ step {i} contains dangerous action {s_action!r}")
                 return _err(f"Step {i} contains dangerous action '{s_action}'.")
         wf = {
             "id": slug, "name": task_name, "trigger": trigger,
             "enabled": True, "last_run": "", "steps": steps,
         }
         workflow_library.add(wf)
+        _tlog(f"✓ saved — {len(steps)} step{'s' if len(steps) != 1 else ''}")
         return _ok(f"Workflow '{task_name}' created with {len(steps)} step(s).")
 
     if action == "remove_workflow":
@@ -121,19 +130,24 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     task_name = params.get("task_name", "")
     workflow_id: str = ""
 
+    _tlog(f"❯ workflow: {task_name or '(inline)'}")
+
     # If task_name resolves to a saved workflow, always prefer its persisted
     # step list over any inline steps from model output.
     if task_name:
         wf = workflow_library.get(task_name)
         if wf is not None:
             if not wf.get("enabled", True):
+                _tlog(f"✗ workflow {wf['name']!r} is disabled")
                 return _err(f"Workflow '{wf['name']}' is disabled.")
             steps       = wf.get("steps", [])
             workflow_id = wf.get("id", "")
         elif not steps:
+            _tlog(f"✗ workflow not found: {task_name!r}")
             return _err(f"Workflow not found: {task_name!r}")
 
     if not steps:
+        _tlog("✗ no steps provided")
         return _err("No steps provided in automation task")
 
     for step in steps:
@@ -142,6 +156,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         intent   = step.get("intent", "")
         s_action = step.get("action", "")
         if (intent, s_action) in _DANGEROUS_STEPS:
+            _tlog(f"✗ workflow contains dangerous step {s_action!r}")
             return _err(f"Workflow contains dangerous step '{s_action}' — run manually.")
 
     total = len(steps)
@@ -212,6 +227,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                 if parsed.get("intent") == "unknown":
                     state["results"].append(f"Step {step_n}: FAIL — could not parse '{step}'")
                     state["all_ok"] = False
+                    _tlog(f"✗ failed at step {step_n}: could not parse {step!r}")
                     return _err("\n".join(state["results"]))
                 step = parsed
 
@@ -253,6 +269,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     _append_step_result(step_n, first)
                     if not first.get("success"):
                         state["all_ok"] = False
+                        _tlog(f"✗ failed at step {step_n}: {first.get('error') or first.get('output') or 'step failed'}")
                         return _err("\n".join(state["results"]))
                     _absorb_step_into_state(step, first)
                     return _run_from(idx + 1)
@@ -268,8 +285,10 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                 state["all_ok"] = False
                 if sub.get("quit_application"):
                     state["quit_application"] = True
+                _tlog(f"✗ failed at step {step_n}: {sub.get('error') or sub.get('output') or 'step failed'}")
                 return _err("\n".join(state["results"]))
 
+        _tlog(f"✓ all {total} step{'s' if total != 1 else ''} complete")
         out: dict = _ok("\n".join(state["results"]))
         if state["last_step_intent"] and state["last_step_action"]:
             out["last_step_intent"] = state["last_step_intent"]
