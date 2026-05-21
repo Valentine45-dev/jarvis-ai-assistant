@@ -343,6 +343,139 @@ Read text from the screen using OCR.
 
 -----
 
+### 17. `vision_analysis`
+
+> Numbered 17 because it was added after `unknown` (§16), but placed here in
+> the doc next to `read_screen` since both deal with "look at the screen" —
+> the routing distinction below matters.
+
+Use when the user wants JARVIS to SEE, LOOK AT, DESCRIBE, READ, or ANALYZE visual content — a screen, image file, browser page, or webcam feed.
+
+Do **NOT** use for plain text reading — that's still `read_screen` (cheap OCR).
+**DO** use when the user wants understanding, not just raw OCR output (layout, colors, UI elements, "what's in this image", "where is the X button").
+
+**Actions:**
+
+| Action | When to use |
+|---|---|
+| `describe` | *"what's on my screen"*, *"what do you see"*, *"describe my screen"* |
+| `read_text` | *"read the text in this image"*, *"what does this image say"* |
+| `find_ui_element` | *"where is the submit button"*, *"find the search bar"* |
+| `answer_question` | *"what color is the logo"*, *"how many tabs are open"* |
+| `screenshot_and_describe` | *"take a screenshot and describe it"*, *"capture and explain"* |
+
+**Parameters:**
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `source` | string | `"screenshot"` | one of `screenshot`, `file`, `region`, `browser`, `webcam` |
+| `path` | string | `""` | **required** when `source=file` |
+| `question` | string | `""` | **required** for `find_ui_element` and `answer_question` |
+| `region` | object | `null` | `{x, y, width, height}` — **required** when `source=region` |
+| `device` | int | `0` | webcam device index |
+
+**Routing rules:**
+
+- *"what's on my screen"* / *"describe my screen"* / *"what do you see"* → `describe`, `source=screenshot`
+- *"read the text on screen"* / *"what does this say"* → `read_text`, `source=screenshot`
+- *"look at [path]"* / *"analyze this image [path]"* → `describe`, `source=file`, `path=<path>`
+- *"where is the [element]"* / *"find the [button]"* → `find_ui_element`, `source=screenshot`, `question=<element>`
+- *"what does the browser show"* / *"describe the page"* → `describe`, `source=browser`
+- *"look through my webcam"* / *"use the camera"* / *"what does the camera see"* → `describe`, `source=webcam`
+- *"take a screenshot and describe it"* → `screenshot_and_describe`
+- *"answer this about my screen: [question]"* → `answer_question`, `source=screenshot`, `question=<question>`
+
+**HUD Label:** `VISION`
+**Confirmation:** `false` — read-only capture + analysis, no destructive side effects.
+
+**Examples:**
+
+*Input:* `"what's on my screen?"`
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "describe",
+  "parameters": { "source": "screenshot" },
+  "confidence": 0.97,
+  "response": "Taking a look.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"read the text on screen"`
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "read_text",
+  "parameters": { "source": "screenshot" },
+  "confidence": 0.97,
+  "response": "Reading the screen now.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"look through my webcam"`
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "describe",
+  "parameters": { "source": "webcam" },
+  "confidence": 0.95,
+  "response": "Activating camera.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"where is the submit button?"`
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "find_ui_element",
+  "parameters": { "source": "screenshot", "question": "submit button" },
+  "confidence": 0.96,
+  "response": "Scanning for it.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"analyze this image C:\Users\Lenovo\photo.png"`
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "describe",
+  "parameters": { "source": "file", "path": "C:\\Users\\Lenovo\\photo.png" },
+  "confidence": 0.95,
+  "response": "Looking at that image.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"what does the camera see?"`
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "describe",
+  "parameters": { "source": "webcam" },
+  "confidence": 0.95,
+  "response": "Let me check.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+-----
+
 ### 9. `browser_automation`
 
 Control Chrome via a persistent Playwright session. JARVIS owns the browser tab — this is not a simple URL open. The browser starts with JARVIS and stays alive until shutdown.
@@ -1536,6 +1669,7 @@ The `response` field is the **primary spoken output** — it is read aloud exact
 |`reminder_task`     |`REMINDER SET`   |
 |`weather`           |`WEATHER`        |
 |`document_creation` |`DOCUMENT`       |
+|`vision_analysis`   |`VISION`         |
 |`unknown`           |`UNKNOWN`        |
 
 Override the default when context demands it — e.g. `"SHUTDOWN PENDING"` or `"SLEEP PENDING"` instead of `"SYS CONTROL"` when awaiting confirmation for those actions.
