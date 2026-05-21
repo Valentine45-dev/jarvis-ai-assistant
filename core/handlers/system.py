@@ -69,6 +69,12 @@ def _toggle_wifi_windows() -> dict:
     )
     ok, out = _run_powershell(probe)
     if not ok:
+        # Probe failure isn't necessarily fatal — try the UI fallback before giving up.
+        if config.debug_mode:
+            print(f"[wifi] probe failed: {out}; trying UI fallback")
+        fb = _toggle_wifi_windows_fallback_ui()
+        if fb.get("success"):
+            return fb
         short = _compact_powershell_error(out, "Unable to inspect Wi-Fi adapter state")
         if _is_access_denied(out):
             return _err("Wi-Fi toggle requires Administrator privileges on Windows.")
@@ -88,11 +94,78 @@ def _toggle_wifi_windows() -> dict:
     )
     ok2, out2 = _run_powershell(cmd)
     if not ok2:
+        # Enable/Disable-NetAdapter needs admin. Fall back to clicking the
+        # Wi-Fi tile in Quick Settings via UI automation — no elevation needed.
+        if config.debug_mode:
+            print(f"[wifi] netadapter cmdlet failed: {out2}; trying UI fallback")
+        fb = _toggle_wifi_windows_fallback_ui()
+        if fb.get("success"):
+            return fb
         short = _compact_powershell_error(out2, "Unable to toggle Wi-Fi adapter")
         if _is_access_denied(out2):
             return _err("Wi-Fi toggle requires Administrator privileges on Windows.")
         return _err(f"Wi-Fi toggle failed: {short}")
     return _ok("Wi-Fi enabled" if should_enable else "Wi-Fi disabled")
+
+
+def _toggle_wifi_windows_fallback_ui() -> dict:
+    """Best-effort fallback: open Quick Settings then UIAutomation-click the Wi-Fi tile.
+
+    Mirrors _toggle_bluetooth_windows_fallback_ui. Finds the Wi-Fi button by
+    name (regex match against "wi-?fi|wifi|wireless"), then tries InvokePattern
+    first and TogglePattern second since Windows uses different patterns
+    across versions.
+    """
+    try:
+        if config.debug_mode:
+            print("[wifi] UI fallback: opening Quick Settings via Win+A")
+        r = cc.press_key("win+a")
+        if not r.get("success"):
+            return _err("Wi-Fi fallback failed to open Quick Settings")
+        time.sleep(0.6)  # let the panel fully render
+
+        ps = (
+            "Add-Type -AssemblyName UIAutomationClient | Out-Null;"
+            "Add-Type -AssemblyName UIAutomationTypes | Out-Null;"
+            "$root = [System.Windows.Automation.AutomationElement]::RootElement;"
+            # Look through all Button-typed elements whose Name matches Wi-Fi /
+            # Wifi / Wireless (regex). Windows appends connection state to the
+            # name (e.g. "Wi-Fi Connected, MyNetwork") so an exact match fails.
+            "$btnCond = New-Object System.Windows.Automation.PropertyCondition("
+            "  [System.Windows.Automation.AutomationElement]::ControlTypeProperty,"
+            "  [System.Windows.Automation.ControlType]::Button);"
+            "$buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond);"
+            "$el = $null;"
+            "foreach ($b in $buttons) {"
+            "  try { if ($b.Current.Name -match '(?i)wi-?fi|wireless') { $el = $b; break } } catch {}"
+            "};"
+            "if (-not $el) { Write-Output '__NOT_FOUND__'; exit 0 };"
+            "try {"
+            "  $inv = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern);"
+            "  $inv.Invoke(); Write-Output 'toggled_invoke'; exit 0"
+            "} catch {};"
+            "try {"
+            "  $tog = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern);"
+            "  $tog.Toggle(); Write-Output 'toggled_toggle'; exit 0"
+            "} catch {};"
+            "Write-Output '__NO_PATTERN__'"
+        )
+        ok, out = _run_powershell(ps, timeout=8)
+        if config.debug_mode:
+            print(f"[wifi] UIA result: ok={ok} out={out!r}")
+
+        time.sleep(0.2)
+        cc.press_key("escape")
+
+        if ok and ("toggled_invoke" in out or "toggled_toggle" in out):
+            return _ok("Wi-Fi toggled via Quick Settings")
+        if "__NOT_FOUND__" in out:
+            return _err("Wi-Fi tile not found in Quick Settings")
+        if "__NO_PATTERN__" in out:
+            return _err("Wi-Fi tile found but could not be activated")
+        return _err(f"Wi-Fi UI automation failed: {out}")
+    except Exception as exc:
+        return _err(f"Wi-Fi fallback failed: {exc}")
 
 
 def _toggle_bluetooth_windows() -> dict:
