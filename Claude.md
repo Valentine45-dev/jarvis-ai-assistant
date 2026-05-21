@@ -755,6 +755,7 @@ Commands directed at JARVIS itself — status, settings, identity.
 - `conversational` — Handle casual conversation (incl. *what is my name* / *who am I* when `context.user_name` is set — use that name; do not return `unknown`)
 - `quit_application` — **Exit the JARVIS app** (executor closes the window after TTS; use a warm spoken `response` such as a short goodbye)
 - `close_jarvis` — **Alias** of `quit_application` (same behaviour)
+- `wipe_memory` — Clear the persisted conversation history at `data/memory.jsonl` AND the in-process buffer. Use when the user says *"forget our conversation"*, *"wipe your memory"*, *"clear conversation history"*, *"start fresh"*, *"reset our chat"*, or any phrasing about JARVIS forgetting context. **Does not** touch persisted workflows, settings, response-style memory (`data/response_history.jsonl`), or session history (`data/session_history.db`) — only the conversation message buffer.
 
 **Parameters:**
 

@@ -122,6 +122,23 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
             return _ok(cached[:800])
         return _ok("")
 
+    if action == "wipe_memory":
+        # Privacy escape hatch — clears in-process conversation history AND
+        # the persisted data/memory.jsonl. Response_memory (the spoken-line
+        # variety log) is separate and intentionally NOT touched here.
+        _tlog("❯ wipe conversation memory")
+        try:
+            from core.memory import memory as _conv_memory
+            count = _conv_memory.exchange_count
+            _conv_memory.clear()
+            _tlog(f"✓ cleared {count} exchange{'s' if count != 1 else ''}")
+            return _ok(
+                f"Memory wiped — cleared {count} exchange{'s' if count != 1 else ''}."
+            )
+        except Exception as exc:
+            _tlog(f"✗ {exc}")
+            return _err(f"Couldn't clear memory: {exc}")
+
     if action == "list_voices":
         from core.voice import _EL_VOICES
         _LABELS = {

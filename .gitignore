@@ -22,6 +22,7 @@ data/session_history.db-shm
 data/session_history.db-wal
 data/session_history.json
 data/response_history.jsonl
+data/memory.jsonl
 
 # Runtime logs (local only — churn on every run)
 logs/

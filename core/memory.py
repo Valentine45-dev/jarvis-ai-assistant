@@ -3,11 +3,24 @@ Conversation context manager.
 Maintains a rolling message history for multi-turn Claude conversations.
 Token budget enforced via character-based estimation (len(text) // 4 ≈ tokens).
 Thread-safe for concurrent use alongside ask_claude_async().
+
+Persistence (F-1):
+    Each completed user+assistant pair is flushed to data/memory.jsonl
+    atomically (tmp + os.replace), and reloaded at module import so
+    context survives JARVIS restarts. The file is gitignored — it
+    contains conversation history that may include personal content.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
+from pathlib import Path
+
+from core.log import debug as _dbg
+
+_PERSIST_PATH = Path(__file__).parent.parent / "data" / "memory.jsonl"
 
 
 class ConversationMemory:
@@ -21,6 +34,7 @@ class ConversationMemory:
         self._messages: list[dict[str, str]] = []
         self._lock = threading.Lock()
         self._max_tokens = max_tokens
+        self._load()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -30,6 +44,7 @@ class ConversationMemory:
             self._messages.append({"role": "user",      "content": user_text})
             self._messages.append({"role": "assistant", "content": assistant_json})
             self._trim()
+            self._save_locked()
 
     def get_messages(self) -> list[dict[str, str]]:
         """Return a thread-safe snapshot of the current history."""
@@ -70,12 +85,14 @@ class ConversationMemory:
                         "role": "assistant",
                         "content": self._messages[i]["content"] + suffix,
                     }
+                    self._save_locked()
                     break
 
     def clear(self) -> None:
-        """Wipe all conversation history."""
+        """Wipe all conversation history (in memory AND on disk)."""
         with self._lock:
             self._messages.clear()
+            self._save_locked()
 
     @property
     def exchange_count(self) -> int:
@@ -99,6 +116,70 @@ class ConversationMemory:
         while self._estimate_tokens() > self._max_tokens and len(self._messages) >= 2:
             self._messages.pop(0)  # user
             self._messages.pop(0)  # assistant
+
+    # ── Persistence (F-1) ─────────────────────────────────────────────────────
+
+    def _load(self) -> None:
+        """Read persisted history from disk on construction.
+
+        Per-line JSON objects with the same shape as in-memory entries:
+        ``{"role": "user"|"assistant", "content": "..."}``. Silently skips
+        malformed lines so a partially-corrupt file doesn't block startup.
+        Applies the same trim invariant in case the disk file was written
+        with a larger budget than the current process uses.
+        """
+        if not _PERSIST_PATH.exists():
+            return
+        loaded: list[dict[str, str]] = []
+        try:
+            with _PERSIST_PATH.open("r", encoding="utf-8") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if (isinstance(obj, dict)
+                            and obj.get("role") in ("user", "assistant")
+                            and isinstance(obj.get("content"), str)):
+                        loaded.append({"role": obj["role"], "content": obj["content"]})
+        except OSError as exc:
+            _dbg("memory", f"failed to load {_PERSIST_PATH}: {exc}")
+            return
+
+        # Drop a trailing unpaired user message so the list always starts/ends
+        # on the same alternation invariant the in-process code assumes.
+        if loaded and len(loaded) % 2 != 0:
+            loaded.pop()
+
+        with self._lock:
+            self._messages = loaded
+            self._trim()
+
+    def _save_locked(self) -> None:
+        """Persist current messages to disk atomically. Caller must hold ``_lock``.
+
+        Writes the full list to a sibling ``.tmp`` then ``os.replace``s it
+        over the canonical path — mirrors core/automation.py's atomic
+        workflows.json write (R2-10 pattern). A crash mid-write leaves the
+        previous version intact rather than truncated.
+        """
+        try:
+            _PERSIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _PERSIST_PATH.with_suffix(_PERSIST_PATH.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                for msg in self._messages:
+                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            os.replace(tmp, _PERSIST_PATH)
+        except OSError as exc:
+            _dbg("memory", f"failed to save {_PERSIST_PATH}: {exc}")
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except (OSError, UnboundLocalError):
+                pass
 
 
 memory = ConversationMemory()
