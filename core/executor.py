@@ -108,6 +108,16 @@ def dispatch(result: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
     if needs_confirmation and not confirmed:
         return _err(f"Action '{action}' requires confirmation before execution.")
 
+    # R2-26: surface brain ↔ dispatch-table drift. When the brain returns an
+    # intent that isn't in _HANDLERS, we silently fall back to _handle_unknown
+    # and the user gets a "I'm unable to process that request" reply — but
+    # the next debug session has no breadcrumb pointing at the typo or the
+    # missing handler entry. Log the mismatch first, then fall back.
+    # Note: intent == "unknown" is the brain's legitimate self-routing for
+    # genuinely unrecognised input — that's not a dispatch-table miss.
+    if intent != "unknown" and intent not in _HANDLERS:
+        _log.error("executor", f"unknown intent from brain: {intent!r}/{action!r}")
+
     handler = _HANDLERS.get(intent, _handle_unknown)
     try:
         if intent == "file_operation":

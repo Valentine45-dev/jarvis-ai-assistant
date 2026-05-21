@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core import log as _log
 from core.handlers.shared import _err, _ok, _tlog
 from core.integrations.weather import (
     WeatherClientError,
@@ -31,6 +32,10 @@ def _handle_weather(action: str, params: dict) -> dict:
 
     # Pull a short {temp}, {condition} summary for the terminal line without
     # depending on format_current_weather's exact prose output.
+    # R2-22: narrowed from bare `Exception` to the three exceptions actually
+    # raised here (snapshot.get returning a non-numeric, round/float on garbage,
+    # missing attribute on a non-dict snapshot). Anything else propagates and
+    # surfaces in the executor's R2-12 traceback log.
     try:
         if isinstance(snapshot, dict):
             temp_c = snapshot.get("temp_c")
@@ -43,6 +48,7 @@ def _handle_weather(action: str, params: dict) -> dict:
             _tlog(f"✓ {', '.join(parts)}" if parts else "✓ done")
         else:
             _tlog("✓ done")
-    except Exception:
+    except (TypeError, ValueError, AttributeError) as exc:
+        _log.debug("weather", f"summary line skipped: {exc!r}")
         _tlog("✓ done")
     return _ok(format_current_weather(snapshot))

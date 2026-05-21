@@ -281,7 +281,12 @@ def ask_claude(
         msg = _get_client().messages.create(
             model=config.claude_model,
             max_tokens=max_out,
-            temperature=0.8,   # varied spoken responses while keeping JSON structure stable
+            # R2-29: dropped 0.8 → 0.5. Routing output is strict JSON — higher
+            # temperature buys nothing on intent/action/params and slightly
+            # raises the fallback-parse rate. The response-variety burden
+            # lives in ask_post_execution (still 0.8) where the spoken reply
+            # is generated.
+            temperature=0.5,
             # R2-8: hard upper bound on the API round-trip so an Anthropic
             # stall can't hang the entire voice pipeline indefinitely.
             # 15s comfortably covers normal completions (median ~1–2s); a

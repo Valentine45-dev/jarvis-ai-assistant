@@ -1492,6 +1492,20 @@ def main():
     w = JarvisWindow()
     w.setMinimumSize(1280, 800)
     w.showMaximized()
+
+    # R2-31: surface a missing ANTHROPIC_API_KEY before the user types or
+    # speaks. Without this, the first command silently 401s and the user
+    # gets a vague "I'm unable to process that" with no clue why. Deferred
+    # by 800ms so the window has rendered and the toast actually animates
+    # in (zero-delay queues the toast before the panel exists).
+    if not (config.anthropic_api_key or "").strip():
+        QTimer.singleShot(
+            800,
+            lambda: signals.status_changed.emit(
+                "Set ANTHROPIC_API_KEY in .env — JARVIS can't route commands without it"
+            ),
+        )
+
     sys.exit(app.exec_())
 
 
