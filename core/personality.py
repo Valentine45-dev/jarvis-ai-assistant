@@ -485,16 +485,16 @@ _P: dict[tuple, dict] = {
     },
 
     # ── VISION ANALYSIS ─────────────────────────────────────────────
-    # Pools are short preambles — the actual analysis text streams in
-    # via the OUTPUT_IS_RESPONSE rule for these actions, so we
-    # deliberately keep the preamble lightweight (or empty) and let
-    # Claude's vision response carry the substance.
+    # OUTPUT_IS_RESPONSE for these actions: the responder calls say()
+    # with the full Claude vision response in `{o}`, so EVERY template
+    # below must include `{o}` or the analysis text gets dropped.
+    # Preamble is a short lead-in; the bulk is the analysis itself.
     ("vision_analysis", "describe"): {
         "ok": [
-            "Taking a look.",
-            "Here's what I see.",
-            "Got it —",
-            "On it.",
+            "Here's what I see: {o}",
+            "Taking a look — {o}",
+            "On screen: {o}",
+            "Got it. {o}",
         ],
         "err": [
             "Couldn't analyze that. {e}",
@@ -504,9 +504,9 @@ _P: dict[tuple, dict] = {
     },
     ("vision_analysis", "read_text"): {
         "ok": [
-            "Here's the text.",
-            "Read it.",
-            "Text extracted.",
+            "Here's the text: {o}",
+            "Reads as: {o}",
+            "Text on screen: {o}",
         ],
         "err": [
             "Couldn't analyze that. {e}",
@@ -516,9 +516,9 @@ _P: dict[tuple, dict] = {
     },
     ("vision_analysis", "find_ui_element"): {
         "ok": [
-            "Found it.",
-            "Located —",
-            "There it is.",
+            "Found it — {o}",
+            "Located: {o}",
+            "There it is — {o}",
         ],
         "err": [
             "Couldn't analyze that. {e}",
@@ -527,9 +527,8 @@ _P: dict[tuple, dict] = {
         ],
     },
     ("vision_analysis", "answer_question"): {
-        # Output IS the answer — empty preamble so the analysis text
-        # gets spoken on its own, no JARVIS framing in front.
-        "ok": [""],
+        # Output IS the answer — no preamble, just speak it.
+        "ok": ["{o}"],
         "err": [
             "Couldn't analyze that. {e}",
             "Vision check failed. {e}",
@@ -538,8 +537,9 @@ _P: dict[tuple, dict] = {
     },
     ("vision_analysis", "screenshot_and_describe"): {
         "ok": [
-            "Screenshot taken.",
-            "Here's what's on screen.",
+            "Screenshot taken — {o}",
+            "Here's what's on screen: {o}",
+            "Captured. {o}",
         ],
         "err": [
             "Couldn't analyze that. {e}",
@@ -962,6 +962,10 @@ _NO_TRIM: set[tuple[str, str]] = {
     ("code_execution",   "*"),
     ("jarvis_meta",      "status_report"),
     ("jarvis_meta",      "list_voices"),
+    # vision_analysis: keep the full Claude vision response intact for TTS.
+    # Trimming would chop the description mid-sentence; the user explicitly
+    # asked for a vision read, they get the whole thing.
+    ("vision_analysis",  "*"),
 }
 
 
