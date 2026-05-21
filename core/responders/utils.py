@@ -38,6 +38,17 @@ _SUPPRESS_FOLLOW: frozenset = frozenset({
     ("jarvis_meta",         "change_voice"),
 })
 
+# ── Skip TTS entirely: action mutates the audio path itself, and playing audio
+# right after can deadlock/crash the audio backend (pycaw SetMute toggles the
+# session mute, then pyaudio/sounddevice tries to play to a muted endpoint and
+# hangs the process). User still sees the terminal `❯ mute` / `✓ muted` lines
+# plus the HUD status flash, so the action is visible without audio playback.
+_SKIP_TTS: frozenset = frozenset({
+    ("system_control", "volume_mute"),
+    ("system_control", "volume_unmute"),
+})
+
+
 # ── Output-IS-response: full output goes to TTS — no Claude preamble needed ───
 _OUTPUT_IS_RESPONSE: frozenset = frozenset({
     ("browser_automation", "read_page"),

@@ -934,16 +934,25 @@ class JarvisWindow(QMainWindow):
 
         # TTS runs on a worker thread; emit a Qt signal when audio is ready so
         # transcript animation starts on the main thread at the real playback point.
+        from core.responders.utils import _SKIP_TTS, in_rule_set
+        _skip_tts = in_rule_set(intent, result.get("action", ""), _SKIP_TTS)
         try:
             from core.voice import voice_engine
-            voice_engine.say(
-                tts_line,
-                on_ready=lambda: self._tts_ready.emit(transcript_payload),
-                on_done=_on_primary_done,
-            )
+            if _skip_tts:
+                # Action mutates audio routing (mute/unmute) — skip audio playback
+                # but still fire the transcript-ready signal and the on_done
+                # continuation so the rest of the pipeline runs unchanged.
+                self._tts_ready.emit(transcript_payload)
+                _on_primary_done()
+            else:
+                voice_engine.say(
+                    tts_line,
+                    on_ready=lambda: self._tts_ready.emit(transcript_payload),
+                    on_done=_on_primary_done,
+                )
             if exec_out.get("quit_application"):
                 audio_len = len(tts_line) + (len(follow) if follow else 0)
-                delay_ms = 400 if voice_engine.tts_muted else min(
+                delay_ms = 400 if (voice_engine.tts_muted or _skip_tts) else min(
                     30000, 1800 + audio_len * 72
                 )
                 QTimer.singleShot(delay_ms, QApplication.instance().quit)
