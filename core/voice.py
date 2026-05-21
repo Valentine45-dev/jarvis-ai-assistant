@@ -63,15 +63,32 @@ _mute_cache_lock = threading.Lock()
 _mute_cache: dict = {"value": False, "checked_at": 0.0}
 _app_audio_muted: bool = False  # set by core.handlers.system after pycaw SetMute
 
+# pycaw's SetMute toggle leaves the Windows audio session in a transient state
+# that crashes the audio backend (pyaudio/sounddevice) when TTS playback is
+# attempted in the first few seconds after the toggle. Empirically observed:
+# mute → unmute → next-command-with-TTS reliably hard-crashes the process.
+# Defence: after every mute/unmute toggle, suppress TTS for this many seconds.
+_POST_TOGGLE_TTS_COOLDOWN_S = 5.0
+_last_toggle_at: float = 0.0
+
 
 def set_app_audio_muted(value: bool) -> None:
     """Called by the volume_mute/volume_unmute handler to mirror its own state.
 
-    This is the deterministic side of the mute-aware TTS skip. The pycaw probe
-    can be flaky across thread contexts; this flag is not.
+    Also stamps a cooldown timestamp so subsequent TTS calls within the cooldown
+    window are skipped — the audio backend cannot reliably play immediately
+    after a pycaw SetMute toggle.
     """
-    global _app_audio_muted
+    global _app_audio_muted, _last_toggle_at
     _app_audio_muted = bool(value)
+    _last_toggle_at = _time.monotonic()
+
+
+def _in_post_toggle_cooldown() -> bool:
+    """True if the audio backend is still in the unstable post-toggle window."""
+    if _last_toggle_at <= 0:
+        return False
+    return (_time.monotonic() - _last_toggle_at) < _POST_TOGGLE_TTS_COOLDOWN_S
 
 
 def _pycaw_audio_muted() -> bool:
@@ -101,8 +118,9 @@ def _pycaw_audio_muted() -> bool:
 
 
 def _system_audio_muted() -> bool:
-    """True if either the app-level flag OR the live pycaw probe says muted."""
-    return _app_audio_muted or _pycaw_audio_muted()
+    """True when TTS should be skipped: muted (app or system) OR within the
+    post-toggle cooldown window where the audio backend is unstable."""
+    return _app_audio_muted or _in_post_toggle_cooldown() or _pycaw_audio_muted()
 
 
 # ── Signal carrier ────────────────────────────────────────────────────────────
