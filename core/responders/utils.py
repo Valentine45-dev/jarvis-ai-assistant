@@ -36,6 +36,10 @@ _SUPPRESS_FOLLOW: frozenset = frozenset({
     ("jarvis_meta",         "change_theme"),
     ("jarvis_meta",         "set_wake_word"),
     ("jarvis_meta",         "change_voice"),
+    # Vision analysis output IS the spoken answer — no Claude follow-up
+    # narration on top of it (avoids redundant "I've analysed the image
+    # and here's what I see..." over the actual description).
+    ("vision_analysis",     "*"),
 })
 
 # ── Skip TTS entirely: action mutates the audio path itself, and playing audio
@@ -65,6 +69,13 @@ _OUTPUT_IS_RESPONSE: frozenset = frozenset({
     ("jarvis_meta",        "status_report"),
     ("jarvis_meta",        "list_voices"),
     ("weather",            "*"),
+    # Vision analysis returns natural-language prose — speak it directly
+    # rather than wrapping it in a Claude paraphrase.
+    ("vision_analysis",    "describe"),
+    ("vision_analysis",    "read_text"),
+    ("vision_analysis",    "find_ui_element"),
+    ("vision_analysis",    "answer_question"),
+    ("vision_analysis",    "screenshot_and_describe"),
 })
 
 
@@ -363,6 +374,12 @@ def smart_error(intent: str, action: str, error: str, params: dict) -> str:
             return f"Couldn't set reminder for {msg!r}." if msg else f"Reminder failed. {short_e}"
         if action == "cancel_reminder":
             return f"No matching reminder found." + (f" {short_e}" if short_e else "")
+    if intent == "vision_analysis":
+        src = params.get("source", "screen")
+        if action == "find_ui_element":
+            q = params.get("question", "that element")
+            return f"Couldn't find {q!r} on {src}."
+        return f"Couldn't analyze the {src}." + (f" {short_e}" if short_e else "")
 
     from core.personality import say as pool_say
     return pool_say(intent, action, "err", "", error)
