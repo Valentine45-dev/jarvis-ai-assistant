@@ -660,16 +660,28 @@ class GreetingCard(GlassPanel):
 
 
 class TypingIndicator(QLabel):
+    """Legacy 'JARVIS typing...' floating label.
+
+    Kept as a compat shim so the five `main.py` call sites
+    (`show_typing()` / `hide_typing()`) don't break. The label itself is
+    never made visible — it had no layout placement and was rendering on
+    top of the SYS_LOG_BUFFER panel at (0,0) when shown. If you want a
+    real typing indicator later, slot a new widget into the dashboard's
+    log column with a proper QHBoxLayout slot rather than reviving this.
+    """
+
     def __init__(self, parent=None):
         super().__init__("JARVIS typing...", parent)
         self.setVisible(False)
         self.setStyleSheet(f"QLabel{{color:{PRIMARY};font-family:'{FM}';font-size:10px;}}")
 
     def show_typing(self):
-        self.setVisible(True)
+        # No-op by design — see class docstring.
+        return
 
     def hide_typing(self):
-        self.setVisible(False)
+        # No-op; the widget is never shown so there's nothing to hide.
+        return
 
 
 class _TagHighlighter(QSyntaxHighlighter):
