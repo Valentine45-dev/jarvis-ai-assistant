@@ -37,6 +37,7 @@ dependencies = [
     "mss>=10.2.0",
     "opencv-python>=4.13.0.92",
     "croniter>=6.2.2",
+    "keyboard>=0.13.5",
 ]
 
 [dependency-groups]

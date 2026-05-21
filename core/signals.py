@@ -27,6 +27,10 @@ class JarvisSignals(QObject):
     # is the workflow id (str). Main thread receives it via QueuedConnection
     # and dispatches the workflow through the standard executor path.
     scheduled_workflow_fire = pyqtSignal(str)
+    # F-4: global hotkey fired (Ctrl+Shift+J etc). Payload is the action
+    # name (focus_command_bar / toggle_mic_mute / take_screenshot / ...).
+    # Main thread routes to the appropriate JarvisWindow slot.
+    hotkey_triggered = pyqtSignal(str)
 
 
 signals = JarvisSignals()

@@ -10,7 +10,7 @@ calls — handlers should not assign new attributes on the fly.
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -80,13 +80,25 @@ class AppConfig:
     terminal_show_actions: bool = True
     # Show the raw Haiku reasoning line behind a browser picker pick. Off by
     # default — only useful when debugging element-selection misses.
-    browser_show_picker_reasoning: bool = False
+    browser_show_picker_reasoning: bool = True
     # Mirror every _tlog line to logs/terminal.log (5MB rotating, 3 backups).
     terminal_log_to_file: bool = True
     # Stream the raw Claude vision response to the terminal panel line by
     # line BEFORE it's spoken. Useful while rolling out vision_analysis;
     # noisy long-term — flip to False once the pipeline is trusted.
-    vision_show_analysis: bool = False
+    vision_show_analysis: bool = True
+    # F-4: global OS hotkey bindings. Keys are hotkey-strings parsed by the
+    # `keyboard` package; values are action names from
+    # core/hotkeys.KNOWN_ACTIONS. Editing this dict at runtime requires
+    # calling core.hotkeys.register_bindings(...) again to take effect.
+    # field(default_factory=...) gives each AppConfig instance its own
+    # dict rather than aliasing one mutable default across instances.
+    hotkeys: dict = field(default_factory=lambda: {
+        "ctrl+shift+j": "focus_command_bar",
+        "ctrl+shift+m": "toggle_mic_mute",
+        "ctrl+shift+s": "take_screenshot",
+        "ctrl+shift+r": "read_screen",
+    })
     # R2-5: master kill switch for core/handlers/code_exec.py. When False, every
     # action under intent `code_execution` short-circuits with an explicit
     # "disabled" reply. Use this to run JARVIS on a shared machine without

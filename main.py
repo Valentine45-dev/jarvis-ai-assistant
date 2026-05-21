@@ -222,6 +222,23 @@ class JarvisWindow(QMainWindow):
         # Start the scheduler daemon. Idempotent; no-op if croniter missing.
         from core.scheduler import start as _start_scheduler
         _start_scheduler()
+
+        # F-4: global hotkeys. Listener runs on the `keyboard` package's own
+        # thread; QueuedConnection delivers the action name to our slot on
+        # the Qt main thread.
+        signals.hotkey_triggered.connect(
+            self._on_hotkey, Qt.QueuedConnection,
+        )
+        try:
+            from core.hotkeys import register_bindings as _register_hotkeys
+            installed = _register_hotkeys(getattr(config, "hotkeys", {}) or {})
+            if installed:
+                # Quiet — no toast on startup; user already configured these.
+                pass
+        except Exception as exc:
+            # Hotkeys are nice-to-have; don't let registration failure
+            # (Linux without root, weird Windows policy, etc.) block launch.
+            print(f"[hotkeys] registration skipped: {exc!r}")
         self._doc_async_ctx: dict | None = None
         self._last_error_toast_msg = ""
         self._last_error_toast_ts = 0.0
@@ -1299,6 +1316,72 @@ class JarvisWindow(QMainWindow):
             "error" if on else "info",
         )
 
+    def _on_hotkey(self, action: str) -> None:
+        """Slot for `signals.hotkey_triggered` (F-4 global hotkeys).
+
+        Each branch maps one ``core.hotkeys.KNOWN_ACTIONS`` value to a real
+        side effect. Unknown actions are dropped silently — the registry
+        already validates against KNOWN_ACTIONS at bind time, but a config
+        edit between binding and firing could land an unknown name here.
+        """
+        if not action:
+            return
+        action = action.strip()
+        try:
+            if action == "focus_command_bar":
+                # Bring the window forward and focus the input field so the
+                # user can start typing immediately.
+                self.raise_()
+                self.activateWindow()
+                try:
+                    self._dashboard.left.cmd_bar.setFocus()
+                except Exception:
+                    pass
+                return
+
+            if action == "toggle_mic_mute":
+                from core.voice import voice_engine
+                new_state = not voice_engine.mic_muted
+                self._on_mic_mute_toggled(new_state)
+                return
+
+            if action == "toggle_tts_mute":
+                from core.voice import voice_engine
+                new_state = not voice_engine.tts_muted
+                self._on_tts_mute_toggled(new_state)
+                return
+
+            if action == "take_screenshot":
+                # Drive through the standard brain-result path so the
+                # screenshot ends up where any other take-screenshot
+                # command would (Desktop, default save path, etc.).
+                self._on_brain_result({
+                    "intent": "system_control",
+                    "action": "screenshot",
+                    "parameters": {},
+                    "confidence": 0.99,
+                    "response": "Hotkey screenshot.",
+                    "hud_status": "SYS CONTROL",
+                    "requires_confirmation": False,
+                })
+                return
+
+            if action == "read_screen":
+                # Vision describe of the current screen, same path as the
+                # voice/text command "what's on my screen".
+                self._on_brain_result({
+                    "intent": "vision_analysis",
+                    "action": "describe",
+                    "parameters": {"source": "screenshot"},
+                    "confidence": 0.99,
+                    "response": "Hotkey vision read.",
+                    "hud_status": "VISION",
+                    "requires_confirmation": False,
+                })
+                return
+        except Exception as exc:
+            print(f"[hotkeys] action {action!r} raised: {exc!r}")
+
     def _on_scheduled_workflow_fire(self, workflow_id: str) -> None:
         """Slot for `signals.scheduled_workflow_fire` (F-3 cron scheduler).
 
@@ -1554,6 +1637,14 @@ class JarvisWindow(QMainWindow):
                 ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._win_hotkey_id)
             except Exception:
                 pass
+        # F-4: detach the keyboard package's low-level hook so it doesn't
+        # outlive the Python process on Windows (it can otherwise leave
+        # the hotkeys "registered" until logout).
+        try:
+            from core.hotkeys import unregister_all as _unregister_hotkeys
+            _unregister_hotkeys()
+        except Exception:
+            pass
         from core.wake_word import wake_detector
         wake_detector.stop()
         self._botbar._stop_rtt_thread()
