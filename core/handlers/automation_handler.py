@@ -27,6 +27,7 @@ _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
 
 _CONFIRMATION_REQUIRED_ACTIONS: frozenset[tuple[str, str]] = frozenset({
     ("automation_task", "remove_workflow"),
+    ("automation_task", "remove_all_workflows"),
     ("system_control",  "shutdown"),
     ("system_control",  "restart"),
     ("system_control",  "sleep"),
@@ -114,6 +115,46 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             return _err(f"Workflow '{task_name}' not found.")
         workflow_library.remove(wf["id"])
         return _ok(f"Workflow '{wf['name']}' deleted.")
+
+    if action == "remove_all_workflows":
+        from core.handlers.shared import request_confirmation
+        _tlog("❯ remove all workflows")
+        workflows = workflow_library.list_all()
+        n = len(workflows)
+        if n == 0:
+            _tlog("✗ no workflows to delete")
+            return _err("No workflows to delete")
+
+        def _do_remove_all() -> dict:
+            deleted = 0
+            errors: list[str] = []
+            for wf in workflow_library.list_all():
+                try:
+                    if workflow_library.remove(wf["id"]):
+                        deleted += 1
+                    else:
+                        errors.append(wf.get("name") or wf.get("id") or "?")
+                except Exception as exc:
+                    errors.append(f"{wf.get('name') or wf.get('id') or '?'}: {exc}")
+            if errors:
+                tail = "; ".join(errors[:3])
+                if len(errors) > 3:
+                    tail += f"; +{len(errors) - 3} more"
+                _tlog(f"✗ {len(errors)} workflow(s) could not be deleted (deleted {deleted})")
+                return {
+                    "success": deleted > 0,
+                    "output":  f"Deleted {deleted} workflow(s). {len(errors)} failed: {tail}",
+                    "error":   f"{len(errors)} workflow(s) could not be deleted",
+                }
+            _tlog(f"✓ deleted {deleted} workflow{'s' if deleted != 1 else ''}")
+            return _ok(f"Deleted {deleted} workflow{'s' if deleted != 1 else ''}.")
+
+        prompt = (
+            f"Delete all {n} saved workflow{'s' if n != 1 else ''}? "
+            f"This cannot be undone."
+        )
+        _tlog(f"⚠ awaiting confirmation — {n} workflow{'s' if n != 1 else ''}")
+        return request_confirmation(prompt, _do_remove_all)
 
     if action == "rename_workflow":
         task_name = params.get("task_name", "")
