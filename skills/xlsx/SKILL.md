@@ -4,6 +4,29 @@ description: "Use this skill any time a spreadsheet file is the primary input or
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
+> ### JARVIS Python sandbox rule — applies to every generator
+>
+> **NEVER call `__import__()` for any reason.** The AST validator blocks
+> dynamic imports outright and rejects the entire script — no document is
+> produced.
+>
+> Wrong (this is what most often trips the sandbox):
+>
+> ```python
+> run.add_break(__import__('docx.enum.text', fromlist=['WD_BREAK']).WD_BREAK.PAGE)
+> ```
+>
+> Correct — all imports go at the top of the file with standard syntax:
+>
+> ```python
+> from docx.enum.text import WD_BREAK
+> # ... later, in the function:
+> run.add_break(WD_BREAK.PAGE)
+> ```
+>
+> Same rule for `importlib`, `getattr(module, 'name')`, and any other
+> dynamic-import trick. If you need a symbol, import it at the top.
+
 # Requirements for Outputs
 
 ## All Excel files

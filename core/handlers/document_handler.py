@@ -312,11 +312,22 @@ def _build_system_blocks(skill_text: str, format_name: str) -> list[dict]:
         "Use only these libraries: python-docx, python-pptx, openpyxl, reportlab, pypdf, "
         "pathlib, datetime, os, json, math, re, io, copy, collections, itertools, PIL, "
         "matplotlib, numpy, traceback, typing, random. "
-        "No network calls. No eval/exec/compile/__import__. No subprocess — the handler "
+        "No network calls. No eval/exec/compile. No subprocess — the handler "
         "owns format conversion; your script only writes the native format. "
         "Complete in under 60 seconds. "
         "On success, the LAST line printed must be: OK: <path>. "
         "On failure, print ERR: <reason> and exit nonzero.\n\n"
+        "IMPORT RULES (the AST sandbox blocks the whole script if violated):\n"
+        "- NEVER call __import__() for any reason. The sandbox treats it as RCE and "
+        "rejects the script outright.\n"
+        "- Always use standard import statements at the TOP of the file:\n"
+        "    from docx.enum.text import WD_BREAK   ✓ correct\n"
+        "    run.add_break(__import__('docx.enum.text', fromlist=['WD_BREAK']).WD_BREAK.PAGE)   ✗ blocked\n"
+        "- If you need to add a page break, the right pattern is exactly:\n"
+        "    from docx.enum.text import WD_BREAK\n"
+        "    run.add_break(WD_BREAK.PAGE)\n"
+        "- All needed imports go at the top — never lazy-import inside helpers via "
+        "__import__, importlib, or getattr tricks.\n\n"
         "Compactness rules (important — output is capped at 16K tokens):\n"
         "- Store repeated content (sections, bullet lists, table rows) in lists/dicts "
         "and loop over them. Do NOT hand-write dozens of separate add_paragraph() / "
@@ -714,7 +725,27 @@ def _handle_document_creation(action: str, params: dict) -> dict:
     # ── 6. AST validation ─────────────────────────────────────────────────────
     block, warn = _validate_script(code)
     if block:
-        return _fail(f"Script blocked — unsafe: {', '.join(block[:5])}")
+        reasons = ", ".join(block[:5])
+        # Recognise the most common Sonnet misstep (dynamic __import__) so the
+        # error explains the fix instead of just naming the symptom.
+        if any("__import__" in r for r in block):
+            hint = (
+                " — this is usually caused by Sonnet emitting "
+                "`__import__('module', fromlist=[...])` instead of a plain "
+                "`from module import …` at the top of the file. Try the "
+                "request again; if it keeps happening, re-word the prompt to "
+                "avoid prompting any dynamic-import patterns."
+            )
+        elif any(name in r for r in block for name in ("system", "popen", "execv", "fork")):
+            hint = " — process / shell calls are not allowed in the document sandbox."
+        elif any("not on allowlist" in r for r in block):
+            hint = " — the generator imported a module outside the allowlist; this is a generator bug, not user input."
+        else:
+            hint = ""
+        return _fail(
+            f"Script blocked — unsafe call detected: {reasons}{hint} "
+            "The document could not be generated."
+        )
     if warn:
         prompt = (
             "The generated script uses:\n"
