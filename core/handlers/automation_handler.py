@@ -5,7 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 import threading
 
-from core.handlers.shared import _ok, _err, _tlog
+from core.handlers.shared import (
+    _ok,
+    _err,
+    _tlog,
+    _tlog_step,
+    _enter_workflow_step,
+    _leave_workflow_step,
+)
 
 _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({
     # delete_file is NOT here — requires_confirmation:true on the workflow
@@ -217,6 +224,15 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             t.join(0.03)
         return holder.get("result", {"intent": "unknown"})
 
+    def _between_step_blank() -> None:
+        """UX-2: one blank line between successful steps. _tlog's auto-blank
+        is suppressed inside workflow context, so this is the only spacing."""
+        try:
+            from core.signals import signals
+            signals.terminal_line_ready.emit("")
+        except Exception:
+            pass
+
     def _run_from(start_idx: int) -> dict:
         for idx in range(start_idx, total):
             _yield_ui()
@@ -241,12 +257,18 @@ def _handle_automation_task(action: str, params: dict) -> dict:
 
             # Keep executor dispatch on the owner thread; browser/session backends
             # (Playwright sync API) are thread-affine and fail if switched.
-            sub = dispatch({
-                "intent":     step.get("intent", "unknown"),
-                "action":     step.get("action", ""),
-                "parameters": step.get("parameters", {}),
-                "requires_confirmation": False,
-            }, confirmed=False)
+            # UX-2: enter/leave the workflow context so leaf-handler _tlog
+            # calls inside dispatch() auto-indent.
+            _enter_workflow_step()
+            try:
+                sub = dispatch({
+                    "intent":     step.get("intent", "unknown"),
+                    "action":     step.get("action", ""),
+                    "parameters": step.get("parameters", {}),
+                    "requires_confirmation": False,
+                }, confirmed=False)
+            finally:
+                _leave_workflow_step()
             _yield_ui()
 
             if sub.get("needs_confirmation"):
@@ -264,7 +286,13 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     idx=idx,
                 ) -> dict:
                     _yield_ui()
-                    first = original_fn()
+                    # UX-2: re-enter workflow context so leaf _tlog calls
+                    # in the deferred fn indent like the eager path.
+                    _enter_workflow_step()
+                    try:
+                        first = original_fn()
+                    finally:
+                        _leave_workflow_step()
                     _yield_ui()
                     _append_step_result(step_n, first)
                     if not first.get("success"):
@@ -272,6 +300,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                         _tlog(f"✗ failed at step {step_n}: {first.get('error') or first.get('output') or 'step failed'}")
                         return _err("\n".join(state["results"]))
                     _absorb_step_into_state(step, first)
+                    _between_step_blank()
                     return _run_from(idx + 1)
 
                 # Re-register pending confirmation with a continuation closure:
@@ -281,6 +310,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             _append_step_result(step_n, sub)
             if sub.get("success"):
                 _absorb_step_into_state(step, sub)
+                _between_step_blank()
             else:
                 state["all_ok"] = False
                 if sub.get("quit_application"):

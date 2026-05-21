@@ -225,6 +225,39 @@ def _ensure_file_logger() -> logging.Logger | None:
             return None
 
 
+# UX-2: workflow step context. While automation_handler dispatches a step,
+# leaf-handler `_tlog` lines should auto-indent so the workflow output looks
+# like:
+#
+#   ❯ workflow: morning test   ← col 0 (automation header)
+#       ❯ open notepad          ← 4sp (leaf handler)
+#         ✓ launched            ← 6sp (leaf handler)
+#                               ← blank (emitted by automation between steps)
+#
+# Using a depth counter so nested workflows leave the outer context intact
+# when the inner one finishes.
+_workflow_ctx = threading.local()
+
+
+def _enter_workflow_step() -> None:
+    """Begin a workflow step — leaf handler _tlog calls will auto-indent."""
+    _workflow_ctx.depth = getattr(_workflow_ctx, "depth", 0) + 1
+
+
+def _leave_workflow_step() -> None:
+    """End a workflow step — restore prior indent state."""
+    _workflow_ctx.depth = max(0, getattr(_workflow_ctx, "depth", 0) - 1)
+
+
+def _is_inside_workflow_step() -> bool:
+    return getattr(_workflow_ctx, "depth", 0) > 0
+
+
+def _step_indent_for(stripped: str) -> str:
+    """6 spaces for completion / progress markers, 4 spaces otherwise."""
+    return "      " if stripped.startswith(("✓", "✗", "↳", "⚠")) else "    "
+
+
 def _tlog(line: str) -> None:
     """Emit one action-summary line to the terminal panel.
 
@@ -235,24 +268,38 @@ def _tlog(line: str) -> None:
     actions in the terminal panel stay visually separated. Header / progress
     lines (❯, ↳, ⚠) are not separated since they belong with the action
     that follows them.
+
+    UX-2: when called from inside a workflow step (the dispatch from
+    automation_handler._run_from), auto-indent the line so leaf handlers'
+    output sits below the workflow header. Also suppress the auto-blank —
+    automation_handler emits one blank between steps deliberately so
+    nested completions don't double-space.
     """
     try:
         from config.settings import config
         if not config.terminal_show_actions:
             return
         from core.signals import signals
-        signals.terminal_line_ready.emit(line)
-        # Blank-line separator after action completion (✓ done / ✗ failed).
-        # `stripped` lets us catch indented lines too (e.g. workflow steps
-        # via _tlog_step before that helper exists — defensive).
-        stripped = line.lstrip()
-        if stripped.startswith(("✓", "✗")):
-            signals.terminal_line_ready.emit("")
+
+        inside_workflow = _is_inside_workflow_step()
+        emit_line = line
+        if inside_workflow and not (line.startswith(" ") or line.startswith("\t")):
+            stripped = line.lstrip()
+            emit_line = _step_indent_for(stripped) + line
+
+        signals.terminal_line_ready.emit(emit_line)
+
+        if not inside_workflow:
+            # UX-1: blank line after action completion (only outside workflows;
+            # automation_handler emits its own between-step blank otherwise).
+            stripped = line.lstrip()
+            if stripped.startswith(("✓", "✗")):
+                signals.terminal_line_ready.emit("")
         if getattr(config, "terminal_log_to_file", False):
             logger = _ensure_file_logger()
             if logger is not None:
                 try:
-                    logger.info(line)
+                    logger.info(emit_line)
                 except Exception as exc:
                     try:
                         from core.log import error
@@ -263,6 +310,42 @@ def _tlog(line: str) -> None:
         try:
             from core.log import error
             error("tlog", f"emit failed: {exc}")
+        except Exception:
+            pass
+
+
+def _tlog_step(line: str) -> None:
+    """Emit one indented workflow step line. Skips _tlog's auto-blank-line
+    so automation_handler controls its own between-step spacing.
+
+    Used by automation_handler itself when it wants to emit a step-level
+    line (rather than a leaf handler doing so). Leaf-handler _tlog calls
+    inside a workflow already auto-indent via the workflow context, so
+    they don't need to switch to _tlog_step.
+    """
+    try:
+        from config.settings import config
+        if not config.terminal_show_actions:
+            return
+        from core.signals import signals
+        stripped = line.lstrip()
+        emit_line = _step_indent_for(stripped) + line.lstrip()
+        signals.terminal_line_ready.emit(emit_line)
+        if getattr(config, "terminal_log_to_file", False):
+            logger = _ensure_file_logger()
+            if logger is not None:
+                try:
+                    logger.info(emit_line)
+                except Exception as exc:
+                    try:
+                        from core.log import error
+                        error("tlog_step", f"file write failed: {exc}")
+                    except Exception:
+                        pass
+    except Exception as exc:
+        try:
+            from core.log import error
+            error("tlog_step", f"emit failed: {exc}")
         except Exception:
             pass
 
