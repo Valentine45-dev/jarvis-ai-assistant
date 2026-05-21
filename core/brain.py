@@ -327,9 +327,26 @@ def ask_claude(
     from core import response_memory  # local import — keeps optional + cheap
     import secrets as _secrets
     variety_block = response_memory.format_block(k=8)
+    is_cold_start = not variety_block
     if variety_block:
         user_msg += f"\n\n{variety_block}"
+    else:
+        # No prior responses to point at — give Claude an explicit nudge
+        # toward originality so the modal training-set completion (e.g.
+        # the dark-mode/bugs joke for tell_joke) doesn't surface by default.
+        user_msg += (
+            "\n\n[first-session: invent a completely original response — "
+            "do not use any example phrases from your system prompt verbatim]"
+        )
     user_msg += f"\n\n[turn-salt: {_secrets.token_hex(2)}]"
+
+    # Cold start gets a slightly higher temperature for more creative
+    # freedom — without history to point at, the model needs a wider
+    # sampling distribution to land somewhere other than its modal
+    # completion. Once response_memory has accumulated some entries the
+    # variety block does the anti-repetition work and we drop back to 0.7
+    # for steadier JSON structure.
+    sampling_temperature = 0.85 if is_cold_start else 0.7
 
     # 5. Call Claude — prepend conversation history for multi-turn context.
     #    The system prompt is large (~1 500 tokens); cache_control keeps it
@@ -346,11 +363,12 @@ def ask_claude(
             # R2-29 dropped this 0.8 → 0.5 for routing-JSON stability, but the
             # `response` field is generated in the SAME call — at 0.5 with no
             # in-process memory yet, cold-start commands collapse to one canned
-            # reply (always the same joke on first launch). 0.7 widens the
-            # response distribution while the JSON-parse fallback below catches
-            # any rare structure drift. Anti-repetition + salt added to user_msg
-            # above do the rest.
-            temperature=0.7,
+            # reply (always the same joke on first launch). We now pick the
+            # temperature based on whether the response_memory has any prior
+            # lines to anchor against: 0.7 once history exists, 0.85 on the
+            # first call of a fresh install. The JSON-parse fallback below
+            # catches any rare structure drift at the higher temperature.
+            temperature=sampling_temperature,
             # R2-8: hard upper bound on the API round-trip so an Anthropic
             # stall can't hang the entire voice pipeline indefinitely.
             # 15s comfortably covers normal completions (median ~1–2s); a
