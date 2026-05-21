@@ -210,6 +210,10 @@ class JarvisWindow(QMainWindow):
         signals.status_changed.connect(self._on_status_signal)
         signals.reminder_action.connect(self._on_reminder_action)
         signals.error_occurred.connect(self._on_error_signal)
+        signals.document_generation_done.connect(
+            self._on_document_generation_done, Qt.QueuedConnection,
+        )
+        self._doc_async_ctx: dict | None = None
         self._last_error_toast_msg = ""
         self._last_error_toast_ts = 0.0
 
@@ -580,6 +584,12 @@ class JarvisWindow(QMainWindow):
             self._dashboard.toast.show_toast(
                 "Please respond to the pending confirmation first.", "warning")
             return
+        from core.handlers.document_handler import is_document_generation_in_flight
+        if is_document_generation_in_flight():
+            self._dashboard.toast.show_toast(
+                "Document generation in progress — please wait.", "warning",
+            )
+            return
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
         # Cap history to avoid unbounded memory growth
@@ -801,6 +811,29 @@ class JarvisWindow(QMainWindow):
 
         exec_out = dispatch(result, confirmed=confirmed)
 
+        # R2-15: document_creation runs on a worker thread — finish on signal.
+        if exec_out.get("document_async"):
+            self._doc_async_ctx = {
+                "result": result,
+                "intent": intent,
+                "conf": conf,
+                "resp": resp,
+                "hud": hud,
+            }
+            self._dashboard.left.status_lbl.setText(
+                "Generating document — please wait…",
+            )
+            self._set_state("processing")
+            spoken = exec_out.get("output") or resp
+            self._dashboard.left.hud_status.set_status(hud or "DOCUMENT")
+            self._dashboard.toast.show_toast(spoken, "info")
+            try:
+                from core.voice import voice_engine
+                voice_engine.say(spoken)
+            except Exception:
+                pass
+            return
+
         # Phase 5: remember last successful dispatch for "do it again" shorthand.
         if exec_out.get("success") and intent in self._ACTION_INTENTS:
             self._last_result = result
@@ -815,6 +848,32 @@ class JarvisWindow(QMainWindow):
         )
 
         self._finish_execute(result, intent, conf, resp, hud, exec_out)
+
+    def _on_document_generation_done(self, payload: dict) -> None:
+        """R2-15: worker-thread document pipeline finished — finish on main thread."""
+        ctx = self._doc_async_ctx
+        self._doc_async_ctx = None
+        if not ctx:
+            return
+        exec_out = payload.get("exec_out") or {}
+        from core.memory import memory
+        memory.inject_outcome(
+            intent=ctx["intent"],
+            action=ctx["result"].get("action", ""),
+            success=bool(exec_out.get("success")),
+            output=exec_out.get("output", ""),
+            error=exec_out.get("error", ""),
+        )
+        if exec_out.get("success") and ctx["intent"] in self._ACTION_INTENTS:
+            self._last_result = ctx["result"]
+        self._finish_execute(
+            ctx["result"],
+            ctx["intent"],
+            ctx["conf"],
+            ctx["resp"],
+            ctx["hud"],
+            exec_out,
+        )
 
     def _finish_execute(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         exec_out: dict) -> None:

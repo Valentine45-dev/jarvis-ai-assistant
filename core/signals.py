@@ -21,6 +21,8 @@ class JarvisSignals(QObject):
     workflow_library_changed = pyqtSignal()
     terminal_line_ready = pyqtSignal(str)   # one stdout/stderr line from a running command
     terminal_done = pyqtSignal(int)         # exit code when the process finishes
+    # R2-15: document_creation runs off the Qt main thread; payload is {"exec_out": dict}
+    document_generation_done = pyqtSignal(dict)
 
 
 signals = JarvisSignals()

@@ -9,9 +9,9 @@ Pipeline (every action):
   5. Strip code fences, sanity-check the head, retry once on prose.
   6. AST validate. subprocess is BLOCK-tier — LibreOffice runs in trusted
      handler code only, never inside the Sonnet-generated script. (Delta 1)
-  7. Run in a sandboxed subprocess via Popen + reader thread + poll loop.
-     dispatch() is on the Qt main thread, so we processEvents() between polls
-     to keep the HUD responsive while the subprocess runs. (Delta 2)
+  7. Run in a soft-isolated subprocess (AST allowlist + proxy env; not a full
+     sandbox — see R2-24). Generation runs on a worker thread (R2-15) so
+     processEvents() never re-enters dispatch() on the main thread.
   8. Verify the output file exists and is plausibly-sized.
 
 Phase 2 ships create_docx only. create_pptx / create_xlsx / create_pdf land
@@ -157,8 +157,24 @@ _DANGEROUS_MODULES: frozenset[str] = frozenset({
 
 # ── Caches ────────────────────────────────────────────────────────────────────
 _SKILLS_DIR = Path(__file__).parent.parent.parent / "skills"
+# Read-only after first write per key — safe without locks (R2-19).
 _SKILL_CACHE: dict[str, tuple[float, str]] = {}        # name → (mtime, content)
 _LIBREOFFICE_PATH: Path | None = None                  # probed once at first need
+
+# R2-15: one document pipeline at a time — blocks concurrent voice commands too.
+_generation_lock = threading.Lock()
+_generation_in_flight = False
+
+
+def is_document_generation_in_flight() -> bool:
+    with _generation_lock:
+        return _generation_in_flight
+
+
+def _set_generation_in_flight(value: bool) -> None:
+    global _generation_in_flight
+    with _generation_lock:
+        _generation_in_flight = value
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -273,13 +289,55 @@ def _validate_script(code: str) -> tuple[list[str], list[str]]:
 
 
 def _yield_ui() -> None:
-    """Pump the Qt event loop so the HUD repaints while we wait on a subprocess.
-    Cheap no-op when Qt isn't running (e.g. unit tests)."""
+    """Pump Qt only on the main thread (R2-15).
+
+    Worker-thread generation must not call processEvents() — that re-entrantly
+    runs queued slots (including new user commands) while Sonnet/subprocess work
+    is still in flight.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
     try:
         from PyQt5.QtWidgets import QApplication
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
+    except Exception:
+        pass
+
+
+def _get_anthropic_client() -> anthropic.Anthropic:
+    """R2-23: reuse the brain's cached Anthropic client (key-aware singleton)."""
+    from core.brain import _get_client
+    return _get_client()
+
+
+def _try_limit_generator_process(proc: subprocess.Popen) -> None:
+    """R2-24: best-effort 512 MB cap on Windows via Job Object.
+
+    AST validation is the real safety net; this only limits runaway allocation
+    before the 60 s wall-clock timeout fires. No-op when pywin32 is unavailable.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import win32job  # type: ignore[import-untyped]
+        hjob = win32job.CreateJobObject(None, "")
+        info = win32job.QueryInformationJobObject(
+            hjob, win32job.JobObjectExtendedLimitInformation,
+        )
+        limits = info["BasicLimitInformation"]
+        limits["LimitFlags"] = (
+            win32job.JOB_OBJECT_LIMIT_PROCESS_MEMORY
+            | win32job.JOB_OBJECT_LIMIT_JOB_MEMORY
+            | win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        info["ProcessMemoryLimit"] = 512 * 1024 * 1024
+        info["JobMemoryLimit"] = 512 * 1024 * 1024
+        win32job.SetInformationJobObject(
+            hjob, win32job.JobObjectExtendedLimitInformation, info,
+        )
+        win32job.AssignProcessToJobObject(hjob, int(proc._handle))
     except Exception:
         pass
 
@@ -384,10 +442,6 @@ def _build_user_message(
     )
 
 
-def _new_anthropic_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=config.anthropic_api_key)
-
-
 def _stream_call(
     client: anthropic.Anthropic,
     system_blocks: list[dict],
@@ -459,7 +513,7 @@ def _generate_code(
     slide_count: int | None = None,
 ) -> tuple[str | None, str]:
     """Returns (code | None, err_msg). One retry on prose responses."""
-    client        = _new_anthropic_client()
+    client        = _get_anthropic_client()
     system_blocks = _build_system_blocks(skill_text, format_name)
     user_msg      = _build_user_message(
         topic, style, doc_type, target_path, format_name, slide_count=slide_count,
@@ -503,7 +557,7 @@ def _generate_code(
     return code, ""
 
 
-# ── Sandboxed subprocess execution (Delta 2: HUD-friendly poll loop) ──────────
+# ── Soft-isolated subprocess (R2-24: AST + proxy; optional Windows job cap) ───
 def _run_generator(code: str, target_path: Path) -> dict:
     output_lines: list[str] = []
     with tempfile.TemporaryDirectory(prefix="jarvis_doc_") as tmp:
@@ -537,6 +591,8 @@ def _run_generator(code: str, target_path: Path) -> dict:
             )
         except Exception as exc:
             return _fail(f"Couldn't launch generator: {exc}")
+
+        _try_limit_generator_process(proc)
 
         def _reader() -> None:
             for raw_line in proc.stdout:  # type: ignore[union-attr]
@@ -598,7 +654,7 @@ def _run_generator(code: str, target_path: Path) -> dict:
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-def _handle_document_creation(action: str, params: dict) -> dict:
+def _document_creation_sync(action: str, params: dict) -> dict:
     if action not in _ACTION_TO_SKILL:
         return _err(f"Unknown document action: {action}")
 
@@ -756,3 +812,37 @@ def _handle_document_creation(action: str, params: dict) -> dict:
 
     # ── 7. Execute ────────────────────────────────────────────────────────────
     return _run_generator(code, target_path)
+
+
+def _handle_document_creation(action: str, params: dict) -> dict:
+    """R2-15: run the heavy pipeline on a worker thread; return immediately.
+
+    Terminal lines and the completion signal cross back to the Qt main thread.
+    While in flight, `is_document_generation_in_flight()` is True and main.py
+    rejects new voice/text commands so two doc jobs cannot overlap.
+    """
+    if is_document_generation_in_flight():
+        return _err(
+            "Document generation already in progress — wait for it to finish."
+        )
+
+    def _worker() -> None:
+        try:
+            out = _document_creation_sync(action, params)
+        except Exception as exc:
+            out = _err(str(exc))
+        finally:
+            _set_generation_in_flight(False)
+        try:
+            signals.document_generation_done.emit({"exec_out": out})
+        except Exception:
+            pass
+
+    _set_generation_in_flight(True)
+    threading.Thread(target=_worker, name="jarvis-doc-gen", daemon=True).start()
+    return {
+        "success": True,
+        "output": "Generating your document — I'll report when it's ready.",
+        "error": "",
+        "document_async": True,
+    }

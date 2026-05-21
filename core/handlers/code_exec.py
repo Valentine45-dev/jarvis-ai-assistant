@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.handlers.shared import _ok, _err, request_confirmation
+from core.personality import JARVIS_SHELL_RESULTS_PROMPT
 
 
 # ── Config probes (R2-1 / R2-5 / R2-7) ────────────────────────────────────────
@@ -227,13 +228,21 @@ class CommandBlock:
     fix_applied: bool     = False
 
 _BLOCK_STORE: list[CommandBlock] = []   # session memory, capped at 50
+_BLOCK_STORE_LOCK = threading.Lock()
 
 
 def _store_block(block: CommandBlock) -> None:
     """Append block to session store; evict oldest when over cap."""
-    _BLOCK_STORE.append(block)
-    if len(_BLOCK_STORE) > 50:
-        _BLOCK_STORE.pop(0)
+    with _BLOCK_STORE_LOCK:
+        _BLOCK_STORE.append(block)
+        if len(_BLOCK_STORE) > 50:
+            _BLOCK_STORE.pop(0)
+
+
+def _recent_blocks(n: int = 3) -> list[CommandBlock]:
+    """Thread-safe snapshot of the last *n* command blocks."""
+    with _BLOCK_STORE_LOCK:
+        return list(_BLOCK_STORE[-n:])
 
 
 # ── Environment context ───────────────────────────────────────────────────────
@@ -263,7 +272,7 @@ def _build_env_context() -> dict:
         ],
         "last_3_blocks": [
             {"cmd": b.command, "exit": b.exit_code, "ok": b.exit_code == 0}
-            for b in _BLOCK_STORE[-3:]
+            for b in _recent_blocks(3)
         ],
     }
 
@@ -530,13 +539,7 @@ def _explain_output(block: CommandBlock) -> str | None:
             model="claude-haiku-4-5-20251001",
             max_tokens=128,
             timeout=10,
-            system=(
-                "You are JARVIS — a sharp British AI butler reporting shell results. "
-                "Summarise in 1-2 sentences. Be specific: mention numbers, filenames, errors. "
-                "If success: report what was found or done. "
-                "If failure: say why in plain English and suggest the fix. "
-                "Never say 'the command'. No emojis. Just report."
-            ),
+            system=JARVIS_SHELL_RESULTS_PROMPT,
             messages=[{"role": "user", "content": (
                 f"Command: {block.command}\nStatus: {status}\n"
                 f"Output:\n{block.output[:1500]}"
@@ -647,6 +650,16 @@ _FAILURE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+
+def _output_suggests_failure(out: str) -> bool:
+    """R2-25: scan only the last five lines — benign tools often mention
+    'error' in help text or commit messages earlier in the buffer."""
+    if not out:
+        return False
+    lines = out.splitlines()
+    tail = "\n".join(lines[-5:])
+    return bool(_FAILURE_KEYWORDS.search(tail))
+
 # Windows cmd.exe built-ins — these are NOT standalone executables. Calling
 # subprocess.run(["cd"]) on Windows fails with WinError 2 because cd lives
 # inside cmd.exe, not on PATH. When run_shell receives one of these as the
@@ -731,8 +744,8 @@ def _execute_plan(steps: list[str], cwd: str | None) -> dict:
         if exit_code != 0:
             explanation = _explain_output(block) or out
             return _err(f"Step {i}/{n} failed: {explanation}")
-        # Catch tools that exit 0 but still print failure keywords
-        if _FAILURE_KEYWORDS.search(out):
+        # Catch tools that exit 0 but still print failure keywords in the tail
+        if _output_suggests_failure(out):
             explanation = _explain_output(block) or out
             return _err(f"Step {i}/{n} may have failed: {explanation}")
     plural = "s" if n != 1 else ""

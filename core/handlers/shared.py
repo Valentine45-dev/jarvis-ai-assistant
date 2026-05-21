@@ -71,16 +71,21 @@ def _confirm(prompt: str) -> dict:
 
 
 # ── Page cache ────────────────────────────────────────────────────────────────
+# R2-19: single-key dict written from browser handler / read from brain; lock
+# keeps concurrent read_page + follow-up routing consistent.
 
 _PAGE_CACHE: dict[str, str] = {}
+_PAGE_CACHE_LOCK = threading.Lock()
 
 
 def get_page_cache() -> str | None:
-    return _PAGE_CACHE.get("last_read")
+    with _PAGE_CACHE_LOCK:
+        return _PAGE_CACHE.get("last_read")
 
 
 def _set_page_cache(text: str) -> None:
-    _PAGE_CACHE["last_read"] = text
+    with _PAGE_CACHE_LOCK:
+        _PAGE_CACHE["last_read"] = text
 
 
 # ── Confirmation system ───────────────────────────────────────────────────────

@@ -52,6 +52,14 @@ class ReviewFixTests(unittest.TestCase):
 
         self._patches.append(patch.object(code_exec, "_stream_execute", fake_stream_execute))
         self._patches[-1].start()
+        # `rm` isn't in `_SHELL_KEYWORDS`, so on confirm-and-retry the handler
+        # routes the command through `_nl_to_command` (Sonnet) for translation.
+        # The R2-1 gate then requires another confirm on the AI-translated
+        # output. This test verifies the *danger-regex* path, not the NL path
+        # — pin `_nl_to_command` to None so the recursive call falls straight
+        # through to subprocess (same behaviour as an offline test environment).
+        self._patches.append(patch.object(code_exec, "_nl_to_command", lambda code, env: None))
+        self._patches[-1].start()
 
         result = code_exec._handle_code_execution("run_shell", {"code": "rm -rf temp"})
 
