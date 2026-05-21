@@ -117,10 +117,41 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset({
 # tier infrastructure in place because confirm-on-warn is still a useful escape
 # hatch if Sonnet ever emits something odd that should be human-reviewed.
 _IMPORT_WARN: frozenset[str] = frozenset()
-_DANGEROUS_NAMES: frozenset[str] = frozenset({"eval", "exec", "compile", "__import__"})
+_DANGEROUS_NAMES: frozenset[str] = frozenset({
+    # Bytecode / dynamic execution
+    "eval", "exec", "compile", "__import__",
+    # R2-3: process/shell exits via the `os` module — which IS on the import
+    # allowlist (the generator legitimately needs os.path / os.makedirs).
+    # The AST walker blocks attribute calls by `fn.attr`, so e.g.
+    # `os.system("rm -rf")` gets caught here (fn.attr == "system").
+    "system", "popen", "execv", "execvp", "execve", "spawnv",
+    "fork", "forkpty",
+    # Dynamic attribute access defeats name-based blocking
+    # (`getattr(os, "sys"+"tem")("...")`). Generator scripts use named
+    # attributes only — no legitimate reason for dynamic lookup.
+    "getattr", "setattr",
+})
+
+# ──────────────────────────────────────────────────────────────────────────────
+# R2-4: PERMANENT HARD-BLOCK — never move these to _IMPORT_ALLOWLIST.
+# They are blocked today partly by absence from the allowlist; making the
+# block explicit prevents a future well-meaning allowlist addition from
+# silently turning into RCE. Any legitimate doc-generator need for these
+# is a sandbox-design failure, not a missing allowlist entry.
+# ──────────────────────────────────────────────────────────────────────────────
 _DANGEROUS_MODULES: frozenset[str] = frozenset({
     "socket", "urllib", "requests", "http", "ftplib", "paramiko",
     "subprocess",  # Trusted handler owns LibreOffice; sandbox never shells out.
+    # FFI / native code — direct memory access, can call any OS function.
+    "ctypes",
+    # Spawns child Python processes with shared parent state.
+    "multiprocessing",
+    # Arbitrary code execution by design when unpickling untrusted data.
+    "pickle", "marshal",
+    # Bypasses the static import allowlist by loading modules at runtime.
+    "importlib",
+    # Pseudo-terminal access — pairs with subprocess for interactive shells.
+    "pty",
 })
 
 
