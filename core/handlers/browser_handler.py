@@ -35,6 +35,15 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
     if action == "new_tab":
         return browser.new_tab(url)
 
+    if action == "switch_tab":
+        # Accept several aliases so the brain doesn't have to remember the
+        # exact key name. ``target`` is canonical; ``match`` / ``tab`` are
+        # accepted because close_tab uses the same vocabulary.
+        target = (
+            (params.get("target") or params.get("match") or params.get("tab") or "")
+        ).strip()
+        return browser.switch_tab(target)
+
     if action == "click_element":
         goal     = (params.get("goal") or "").strip()
         selector = (params.get("selector") or "").strip()

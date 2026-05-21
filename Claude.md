@@ -356,6 +356,7 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `extract_text` — Extract text from a specific element by CSS selector
 - `screenshot` — Full-page screenshot or element screenshot
 - `new_tab` — Open a new tab and optionally navigate to a URL
+- `switch_tab` — Switch to an existing browser tab by title or URL keyword. Use whenever the user wants to **focus an already-open tab** instead of opening or closing one. Triggers: *"switch to the youtube tab"*, *"go to my wikipedia tab"*, *"make youtube active"*, *"bring the github tab to front"*, *"focus the gmail tab"*. Takes a single `target` keyword (tokenised; URL substrings beat title substrings, same scoring as `close_tab`). After the switch, subsequent `read_page` / `click_element` / `scroll` operate on the now-active tab.
 - `close_tab` — Close one tab. **Without** `match` / `url_contains` / `title_contains`, closes the **active** tab only. **When the user names a site or topic** (e.g. *“close the YouTube tab”*, *“close the Google results tab”*), you **must** set at least one filter so the correct tab is closed — not whichever tab has focus. Prefer **`url_contains`** (e.g. `youtube.com`, `google.com`) for sites; use **`title_contains`** for a phrase in the document title, or **`match`** for a short keyword phrase (tokenised; URL substrings count more than title text).
 - `scroll` — Scroll the active browser page (NOT the OS desktop). Use this — **not** `control_mouse/scroll` — whenever the user wants to scroll a web page they're viewing. Params: `direction` (`"up"` | `"down"`) and `amount` (int, default 3, clamped [1, 50]). Each amount unit ≈ 300 px (one click of a mouse wheel). See the scroll-routing disambiguation in §5 (`control_mouse`) for OS-vs-page tie-breaking.
 
@@ -374,8 +375,8 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 { "title_contains": "string — for close_tab: substring of the tab’s page title" }
 { "match": "string — for close_tab: keywords, e.g. youtube, ps5, call of duty" }
 { "url_match": "string — alias of url_contains for close_tab" }
-{ "target": "string — alias of match for close_tab" }
-{ "tab": "string — alias of match for close_tab" }
+{ "target": "string — for switch_tab: keyword to match against tab URL/title; also aliases match for close_tab" }
+{ "tab": "string — alias of match for close_tab / target for switch_tab" }
 { "direction": "string — for scroll: 'up' or 'down'" }
 { "amount": "int — for scroll: scroll ticks (1-50), default 3" }
 ```
@@ -389,6 +390,7 @@ When the user says *"click X"* or *"fill X with Y"* and you do **not** know a pr
 - `extract_text`: always provide `selector`
 - `screenshot`: omit `selector` for full-page; include `selector` for a single element
 - `close_tab`: if the user names **which** tab to close, set **`url_contains`**, and/or **`title_contains`**, and/or **`match`**; never rely on the active tab alone
+- `switch_tab`: always provide `target` (the keyword to match). Don't conflate with `new_tab` — only use `switch_tab` when the user wants to focus an **already-open** tab. If you're unsure whether the tab exists, prefer `switch_tab` first (it errors with the list of open tabs, which is more useful than silently opening a duplicate via `new_tab`).
 
 **HUD Label:** `BROWSER CTRL`
 
@@ -1475,6 +1477,22 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "parameters": { "direction": "up", "amount": 50 },
   "confidence": 0.94,
   "response": "Scrolling back up, Valentine.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Switch to the YouTube tab"`
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "switch_tab",
+  "parameters": { "target": "youtube" },
+  "confidence": 0.97,
+  "response": "Switching to YouTube.",
   "hud_status": "BROWSER CTRL",
   "requires_confirmation": false
 }

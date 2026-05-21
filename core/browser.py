@@ -991,6 +991,64 @@ class BrowserSession:
                 _tlog(f"✗ {exc}")
                 return _err(str(exc))
 
+    def switch_tab(self, target: str) -> dict:
+        """Bring an existing tab to the front by URL or title keyword.
+
+        Tokenises ``target`` and scores every open tab the same way close_tab
+        does (URL substring beats title substring), so commands like
+        *"switch to youtube tab"* land on the YouTube page rather than a
+        random page whose ``<title>`` happens to mention YouTube. Updates
+        ``self._page`` so subsequent actions (read_page, click, fill, …)
+        operate on the now-active tab.
+
+        Returns ``_ok`` with the matched title; ``_err`` with a brief tab
+        list when no tab matches the keyword.
+        """
+        target = (target or "").strip()
+        _tlog(f"❯ switch tab → {target!r}")
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
+                return guard
+
+            if not target:
+                _tlog("✗ no target keyword provided")
+                return _err("No target keyword provided for switch_tab.")
+
+            tokens = self._match_tokens(target)
+            if not tokens:
+                _tlog("✗ target had no usable keywords")
+                return _err(
+                    f"Couldn't parse {target!r} into a search keyword."
+                )
+
+            best_page = None
+            best_score = 0
+            best_title = ""
+            for p, u, t in self._pages_with_url_title():
+                score = self._score_page_for_keywords(u, t, tokens)
+                if score > best_score:
+                    best_score = score
+                    best_page = p
+                    best_title = t or u or "(untitled)"
+
+            if best_page is None:
+                _tlog("✗ no open tab matched")
+                return _err(
+                    f"No open tab matches {target!r}. Open tabs: {self._list_tabs_brief()}"
+                )
+
+            try:
+                best_page.bring_to_front()
+            except Exception as exc:
+                _tlog(f"✗ bring_to_front failed: {exc}")
+                return _err(str(exc))
+
+            self._page = best_page
+            _tlog(f"✓ switched → {best_title!r}")
+            return _ok(f"Switched to {best_title!r}")
+
     @staticmethod
     def _safe_title(page) -> str:
         try:
