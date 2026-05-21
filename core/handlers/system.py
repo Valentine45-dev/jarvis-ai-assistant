@@ -313,7 +313,16 @@ def _handle_system_control(action: str, params: dict) -> dict:
         _tlog(f"❯ {'mute' if action == 'volume_mute' else 'unmute'}")
         result = cc.set_volume(action, level=None)
         if result.get("success"):
-            _tlog(f"✓ {'muted' if action == 'volume_mute' else 'unmuted'}")
+            # The toggle in cc.set_volume returns "Muted" or "Unmuted" in
+            # `output` — that's the source of truth (not the action name),
+            # since volume_mute now toggles.
+            now_muted = (result.get("output") or "").strip().lower() == "muted"
+            try:
+                from core.voice import set_app_audio_muted
+                set_app_audio_muted(now_muted)
+            except Exception:
+                pass
+            _tlog(f"✓ {'muted' if now_muted else 'unmuted'}")
         else:
             _tlog(f"✗ {result.get('error') or 'mute toggle failed'}")
         return result

@@ -303,14 +303,17 @@ def set_volume(action: str, level: int | None = None) -> dict:
         vol       = cast(interface, POINTER(IAudioEndpointVolume))
 
         if action == "volume_mute":
-            # Idempotent mute: "mute" should always end in muted state.
+            # CLAUDE.md documents this as a TOGGLE — flip current state so both
+            # "mute" and "unmute" route here and produce the right outcome
+            # without requiring the brain to know two separate actions.
             is_muted = bool(vol.GetMute())
-            if not is_muted:
-                vol.SetMute(True, None)
-            return _ok("Muted")
+            vol.SetMute(not is_muted, None)
+            return _ok("Unmuted" if is_muted else "Muted")
 
         if action == "volume_unmute":
-            # Idempotent unmute counterpart.
+            # Force-unmute. Used when the brain explicitly knows it should unmute
+            # (e.g. follows a separate spec where volume_unmute is a distinct
+            # action). Idempotent — safe to call when already unmuted.
             is_muted = bool(vol.GetMute())
             if is_muted:
                 vol.SetMute(False, None)
