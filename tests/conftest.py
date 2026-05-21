@@ -29,6 +29,33 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 
+# ── Interactive runner scripts — exclude from pytest collection ──────────────
+# These three files are CLI runners (each has a "Run with: uv run python
+# tests/test_X.py" docstring) that call input() for pause-and-confirm prompts
+# between steps. Their `test_*` function names cause pytest to collect them,
+# and every call then errors with `OSError: pytest: reading from stdin while
+# output is captured`. They're not unit tests; they belong to the manual
+# audit-tests workflow. Skip them at collection time.
+collect_ignore = [
+    "test_browser.py",
+    "test_computer_control.py",
+    "test_executor.py",
+]
+
+
+# ── CI env hardening ─────────────────────────────────────────────────────────
+# GitHub Actions runs without ANTHROPIC_API_KEY / GEMINI_API_KEY in scope.
+# Most tests mock the SDK, but a few touch `config.anthropic_api_key` (e.g.
+# via `_get_client()` cache invalidation) and crash with empty-string keys
+# at import time. Seed sentinel values so import succeeds and SDK calls are
+# the responsibility of `mock_anthropic` / `mock_playwright` fixtures rather
+# than tripping on an env var miss.
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("GEMINI_API_KEY", "test-key")
+os.environ.setdefault("ELEVENLABS_API_KEY", "test-key")
+os.environ.setdefault("OPENWEATHER_API_KEY", "test-key")
+
+
 @pytest.fixture
 def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> Iterator[MagicMock]:
     """Replace the anthropic.Anthropic client with a MagicMock.

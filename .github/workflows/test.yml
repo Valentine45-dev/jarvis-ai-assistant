@@ -45,6 +45,15 @@ jobs:
       - name: pytest
         env:
           QT_QPA_PLATFORM: offscreen
+          # Sentinel keys — every test that hits the Anthropic / ElevenLabs /
+          # Gemini SDK is expected to use the `mock_anthropic` / `mock_*`
+          # fixtures from conftest.py. These env vars only exist so
+          # `config.load()` and module-level `_get_client()` calls don't fail
+          # on a missing key. They are NOT real credentials.
+          ANTHROPIC_API_KEY: test-key
+          GEMINI_API_KEY: test-key
+          ELEVENLABS_API_KEY: test-key
+          OPENWEATHER_API_KEY: test-key
         run: uv run pytest -q
 
   lint:
