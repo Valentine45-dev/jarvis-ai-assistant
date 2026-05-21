@@ -405,6 +405,13 @@ class JarvisWindow(QMainWindow):
         - the token is stale (a newer command replaced this one)
         - we are waiting for a confirmation card response
         - the mic is muted
+        - wake word is disabled (user is in explicit interaction mode —
+          they'll click the mic or type when they want to talk)
+
+        Auto-resume also opens a sounddevice INPUT stream that conflicts with
+        a subsequent TTS OUTPUT stream on some Windows audio configs, hanging
+        or crashing the audio backend; gating it on wake_word_enabled avoids
+        that path entirely for users in text-input mode.
         """
         if token != self._transcript_update_token:
             return
@@ -412,6 +419,9 @@ class JarvisWindow(QMainWindow):
             return
         from core.voice import voice_engine
         if voice_engine.mic_muted:
+            self._set_state("idle")
+            return
+        if not getattr(self, "_wake_word_enabled", True):
             self._set_state("idle")
             return
         # Auto-resume: listen for follow-up with a longer timeout.
