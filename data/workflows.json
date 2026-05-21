@@ -10,7 +10,7 @@
         "search NBA on Youtube"
       ],
       "enabled": true,
-      "last_run": "2026-05-17T23:44:20Z"
+      "last_run": "2026-05-19T12:58:41Z"
     },
     {
       "id": "morning_routine",
@@ -22,6 +22,54 @@
         "Open Chrome browser",
         "Search Google for Facebook",
         "Create a Python script file called matrix_rain.py with a terminal-based Matrix rain effect using curses, falling green characters in C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests"
+      ]
+    },
+    {
+      "id": "normal_routine",
+      "name": "Normal Routine",
+      "trigger": "run normal routine",
+      "enabled": true,
+      "last_run": "",
+      "steps": [
+        "Create a new file called notes.txt in Documents/jarvis-project/tests",
+        "Create a new file called log.txt in Documents/jarvis-project/tests",
+        "Open Notepad"
+      ]
+    },
+    {
+      "id": "test16",
+      "name": "test16",
+      "trigger": "Manual",
+      "enabled": true,
+      "last_run": "",
+      "steps": [
+        "create a file Documents/jarvis-project/test16_a.py",
+        "create a file Documents/jarvis-project/test16_b.py",
+        "open notepad"
+      ]
+    },
+    {
+      "id": "new_workflow",
+      "name": "New Workflow",
+      "trigger": "run new workflow",
+      "steps": [
+        "open chrome",
+        "search REDMAGIC Astra",
+        "open new tab"
+      ],
+      "enabled": true,
+      "last_run": null
+    },
+    {
+      "id": "audit_thread_test",
+      "name": "audit_thread_test",
+      "trigger": "run audit thread test",
+      "enabled": true,
+      "last_run": "",
+      "steps": [
+        "create a file at Documents/audit_thread.md",
+        "navigate to youtube.com and search for jazz",
+        "close the YouTube tab"
       ]
     }
   ]

@@ -95,6 +95,11 @@ class _HoverGlowWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # WA_Hover ensures enterEvent / leaveEvent dispatch reliably even when
+        # the widget contains layout-managed child widgets (QLabel, etc.).
+        # Audit-#15 regression: dropping this during the _HoverGlowWidget
+        # extraction silently broke MetricCard's hover glow.
+        self.setAttribute(Qt.WA_Hover, True)
         self.setMinimumHeight(95)
         self._hover = False
         self._glow_alpha = 0.0
