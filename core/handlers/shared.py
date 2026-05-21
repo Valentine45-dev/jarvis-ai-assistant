@@ -230,6 +230,11 @@ def _tlog(line: str) -> None:
 
     Gated by `config.terminal_show_actions`. When `config.terminal_log_to_file`
     is also true, mirrors the line to logs/terminal.log via a rotating handler.
+
+    UX-1: completion lines (✓ / ✗) get a trailing blank line so back-to-back
+    actions in the terminal panel stay visually separated. Header / progress
+    lines (❯, ↳, ⚠) are not separated since they belong with the action
+    that follows them.
     """
     try:
         from config.settings import config
@@ -237,6 +242,12 @@ def _tlog(line: str) -> None:
             return
         from core.signals import signals
         signals.terminal_line_ready.emit(line)
+        # Blank-line separator after action completion (✓ done / ✗ failed).
+        # `stripped` lets us catch indented lines too (e.g. workflow steps
+        # via _tlog_step before that helper exists — defensive).
+        stripped = line.lstrip()
+        if stripped.startswith(("✓", "✗")):
+            signals.terminal_line_ready.emit("")
         if getattr(config, "terminal_log_to_file", False):
             logger = _ensure_file_logger()
             if logger is not None:
