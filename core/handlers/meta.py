@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from config.settings import config
-from core.handlers.shared import _ok, _err, get_page_cache
+from core.handlers.shared import _ok, _err, _tlog, get_page_cache
 
 
 _VOICE_FIRST_NAMES: dict[str, str] = {
@@ -90,21 +90,31 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         return _ok(datetime.now().strftime("%A, %d %B %Y"))
 
     if action == "status_report":
-        import psutil
-        cpu = psutil.cpu_percent(interval=0.3)
-        mem = psutil.virtual_memory()
-        parts = [
-            f"CPU {cpu:.0f}%",
-            f"memory {mem.percent:.0f}% ({mem.used/1e9:.1f}/{mem.total/1e9:.1f} GB)",
-        ]
+        _tlog("❯ status")
         try:
-            bat = psutil.sensors_battery()
-        except (AttributeError, NotImplementedError):
-            bat = None
-        if bat is not None and bat.percent is not None:
-            plug = "plugged in" if bat.power_plugged else "on battery"
-            parts.append(f"battery {bat.percent:.0f}% ({plug})")
-        return _ok(", ".join(parts))
+            import psutil
+            cpu = psutil.cpu_percent(interval=0.3)
+            mem = psutil.virtual_memory()
+            parts = [
+                f"CPU {cpu:.0f}%",
+                f"memory {mem.percent:.0f}% ({mem.used/1e9:.1f}/{mem.total/1e9:.1f} GB)",
+            ]
+            try:
+                bat = psutil.sensors_battery()
+            except (AttributeError, NotImplementedError):
+                bat = None
+            if bat is not None and bat.percent is not None:
+                plug = "plugged in" if bat.power_plugged else "on battery"
+                parts.append(f"battery {bat.percent:.0f}% ({plug})")
+            # Compact terminal summary uses · separator and rounds battery integer.
+            term_parts = [f"CPU {cpu:.0f}%", f"RAM {mem.percent:.0f}%"]
+            if bat is not None and bat.percent is not None:
+                term_parts.append(f"Battery {bat.percent:.0f}%")
+            _tlog("✓ " + " · ".join(term_parts))
+            return _ok(", ".join(parts))
+        except Exception as exc:
+            _tlog(f"✗ {exc}")
+            return _err(str(exc))
 
     if action == "conversational":
         cached = get_page_cache()
@@ -139,9 +149,11 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
 
     if action == "change_voice":
         raw = (params.get("voice") or "").strip().lower()
+        _tlog(f"❯ voice → {raw or '(no voice)'}")
         key = _VOICE_ALIASES.get(raw)
         if not key:
             available = ", ".join(_VOICE_LABELS.values())
+            _tlog(f"✗ unknown voice {raw!r}")
             return _err(f"Unknown voice {raw!r}. Available: {available}")
         from core.voice import voice_engine
         ok, msg, _kind = voice_engine.switch_tts_voice(
@@ -150,13 +162,25 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
             persist=True,
         )
         if not ok:
+            _tlog(f"✗ {msg}")
             return _err(msg)
         name = _VOICE_FIRST_NAMES.get(key, key)
+        _tlog("✓ switched")
         # Spoken in the NEW voice — the caller must read output (not Claude's
         # pre-execution response) so the user hears audible proof of the switch.
         return _ok(f"Now {name}'s speaking.")
 
+    if action == "change_theme":
+        theme_name = (params.get("theme") or "").strip()
+        _tlog(f"❯ theme → {theme_name or '(no theme)'}")
+        # The actual theme switch is wired upstream via a signal — this handler
+        # just acknowledges so the response pipeline can fire its confirmation TTS.
+        _tlog("✓ applied")
+        return _ok(action)
+
     if action in ("quit_application", "close_jarvis"):
+        _tlog("❯ shutting down JARVIS")
+        _tlog("✓ goodbye")
         return {"success": True, "output": "", "error": "", "quit_application": True}
 
     return _ok(action)
