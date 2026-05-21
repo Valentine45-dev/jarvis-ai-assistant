@@ -241,25 +241,42 @@ def _resolve_screenshot_path(save_param: str | None) -> tuple[str, str | None]:
     if not save_param:
         return str(Path.home() / "Desktop" / fname), None
 
-    p = Path(_expand_path_string(str(save_param)))
+    raw = _expand_path_string(str(save_param))
+    p = Path(raw.replace("\\", "/"))
 
     if p.suffix.lower() in (".png", ".jpg", ".jpeg"):
         return str(p), None
 
-    if p.is_dir():
-        return str(p / fname), None
-
-    if len(p.parts) == 1:
-        found = _find_folder(save_param)
-        if found:
-            return str(found / fname), None
-        return "", save_param
-
     if p.is_absolute():
         try:
             p.mkdir(parents=True, exist_ok=True)
-            return str(p / fname), None
-        except Exception:
+        except OSError:
             pass
+        return str(p / fname), None
 
-    return str(Path.home() / "Desktop" / fname), None
+    if p.is_dir():
+        return str(p.resolve() / fname), None
+
+    parts = p.parts
+    if not parts:
+        return str(Path.home() / "Desktop" / fname), None
+
+    first, *rest = parts
+    found = _find_folder(first)
+    if found is not None:
+        folder = found / Path(*rest) if rest else found
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return str(folder / fname), None
+
+    if rest:
+        folder = _default_create_parent() / Path(*parts)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return str(folder / fname), None
+
+    return "", save_param
