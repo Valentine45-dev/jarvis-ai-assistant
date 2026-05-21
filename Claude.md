@@ -391,6 +391,7 @@ When the user says *"click X"* or *"fill X with Y"* and you do **not** know a pr
 - `screenshot`: omit `selector` for full-page; include `selector` for a single element
 - `close_tab`: if the user names **which** tab to close, set **`url_contains`**, and/or **`title_contains`**, and/or **`match`**; never rely on the active tab alone
 - `switch_tab`: always provide `target` (the keyword to match). Don't conflate with `new_tab` — only use `switch_tab` when the user wants to focus an **already-open** tab. If you're unsure whether the tab exists, prefer `switch_tab` first (it errors with the list of open tabs, which is more useful than silently opening a duplicate via `new_tab`).
+- `switch_tab` for blank/empty tabs: a freshly opened blank tab has URL **`about:blank`** and usually no title. When the user says *"blank tab"*, *"empty tab"*, or *"new tab"* referring to an **already-open untitled tab**, use **`target: "about:blank"`** — the URL is deterministic; the title is not. Do **not** use `target: "new tab"` (likely scores zero against the actual `about:blank` URL and the match fails). Example: *"switch to the blank tab"* → `{"action": "switch_tab", "parameters": {"target": "about:blank"}}`. Reminder: *"open a new tab"* (verb) is `new_tab`, not `switch_tab`.
 
 **HUD Label:** `BROWSER CTRL`
 
