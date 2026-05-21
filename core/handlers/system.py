@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config.settings import config
-from core.handlers.shared import _OS, _ok, _err, _coerce_volume_level, request_confirmation
+from core.handlers.shared import _OS, _ok, _err, _coerce_volume_level, _tlog, request_confirmation
 from core.handlers.paths import _resolve_screenshot_path, _find_folder
 from core import computer_control as cc
 
@@ -301,11 +301,25 @@ def _handle_brightness(action: str, level: int | None) -> dict:
 
 def _handle_system_control(action: str, params: dict) -> dict:
     if action in ("volume_up", "volume_down"):
-        return cc.set_volume(action, level=_coerce_volume_level(params))
+        _tlog(f"❯ volume {'up' if action == 'volume_up' else 'down'}")
+        result = cc.set_volume(action, level=_coerce_volume_level(params))
+        if result.get("success"):
+            _tlog(f"✓ {result.get('output') or 'volume changed'}")
+        else:
+            _tlog(f"✗ {result.get('error') or 'volume change failed'}")
+        return result
+
     if action in ("volume_mute", "volume_unmute"):
-        return cc.set_volume(action, level=None)
+        _tlog(f"❯ {'mute' if action == 'volume_mute' else 'unmute'}")
+        result = cc.set_volume(action, level=None)
+        if result.get("success"):
+            _tlog(f"✓ {'muted' if action == 'volume_mute' else 'unmuted'}")
+        else:
+            _tlog(f"✗ {result.get('error') or 'mute toggle failed'}")
+        return result
 
     if action == "screenshot":
+        _tlog("❯ screenshot")
         save_param = params.get("save_path") or params.get("folder") or None
         resolved, missing_folder = _resolve_screenshot_path(save_param)
 
@@ -315,8 +329,14 @@ def _handle_system_control(action: str, params: dict) -> dict:
                 if not folder:
                     folder = Path.home() / "Desktop"
                 path = str(folder / f"JARVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-                return cc.screenshot(path=path)
+                r = cc.screenshot(path=path)
+                if r.get("success"):
+                    _tlog(f"✓ saved → {Path(path).name}")
+                else:
+                    _tlog(f"✗ {r.get('error') or 'screenshot failed'}")
+                return r
             from core.personality import ask as _ask
+            _tlog(f"⚠ awaiting confirmation — folder {missing_folder!r} not found")
             return request_confirmation(
                 _ask("folder_not_found", missing_folder),
                 _create_and_screenshot,
@@ -326,26 +346,56 @@ def _handle_system_control(action: str, params: dict) -> dict:
         result = cc.screenshot(path=resolved, region=region)
         if result["success"]:
             result["output"] = Path(resolved).name
+            _tlog(f"✓ saved → {Path(resolved).name}")
+        else:
+            _tlog(f"✗ {result.get('error') or 'screenshot failed'}")
         return result
 
     if action == "lock_screen":
-        return cc.lock_screen()
+        _tlog("❯ lock screen")
+        result = cc.lock_screen()
+        if result.get("success"):
+            _tlog("✓ locked")
+        else:
+            _tlog(f"✗ {result.get('error') or 'lock failed'}")
+        return result
 
     if action in ("brightness_up", "brightness_down"):
+        _tlog(f"❯ brightness {'up' if action == 'brightness_up' else 'down'}")
         level = _coerce_volume_level(params)
-        return _handle_brightness(action, level)
+        result = _handle_brightness(action, level)
+        if result.get("success"):
+            _tlog(f"✓ {result.get('output') or 'done'}")
+        else:
+            _tlog(f"✗ {result.get('error') or 'brightness change failed'}")
+        return result
 
     if action == "wifi_toggle":
+        _tlog("❯ toggle wifi")
         if _OS == "windows":
-            return _toggle_wifi_windows()
-        return _err("Wi-Fi toggle is currently supported only on Windows")
+            result = _toggle_wifi_windows()
+        else:
+            result = _err("Wi-Fi toggle is currently supported only on Windows")
+        if result.get("success"):
+            _tlog(f"✓ {result.get('output') or 'wifi toggled'}")
+        else:
+            _tlog(f"✗ {result.get('error') or 'wifi toggle failed'}")
+        return result
 
     if action == "bluetooth_toggle":
+        _tlog("❯ toggle bluetooth")
         if _OS == "windows":
-            return _toggle_bluetooth_windows()
-        return _err("Bluetooth toggle is currently supported only on Windows")
+            result = _toggle_bluetooth_windows()
+        else:
+            result = _err("Bluetooth toggle is currently supported only on Windows")
+        if result.get("success"):
+            _tlog(f"✓ {result.get('output') or 'bluetooth toggled'}")
+        else:
+            _tlog(f"✗ {result.get('error') or 'bluetooth toggle failed'}")
+        return result
 
     if action in ("shutdown", "restart", "sleep"):
+        _tlog(f"❯ {action}")
         _win_root = os.environ.get("SystemRoot", r"C:\Windows")
         _win_shutdown = os.path.join(_win_root, "System32", "shutdown.exe")
         cmds = {
@@ -368,8 +418,13 @@ def _handle_system_control(action: str, params: dict) -> dict:
             },
         }
         cmd = cmds.get(_OS, cmds["linux"]).get(action)
-        if cmd:
-            subprocess.Popen(cmd)
-        return _ok(f"Executing: {action}")
+        try:
+            if cmd:
+                subprocess.Popen(cmd)
+            _tlog("✓ executing...")
+            return _ok(f"Executing: {action}")
+        except Exception as exc:
+            _tlog(f"✗ {exc}")
+            return _err(str(exc))
 
     return _ok(f"System: {action}")
