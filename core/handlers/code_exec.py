@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import platform
 import re
@@ -20,7 +21,40 @@ from typing import Callable, Optional
 from core.handlers.shared import _ok, _err, request_confirmation
 
 # Background processes launched via run_background — pid → Popen
+# R2-14: guarded by _bg_procs_lock. Read/write happens from the dispatch
+# thread (run_background, kill_process) and from atexit cleanup; dict.pop
+# + iteration are not atomic together so we lock every access.
 _bg_procs: dict[int, "subprocess.Popen[str]"] = {}
+_bg_procs_lock = threading.Lock()
+
+
+def _terminate_bg_procs() -> None:
+    """Atexit hook: terminate every tracked background process on JARVIS exit.
+
+    Previously these leaked across restarts — a `run_background` python server
+    survived JARVIS shutdown and the user had to kill it manually. We hold the
+    lock for the snapshot then drop it before .terminate() / .kill() (which
+    may block briefly) so a slow child can't block the rest of cleanup.
+    """
+    with _bg_procs_lock:
+        if not _bg_procs:
+            return
+        snapshot = list(_bg_procs.items())
+        _bg_procs.clear()
+    print(f"[code_exec] terminating {len(snapshot)} background process(es) on exit", file=sys.stderr)
+    for pid, proc in snapshot:
+        try:
+            if proc.poll() is None:  # still running
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception as exc:
+            print(f"[code_exec] failed to terminate PID {pid}: {exc!r}", file=sys.stderr)
+
+
+atexit.register(_terminate_bg_procs)
 
 
 def _truncate(text: str, limit: int = 2000) -> str:
@@ -687,7 +721,8 @@ def _handle_code_execution(action: str, params: dict) -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            _bg_procs[proc.pid] = proc
+            with _bg_procs_lock:
+                _bg_procs[proc.pid] = proc
             return _ok(f"Started in background — PID {proc.pid}")
         except Exception as exc:
             return _err(str(exc))
@@ -706,7 +741,8 @@ def _handle_code_execution(action: str, params: dict) -> dict:
                 p = psutil.Process(int(pid))
                 pname = p.name()
                 p.kill()
-                _bg_procs.pop(int(pid), None)
+                with _bg_procs_lock:
+                    _bg_procs.pop(int(pid), None)
                 return _ok(f"Killed {pname} (PID {pid})")
             except psutil.NoSuchProcess:
                 return _err(f"No process with PID {pid}")
@@ -720,7 +756,8 @@ def _handle_code_execution(action: str, params: dict) -> dict:
                     if name.lower() in (proc.info["name"] or "").lower():
                         proc.kill()
                         killed.append(f"{proc.info['name']} (PID {proc.info['pid']})")
-                        _bg_procs.pop(proc.info["pid"], None)
+                        with _bg_procs_lock:
+                            _bg_procs.pop(proc.info["pid"], None)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             if killed:

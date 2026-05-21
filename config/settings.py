@@ -7,12 +7,28 @@ debug mode, HUD theme preferences.
 import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 _JSON_PATH = Path(__file__).parent / "jarvis.json"
+
+
+def _log_settings_error(msg: str) -> None:
+    """Route a settings error through core.log when available, else stderr.
+
+    core.log doesn't import config at module-load time, so calling it from
+    inside AppConfig.load() is safe (no circular import). The fallback exists
+    only because settings can theoretically run before core/ is on sys.path
+    (e.g. an external tool importing config.settings standalone)."""
+    try:
+        from core.log import error as _err
+        _err("settings", msg)
+    except Exception:
+        import sys
+        print(f"[settings] {msg}", file=sys.stderr)
 
 
 @dataclass
@@ -92,17 +108,49 @@ class AppConfig:
                 if u:
                     instance.user_name = u
                 return instance
-            except Exception:
-                pass
+            except Exception as exc:
+                # R2-11: never silently swallow a corrupt jarvis.json. Rename
+                # the bad file with a timestamp suffix and log the reason so
+                # the user knows why their settings reverted to defaults.
+                # The corrupt-write scenario (R2-10 atomic save) is what makes
+                # this reachable in the first place.
+                try:
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    bad_path = _JSON_PATH.with_suffix(f".json.bad.{stamp}")
+                    os.replace(_JSON_PATH, bad_path)
+                    _log_settings_error(
+                        f"jarvis.json is corrupt ({exc!r}) — preserved as {bad_path.name}; "
+                        "loading defaults this session"
+                    )
+                except OSError as rename_exc:
+                    _log_settings_error(
+                        f"jarvis.json is corrupt ({exc!r}) and could not be renamed ({rename_exc!r}); "
+                        "loading defaults this session"
+                    )
         return cls.from_env()
 
     def save(self):
-        """Persist non-sensitive config to JSON. API keys stay in .env only."""
+        """Persist non-sensitive config to JSON. API keys stay in .env only.
+
+        R2-10: write atomically via tmp + os.replace. A crash mid-write leaves
+        the previous version of jarvis.json intact rather than truncated.
+        Mirrors the pattern used in core/automation.py for workflows.json.
+        """
         _SENSITIVE = {
             "anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "openweather_api_key",
         }
         data = {k: v for k, v in asdict(self).items() if k not in _SENSITIVE}
-        _JSON_PATH.write_text(json.dumps(data, indent=2))
+        tmp = _JSON_PATH.with_suffix(_JSON_PATH.suffix + ".tmp")
+        try:
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp, _JSON_PATH)
+        except Exception as exc:
+            _log_settings_error(f"failed to save {_JSON_PATH.name}: {exc!r}")
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
 
 config = AppConfig.load()

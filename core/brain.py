@@ -282,6 +282,11 @@ def ask_claude(
             model=config.claude_model,
             max_tokens=max_out,
             temperature=0.8,   # varied spoken responses while keeping JSON structure stable
+            # R2-8: hard upper bound on the API round-trip so an Anthropic
+            # stall can't hang the entire voice pipeline indefinitely.
+            # 15s comfortably covers normal completions (median ~1–2s); a
+            # genuine stall past 15s gets _fallback("api_timeout", ...).
+            timeout=15,
             system=[
                 {
                     "type": "text",
@@ -308,6 +313,13 @@ def ask_claude(
         if config.debug_mode:
             print(f"[brain] JSON parse error: {exc}\nRaw: {raw!r}")
         result = _fallback("json_parse_error", raw_input)
+
+    except anthropic.APITimeoutError:
+        # R2-8: surface stalls explicitly so the user knows to try again,
+        # rather than getting the generic "I'm unable to process that".
+        if config.debug_mode:
+            print("[brain] API timeout after 15s")
+        result = _fallback("api_timeout", raw_input)
 
     except anthropic.AuthenticationError:
         result = _fallback("invalid_api_key", raw_input)
@@ -460,13 +472,29 @@ def ask_post_execution(
 # ── Fallback ──────────────────────────────────────────────────────────────────
 
 def _fallback(reason: str, original: str) -> dict[str, Any]:
+    # R2-8: per-reason copy so the user gets actionable feedback instead of
+    # a flat "unable to process". The HUD label mirrors the reason so the
+    # operator can see at a glance whether to retry, check keys, or wait.
+    if reason == "api_timeout":
+        spoken     = "I couldn't reach my brain right now — try that again."
+        hud_status = "TIMEOUT"
+    elif reason == "invalid_api_key":
+        spoken     = "My API key isn't valid — check your .env."
+        hud_status = "AUTH ERROR"
+    elif reason == "rate_limited":
+        spoken     = "Rate limited — give it a moment and try again."
+        hud_status = "RATE LIMIT"
+    else:
+        spoken     = "I'm unable to process that request."
+        hud_status = "UNKNOWN"
+
     return {
         "intent": "unknown",
         "action": "none",
         "parameters": {},
         "confidence": 0.05,
-        "response": "I'm unable to process that request.",
-        "hud_status": "UNKNOWN",
+        "response": spoken,
+        "hud_status": hud_status,
         "requires_confirmation": False,
         "_error": reason,
         "_original_input": original,

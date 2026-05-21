@@ -12,9 +12,11 @@ Special keys in return dict:
 
 from __future__ import annotations
 
+import traceback
 from typing import Any
 
 from config.settings import config
+from core import log as _log
 
 # ── Re-export public API (callers import these from core.executor) ─────────────
 from core.handlers.shared import (
@@ -112,6 +114,11 @@ def dispatch(result: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
             return handler(action, params, confirmed=confirmed)
         return handler(action, params)
     except Exception as exc:
-        if config.debug_mode:
-            print(f"[executor] Unhandled error in {intent}/{action}: {exc}")
+        # R2-12: log the full traceback (always, not gated on debug_mode) so
+        # silent handler bugs leave a real breadcrumb. The user-facing reply
+        # stays short — the long form goes to stderr via core.log.error.
+        _log.error(
+            "executor",
+            f"unhandled error in {intent}/{action}: {exc!r}\n{traceback.format_exc()}",
+        )
         return _err(str(exc))
