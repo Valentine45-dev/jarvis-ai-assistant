@@ -15,6 +15,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+# Cron preset chips. (display_label, cron_expression).
+_CRON_PRESETS: tuple[tuple[str, str], ...] = (
+    ("Every weekday 9 AM", "0 9 * * 1-5"),
+    ("Daily at midnight",  "0 0 * * *"),
+    ("Hourly",             "0 * * * *"),
+    ("Every 15 min",       "*/15 * * * *"),
+    ("Manual",             ""),
+)
+
 from ui.theme import CYAN
 from ui.widgets import _mono
 
@@ -103,6 +112,40 @@ class NewWorkflowDialog(GlassDialog):
         self._name_inp = self._field(fl, "WORKFLOW NAME", "Morning Routine")
         self._trigger_inp = self._field(fl, "TRIGGER PHRASE", "run morning routine")
 
+        # ── Schedule (optional cron expression) ─────────────────────────────
+        self._schedule_inp = self._field(
+            fl, "SCHEDULE (OPTIONAL · CRON)", "0 9 * * 1-5"
+        )
+        sched_hint = QLabel(
+            "Leave blank for manual-only. Format: <code>min hour day mon dow</code>. "
+            "Click a preset:"
+        )
+        sched_hint.setStyleSheet(
+            "color:rgba(132,147,150,0.7);font-family:'Roboto Mono';"
+            "font-size:10px;background:transparent;border:none;"
+        )
+        sched_hint.setWordWrap(True)
+        fl.addWidget(sched_hint)
+
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(6)
+        for label, expr in _CRON_PRESETS:
+            chip = QPushButton(label)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(
+                "QPushButton{color:rgba(0,229,255,0.78);"
+                "background:transparent;border:1px solid rgba(0,229,255,0.25);"
+                "border-radius:3px;padding:3px 8px;"
+                "font-family:'Roboto Mono';font-size:9px;font-weight:700;letter-spacing:1px;}"
+                "QPushButton:hover{background:rgba(0,229,255,0.10);}"
+            )
+            chip.clicked.connect(
+                lambda _checked=False, e=expr: self._schedule_inp.setText(e)
+            )
+            preset_row.addWidget(chip)
+        preset_row.addStretch(1)
+        fl.addLayout(preset_row)
+
         steps_lbl = QLabel("STEPS  —  one command per line")
         steps_lbl.setStyleSheet(
             f"color:{CYAN};font-size:10px;letter-spacing:1.5px;background:transparent;border:none;"
@@ -166,6 +209,7 @@ class NewWorkflowDialog(GlassDialog):
         if workflow:
             self._name_inp.setText(str(workflow.get("name", "")))
             self._trigger_inp.setText(str(workflow.get("trigger", "")))
+            self._schedule_inp.setText(str(workflow.get("schedule", "")))
             step_lines = [_dialog_step_label(s) for s in workflow.get("steps", [])]
             self._steps_edit.setPlainText("\n".join(step_lines))
             self._update_counter()
@@ -194,10 +238,16 @@ class NewWorkflowDialog(GlassDialog):
         self._counter_lbl.setText(f"{n} STEP{'S' if n != 1 else ''}")
 
     def get_values(self) -> tuple[str, str, list[str]]:
+        """Returns (name, trigger, steps). Kept 3-tuple for source-compat with
+        existing callers — the schedule comes through `get_schedule()`."""
         name = self._name_inp.text().strip()
         trigger = self._trigger_inp.text().strip()
         steps = [s.strip() for s in self._steps_edit.toPlainText().splitlines() if s.strip()]
         return name, trigger, steps
+
+    def get_schedule(self) -> str:
+        """Cron expression, or empty string when the workflow is manual-only."""
+        return self._schedule_inp.text().strip()
 
 
 class ConfirmDeleteDialog(GlassDialog):

@@ -397,6 +397,7 @@ class AutomationView(QWidget):
         if dlg.exec_() != QDialog.Accepted:
             return
         name, trigger, steps = dlg.get_values()
+        schedule = dlg.get_schedule()
         if not name:
             return
         if not trigger:
@@ -410,14 +411,17 @@ class AutomationView(QWidget):
         while wf_id in existing:
             wf_id = f"{base_id}_{n}"
             n += 1
-        workflow_library.add({
+        wf: dict = {
             "id": wf_id,
             "name": name,
             "trigger": trigger,
             "steps": steps,
             "enabled": True,
             "last_run": None,
-        })
+        }
+        if schedule:
+            wf["schedule"] = schedule
+        workflow_library.add(wf)
 
     def _edit_selected_workflow(self) -> None:
         if not self._selected_workflow_id:
@@ -453,6 +457,11 @@ class AutomationView(QWidget):
         updated["name"] = name
         updated["trigger"] = trigger
         updated["steps"] = steps
+        schedule = dlg.get_schedule()
+        if schedule:
+            updated["schedule"] = schedule
+        else:
+            updated.pop("schedule", None)
         workflow_library.add(updated)
         self._selected_workflow_id = old_id
 
