@@ -428,7 +428,53 @@ def ask_claude(
 
     except anthropic.APIStatusError as exc:
         _log.debug("brain", f"API status {exc.status_code}: {exc.message}")
-        result = _fallback(f"api_error_{exc.status_code}", raw_input)
+        # 529 = overloaded. Anthropic usually recovers within a couple
+        # seconds, so do exactly ONE retry with a small delay before
+        # surfacing the failure to the user. Two retries would feel
+        # sluggish; zero retries leaves easy wins on the table.
+        if exc.status_code == 529:
+            import time as _time
+            _time.sleep(1.5)
+            try:
+                msg = _get_client().messages.create(
+                    model=config.claude_model,
+                    max_tokens=max_out,
+                    temperature=sampling_temperature,
+                    timeout=15,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": _get_system_prompt(),
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    messages=prior_messages + [{"role": "user", "content": user_msg}],
+                )
+                if msg.content:
+                    raw = msg.content[0].text.strip()
+                    if raw.startswith("```"):
+                        raw = re.sub(r"^```[a-z]*\n?", "", raw)
+                        raw = re.sub(r"\n?```$", "", raw)
+                    result = _parse_claude_json_raw(raw)
+                    if use_memory:
+                        memory.add_exchange(cmd_text, raw)
+                    try:
+                        spoken = (result.get("response") or "").strip()
+                        if spoken:
+                            response_memory.record(
+                                result.get("intent") or "unknown",
+                                result.get("action") or "",
+                                spoken,
+                            )
+                    except Exception:
+                        pass
+                else:
+                    result = _fallback("api_error_529", raw_input)
+            except Exception as retry_exc:
+                _log.debug("brain", f"529 retry failed: {retry_exc}")
+                result = _fallback("api_error_529", raw_input)
+        else:
+            result = _fallback(f"api_error_{exc.status_code}", raw_input)
 
     except Exception as exc:
         _log.debug("brain", f"API error: {exc}")
@@ -602,6 +648,16 @@ def _fallback(reason: str, original: str) -> dict[str, Any]:
     elif reason == "busy":
         spoken     = "Still working on your last command — one moment."
         hud_status = "BUSY"
+    elif reason == "api_error_529" or reason == "overloaded":
+        # Transient Anthropic overload (HTTP 529). Usually clears in a few
+        # seconds. Tell the user it's their luck, not their setup.
+        spoken     = "Anthropic's servers are overloaded — give it a moment and try again."
+        hud_status = "OVERLOADED"
+    elif reason.startswith("api_error_5"):
+        # Any other 5xx — same actionable advice (retry), different label.
+        code = reason.removeprefix("api_error_") or "5xx"
+        spoken     = f"Anthropic returned a server error ({code}) — try that again."
+        hud_status = "API ERROR"
     else:
         spoken     = "I'm unable to process that request."
         hud_status = "UNKNOWN"
