@@ -1,529 +1,581 @@
-"""HistoryView — COMMAND_LOG: session stats and scrollable command history."""
+"""HistoryView — session command log + analytics.
+
+Redesigned 2026-05 to match the shared HUD grammar:
+  - Top 4 hero metric tiles (total / success rate / avg confidence / top intent)
+  - Sparkline strip showing per-hour activity for the last 24 h
+  - Filter chip row (All / per-intent) with optional search input
+  - Dense log rows (divide-y, intent badge + user query + JARVIS response +
+    outcome pip), the same row shape used elsewhere across the app.
+
+Public API preserved so main.py needs no changes:
+  - HistoryView.history_cleared signal
+  - HistoryView.refresh_history(entries, uptime_str="") method
+"""
 
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import List, Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
 
-from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
-from ui.widgets import GlassPanel, SegmentedBar, StatusPip, _mono
+from ui.components.design import (
+    AMBER,
+    BG_PANEL,
+    CYAN_FAINT,
+    CYAN_SOFT,
+    GREEN,
+    GREEN_DIM,
+    INK,
+    INK_DIM,
+    INK_FAINT,
+    INTENT_LABEL,
+    RED,
+    ChipFilter,
+    DivideRow,
+    HeroMetric,
+    IntentBadge,
+    PanelCard,
+    StatusPip,
+)
+from ui.theme import BG, CYAN, FM
 
 
-# ── Stat card ──────────────────────────────────────────────────────────────
+# ── Sparkline ────────────────────────────────────────────────────────────────
 
-class _StatCard(GlassPanel):
-    def __init__(self, label: str, value: str, bar_value: float = 0.0, parent=None):
+
+class _Sparkline(QWidget):
+    """24-bin activity sparkline. Each bin = one hour. Bins fade left → right
+    based on age; today's most recent hour is brightest on the far right.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.set_fill_color(QColor(10, 17, 19, 220))
+        self._bins: List[int] = [0] * 24
+        self._peak_hours: list[int] = []
+        self.setMinimumHeight(50)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(6)
+    # ── Data ─────────────────────────────────────────────────────────────────
 
-        lbl = QLabel(label)
-        lbl.setFont(_mono(8, bold=True))
-        lbl.setStyleSheet(
-            "color:rgba(186,201,204,0.55);letter-spacing:2px;"
-            "background:transparent;border:none;"
-        )
-        lay.addWidget(lbl)
+    def set_entries(self, entries: list) -> None:
+        """Rebuild bins from ``entries``. Times are read from ``entry["jTime"]``
+        when available (HH:MM string from main.py), else from "time" (legacy)."""
+        bins = [0] * 24
+        for e in entries:
+            t = str(e.get("jTime") or e.get("time") or "").strip()
+            if len(t) < 2 or ":" not in t:
+                continue
+            try:
+                hour = int(t.split(":", 1)[0])
+            except ValueError:
+                continue
+            if 0 <= hour < 24:
+                bins[hour] += 1
+        self._bins = bins
 
-        self._val = QLabel(value)
-        self._val.setFont(_mono(22))
-        self._val.setStyleSheet(
-            f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;"
-        )
-        lay.addWidget(self._val)
+        # Identify top 3 peak hours (by count) for the summary line.
+        if any(self._bins):
+            sorted_hours = sorted(range(24), key=lambda h: self._bins[h], reverse=True)
+            self._peak_hours = [h for h in sorted_hours[:3] if self._bins[h] > 0]
+        else:
+            self._peak_hours = []
+        self.update()
 
-        lay.addStretch(1)
+    def peak_summary(self) -> str:
+        """Short text describing where activity concentrated — for the
+        sparkline's adjacent caption."""
+        total = sum(self._bins)
+        if not total:
+            return "no activity yet"
+        if not self._peak_hours:
+            return f"{total} commands"
+        hh = " / ".join(f"{h:02d}:00" for h in self._peak_hours)
+        return f"{total} commands · peaks at {hh}"
 
-        self._bar = SegmentedBar(segments=8, value=bar_value, color=CYAN)
-        self._bar.setFixedHeight(10)
-        lay.addWidget(self._bar)
+    # ── Paint ────────────────────────────────────────────────────────────────
 
-    def set_metrics(self, value: str, bar_value: float = 0.0):
-        self._val.setText(value)
-        self._bar.set_value(max(0.0, min(1.0, bar_value)))
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
 
+        w, h = self.width(), self.height()
+        if w <= 4 or h <= 4:
+            return
+        if not any(self._bins):
+            # Faint baseline + "no data" hint
+            pen = QPen(QColor(0, 229, 255, 40))
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.drawLine(0, h - 4, w, h - 4)
+            return
 
-# ── Command log row ────────────────────────────────────────────────────────
+        max_count = max(self._bins) or 1
+        step = w / 23.0  # 24 points, 23 gaps
+        baseline = h - 2
+        amplitude = h - 8
 
-_STATUS_STATE = {"success": "active", "warning": "standby", "error": "error"}
-
-
-class _LogRow(QWidget):
-    def __init__(self, entry: dict, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(34)
-
-        conf   = float(entry.get("confidence", entry.get("conf", 0.0)))
-        status = entry.get("status", "success")
-        intent = entry.get("intent", "unknown")
-        cmd    = entry.get("you", "")
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 0, 12, 0)
-        lay.setSpacing(12)
-
-        pip = StatusPip(_STATUS_STATE.get(status, "active"))
-        pip.setFixedSize(8, 8)
-        lay.addWidget(pip, 0, Qt.AlignVCenter)
-
-        time_lbl = QLabel(str(entry.get("time", "--:--"))[:8])
-        time_lbl.setFixedWidth(64)
-        time_lbl.setFont(_mono(10))
-        time_lbl.setStyleSheet(
-            "color:rgba(132,147,150,0.7);background:transparent;border:none;"
-        )
-        lay.addWidget(time_lbl)
-
-        cmd_lbl = QLabel(cmd[:46] + "…" if len(cmd) > 46 else cmd)
-        cmd_lbl.setFont(_mono(11))
-        cmd_lbl.setStyleSheet(
-            "color:rgba(195,245,255,0.88);background:transparent;border:none;"
-        )
-        lay.addWidget(cmd_lbl, 1)
-
-        intent_lbl = QLabel(intent.replace("_", "·"))
-        intent_lbl.setFixedWidth(106)
-        intent_lbl.setFont(_mono(10))
-        intent_lbl.setStyleSheet(f"color:{CYAN};background:transparent;border:none;")
-        lay.addWidget(intent_lbl)
-
-        conf_color = CYAN if conf >= 0.9 else WARNING if conf >= 0.7 else RED
-        conf_lbl = QLabel(f"{int(conf * 100)}%")
-        conf_lbl.setFixedWidth(34)
-        conf_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        conf_lbl.setFont(_mono(10, bold=True))
-        conf_lbl.setStyleSheet(
-            f"color:{conf_color};background:transparent;border:none;"
-        )
-        lay.addWidget(conf_lbl)
-
-    def enterEvent(self, _):
-        self.setStyleSheet("background:rgba(0,229,255,0.05);")
-
-    def leaveEvent(self, _):
-        self.setStyleSheet("background:transparent;")
-
-
-class _LogTable(QWidget):
-    """Scrollable list of _LogRow widgets."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        col_hdr = QWidget()
-        col_hdr.setFixedHeight(26)
-        col_hdr.setStyleSheet("background:rgba(0,229,255,0.04);")
-        ch = QHBoxLayout(col_hdr)
-        ch.setContentsMargins(34, 0, 12, 0)
-        ch.setSpacing(12)
-        for txt, w in (("TIME", 64), ("COMMAND", 0), ("INTENT", 106), ("CONF", 34)):
-            lbl = QLabel(txt)
-            lbl.setFont(_mono(8, bold=True))
-            lbl.setStyleSheet(
-                "color:rgba(132,147,150,0.55);letter-spacing:2px;"
-                "background:transparent;border:none;"
-            )
-            if w:
-                lbl.setFixedWidth(w)
-                ch.addWidget(lbl)
+        # Build the polyline path
+        path = QPainterPath()
+        first = True
+        for i, c in enumerate(self._bins):
+            x = i * step
+            y = baseline - (c / max_count) * amplitude
+            if first:
+                path.moveTo(x, y)
+                first = False
             else:
-                ch.addWidget(lbl, 1)
-        outer.addWidget(col_hdr)
+                path.lineTo(x, y)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(
-            "color:rgba(0,229,255,0.12);background:rgba(0,229,255,0.12);"
-        )
-        sep.setFixedHeight(1)
-        outer.addWidget(sep)
+        # Fill under the curve at low alpha
+        fill_path = QPainterPath(path)
+        fill_path.lineTo(w, baseline)
+        fill_path.lineTo(0, baseline)
+        fill_path.closeSubpath()
+        p.fillPath(fill_path, QColor(0, 229, 255, 22))
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setStyleSheet(
-            "QScrollArea{background:transparent;border:none;}"
-            "QScrollBar:vertical{background:rgba(0,0,0,0);width:6px;}"
-            "QScrollBar::handle:vertical{"
-            "background:rgba(0,229,255,0.25);border-radius:3px;min-height:20px;}"
-            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}"
-        )
-
-        self._container = QWidget()
-        self._container.setStyleSheet("background:transparent;")
-        self._rows_lay = QVBoxLayout(self._container)
-        self._rows_lay.setContentsMargins(0, 0, 0, 0)
-        self._rows_lay.setSpacing(0)
-        self._rows_lay.addStretch(1)
-
-        scroll.setWidget(self._container)
-        outer.addWidget(scroll, 1)
-
-    def set_entries(self, entries: list):
-        for i in reversed(range(self._rows_lay.count())):
-            item = self._rows_lay.takeAt(i)
-            if item.widget():
-                item.widget().deleteLater()
-
-        if not entries:
-            empty = QLabel("NO HISTORY YET")
-            empty.setAlignment(Qt.AlignCenter)
-            empty.setFont(_mono(11, bold=True))
-            empty.setStyleSheet(
-                "color:rgba(0,229,255,0.20);letter-spacing:3px;"
-                "background:transparent;border:none;"
-            )
-            self._rows_lay.addStretch(1)
-            self._rows_lay.addWidget(empty, 0, Qt.AlignCenter)
-            self._rows_lay.addStretch(1)
-            return
-
-        for entry in entries:
-            self._rows_lay.addWidget(_LogRow(entry))
-        self._rows_lay.addStretch(1)
+        # Stroke the line
+        pen = QPen(QColor(CYAN))
+        pen.setWidthF(1.2)
+        p.setPen(pen)
+        p.drawPath(path)
 
 
-# ── Intent breakdown panel ─────────────────────────────────────────────────
-
-class _IntentBreakdown(GlassPanel):
-    """Right panel: top intents by frequency with labeled bars."""
-
-    MAX_SHOWN = 6
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.set_fill_color(QColor(10, 17, 19, 220))
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        hdr = QWidget()
-        hdr.setFixedHeight(36)
-        hdr.setStyleSheet("background:transparent;")
-        hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(14, 0, 14, 0)
-        t = QLabel("INTENT BREAKDOWN")
-        t.setFont(_mono(10, bold=True))
-        t.setStyleSheet(
-            f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;"
-        )
-        hl.addWidget(t)
-        outer.addWidget(hdr)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(
-            "color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);"
-        )
-        sep.setFixedHeight(1)
-        outer.addWidget(sep)
-
-        self._body = QWidget()
-        self._body.setStyleSheet("background:transparent;")
-        self._body_lay = QVBoxLayout(self._body)
-        self._body_lay.setContentsMargins(14, 14, 14, 14)
-        self._body_lay.setSpacing(12)
-        outer.addWidget(self._body, 1)
-
-    def update_breakdown(self, entries: list):
-        while self._body_lay.count():
-            item = self._body_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        if not entries:
-            lbl = QLabel("NO DATA")
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet(
-                "color:rgba(0,229,255,0.20);letter-spacing:3px;"
-                "background:transparent;border:none;"
-            )
-            self._body_lay.addStretch(1)
-            self._body_lay.addWidget(lbl, 0, Qt.AlignCenter)
-            self._body_lay.addStretch(1)
-            return
-
-        counts = Counter(
-            e.get("intent", "unknown") for e in entries if e.get("intent")
-        )
-        total = sum(counts.values()) or 1
-
-        for intent, count in counts.most_common(self.MAX_SHOWN):
-            w = QWidget()
-            w.setStyleSheet("background:transparent;")
-            wl = QVBoxLayout(w)
-            wl.setContentsMargins(0, 0, 0, 0)
-            wl.setSpacing(3)
-
-            label_row = QHBoxLayout()
-            name_lbl = QLabel(intent.replace("_", "·"))
-            name_lbl.setFont(_mono(9))
-            name_lbl.setStyleSheet(
-                f"color:{CYAN};background:transparent;border:none;"
-            )
-            cnt_lbl = QLabel(str(count))
-            cnt_lbl.setFont(_mono(9, bold=True))
-            cnt_lbl.setStyleSheet(
-                "color:rgba(132,147,150,0.70);background:transparent;border:none;"
-            )
-            label_row.addWidget(name_lbl, 1)
-            label_row.addWidget(cnt_lbl)
-            wl.addLayout(label_row)
-
-            bar = SegmentedBar(segments=8, value=count / total, color=CYAN)
-            bar.setFixedHeight(5)
-            wl.addWidget(bar)
-
-            self._body_lay.addWidget(w)
-
-        self._body_lay.addStretch(1)
+# ── Empty-state helper ──────────────────────────────────────────────────────
 
 
-# ── Filter bar ─────────────────────────────────────────────────────────────
-
-class _FilterBar(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(44)
-        self.setStyleSheet(
-            "background:rgba(8,15,17,0.55);"
-            "border:1px solid rgba(0,229,255,0.09);"
-        )
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 0, 14, 0)
-        lay.setSpacing(10)
-
-        lbl = QLabel("FILTER")
-        lbl.setFont(_mono(8, bold=True))
-        lbl.setStyleSheet(
-            "color:rgba(0,229,255,0.45);letter-spacing:2px;"
-            "background:transparent;border:none;"
-        )
-        lay.addWidget(lbl)
-
-        div = QFrame()
-        div.setFrameShape(QFrame.VLine)
-        div.setStyleSheet(
-            "color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);"
-        )
-        div.setFixedWidth(1)
-        lay.addWidget(div)
-
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("type to filter commands…")
-        self.input.setStyleSheet(
-            "QLineEdit{background:transparent;border:none;"
-            f"color:{CYAN};font-family:'{FM}';font-size:11px;letter-spacing:1px;"
-            "}"
-        )
-        lay.addWidget(self.input, 1)
-
-        clr = QPushButton("✕")
-        clr.setCursor(Qt.PointingHandCursor)
-        clr.setFixedSize(20, 20)
-        clr.setStyleSheet(
-            "QPushButton{color:rgba(0,229,255,0.35);background:transparent;"
-            "border:none;font-size:11px;}"
-            "QPushButton:hover{color:rgba(0,229,255,0.85);}"
-        )
-        clr.clicked.connect(self.input.clear)
-        lay.addWidget(clr)
+def _empty_label(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setAlignment(Qt.AlignCenter)
+    lbl.setStyleSheet(
+        "QLabel {"
+        f"color: rgba(0,229,255,0.22);"
+        "background: transparent;"
+        "border: none;"
+        f"font-family: '{FM}';"
+        "font-size: 11px;"
+        "font-weight: 700;"
+        "letter-spacing: 3px;"
+        "}"
+    )
+    return lbl
 
 
-# ── Main view ──────────────────────────────────────────────────────────────
+# ── Main view ───────────────────────────────────────────────────────────────
+
 
 class HistoryView(QWidget):
-    history_cleared = pyqtSignal()   # emitted when user clicks "CLEAR HISTORY"
+    """Session command log + analytics. See module docstring."""
 
-    def __init__(self, parent=None):
+    history_cleared = pyqtSignal()   # main.py listens to wipe its own _history
+
+    # Intent filter chips shown above the log. "all" is the no-filter case.
+    _CHIPS: tuple[tuple[str, str], ...] = (
+        ("all",                  "All"),
+        ("browser_automation",   "Browser"),
+        ("file_operation",       "File"),
+        ("vision_analysis",      "Vision"),
+        ("system_control",       "System"),
+        ("jarvis_meta",          "Meta"),
+        ("automation_task",      "Workflow"),
+        ("fail",                 "Failures"),
+    )
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._start_time = datetime.now()
-        self._all_entries: list = []   # newest-first, full unfiltered list
+        self._all_entries: list = []
+        self._active_filter: str = "all"
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(14)
 
-        # ── Header ──────────────────────────────────────────────────────────
+        # ── Header row ──────────────────────────────────────────────────────
         head = QHBoxLayout()
+        head.setSpacing(12)
         title = QLabel("COMMAND_LOG")
         title.setStyleSheet(
-            "QLabel{"
-            f"color:{PRIMARY};"
-            "font-family:'Space Grotesk';font-size:40px;font-weight:700;"
-            "background:transparent;border:none;"
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 24px;"
+            "font-weight: 700;"
+            "letter-spacing: 4px;"
             "}"
         )
-        head.addWidget(title, 1)
+        head.addWidget(title)
+
+        subtitle = QLabel("SESSION INTERACTION LOG · INTENT ANALYTICS")
+        subtitle.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "letter-spacing: 2px;"
+            "}"
+        )
+        head.addWidget(subtitle)
+        head.addStretch(1)
 
         self._clear_btn = QPushButton("CLEAR HISTORY")
         self._clear_btn.setCursor(Qt.PointingHandCursor)
         self._clear_btn.setToolTip("Clear session command history")
         self._clear_btn.setStyleSheet(
-            "QPushButton{"
-            f"color:{CYAN};border:1px solid rgba(0,229,255,0.6);"
-            "font-family:'Roboto Mono';font-size:11px;font-weight:700;"
-            "padding:6px 14px;background:transparent;"
+            "QPushButton {"
+            "background: transparent;"
+            f"color: {CYAN};"
+            f"border: 1px solid {CYAN_SOFT};"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "font-weight: 700;"
+            "padding: 5px 14px;"
+            "letter-spacing: 2px;"
             "}"
-            "QPushButton:hover{background:rgba(0,229,255,0.08);}"
+            "QPushButton:hover { background: rgba(0,229,255,0.10); }"
         )
-        head.addWidget(self._clear_btn, 0, Qt.AlignVCenter)
+        self._clear_btn.clicked.connect(self._on_clear)
+        head.addWidget(self._clear_btn)
         root.addLayout(head)
 
-        subtitle = QLabel("SESSION INTERACTION LOG  //  INTENT ANALYTICS")
-        subtitle.setStyleSheet(
-            "QLabel{color:rgba(132,147,150,0.9);font-family:'Roboto Mono';"
-            "font-size:11px;letter-spacing:1px;background:transparent;border:none;}"
+        # ── Hero stats strip (4 tiles in a bordered horizontal container) ───
+        stats_row = self._build_stats_strip()
+        root.addWidget(stats_row)
+
+        # ── Sparkline strip ─────────────────────────────────────────────────
+        spark_panel = self._build_sparkline_panel()
+        root.addWidget(spark_panel)
+
+        # ── Filter chip row + search ────────────────────────────────────────
+        filter_row = self._build_filter_row()
+        root.addLayout(filter_row)
+
+        # ── Log panel (scrollable, divide-y rows) ───────────────────────────
+        self._log_panel = PanelCard("Sessions · today", active=True)
+        self._log_panel.setMinimumHeight(280)
+        self._log_scroll = QScrollArea()
+        self._log_scroll.setWidgetResizable(True)
+        self._log_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._log_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._log_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 6px; }"
+            "QScrollBar::handle:vertical {"
+            "background: rgba(0,229,255,0.30); border-radius: 3px; min-height: 20px;"
+            "}"
+            "QScrollBar::handle:vertical:hover { background: rgba(0,229,255,0.55); }"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical { background: transparent; }"
         )
-        root.addWidget(subtitle)
+        self._rows_container = QWidget()
+        self._rows_container.setStyleSheet("background: transparent;")
+        self._rows_lay = QVBoxLayout(self._rows_container)
+        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setSpacing(0)
+        self._rows_lay.addStretch(1)
+        self._log_scroll.setWidget(self._rows_container)
+        self._log_panel.add(self._log_scroll, stretch=1)
+        root.addWidget(self._log_panel, 1)
 
-        # ── Stat cards ───────────────────────────────────────────────────────
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(12)
-        self._card_total  = _StatCard("TOTAL COMMANDS", "0",      0.0)
-        self._card_conf   = _StatCard("AVG CONFIDENCE", "0%",     0.0)
-        self._card_uptime = _StatCard("SESSION UPTIME", "0h 00m", 0.0)
-        for card in (self._card_total, self._card_conf, self._card_uptime):
-            card.setFixedHeight(110)
-            stats_row.addWidget(card, 1)
-        root.addLayout(stats_row)
-
-        # ── Filter bar ───────────────────────────────────────────────────────
-        self._filter_bar = _FilterBar()
-        root.addWidget(self._filter_bar)
-
-        # Restarts on each keystroke; fires _apply_filter 250ms after last key
+        # Search-debounce timer
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(250)
         self._filter_timer.timeout.connect(self._apply_filter)
-        self._filter_bar.input.textChanged.connect(
-            lambda _: self._filter_timer.start()
-        )
+        self._search_input.textChanged.connect(lambda _: self._filter_timer.start())
 
-        # ── Body: log (left 70%) + intent breakdown (right 30%) ─────────────
-        body = QHBoxLayout()
-        body.setSpacing(12)
-
-        log_panel = GlassPanel()
-        log_panel.set_fill_color(QColor(10, 17, 19, 220))
-        lp_lay = QVBoxLayout(log_panel)
-        lp_lay.setContentsMargins(0, 0, 0, 0)
-        lp_lay.setSpacing(0)
-
-        log_hdr = QWidget()
-        log_hdr.setFixedHeight(36)
-        log_hdr.setStyleSheet("background:transparent;")
-        lh = QHBoxLayout(log_hdr)
-        lh.setContentsMargins(14, 0, 14, 0)
-        lh.setSpacing(0)
-
-        log_title = QLabel("INTERACTION HISTORY")
-        log_title.setFont(_mono(10, bold=True))
-        log_title.setStyleSheet(
-            f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;"
-        )
-        self._entry_count = QLabel("0 ENTRIES")
-        self._entry_count.setFont(_mono(10))
-        self._entry_count.setStyleSheet(
-            "color:rgba(132,147,150,0.7);background:transparent;border:none;"
-        )
-        lh.addWidget(log_title, 1)
-        lh.addWidget(self._entry_count)
-        lp_lay.addWidget(log_hdr)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(
-            "color:rgba(0,229,255,0.15);background:rgba(0,229,255,0.15);"
-        )
-        sep.setFixedHeight(1)
-        lp_lay.addWidget(sep)
-
-        self._table = _LogTable()
-        lp_lay.addWidget(self._table, 1)
-        body.addWidget(log_panel, 7)
-
-        self._breakdown = _IntentBreakdown()
-        body.addWidget(self._breakdown, 3)
-
-        root.addLayout(body, 1)
-
-        # Self-updating uptime — fires every 60s, no dependency on main.py
-        self._uptime_timer = QTimer(self)
-        self._uptime_timer.setInterval(60_000)
-        self._uptime_timer.timeout.connect(self._tick_uptime)
-        self._uptime_timer.start()
-        self._tick_uptime()  # populate immediately at "0h 00m"
-
+        # Initial empty render
         self.refresh_history([])
-        self._clear_btn.clicked.connect(self._on_clear)
 
-    # ── Internal helpers ────────────────────────────────────────────────────
+    # ── Builders ─────────────────────────────────────────────────────────────
 
-    def _tick_uptime(self):
-        secs = int((datetime.now() - self._start_time).total_seconds())
-        h, m = divmod(secs // 60, 60)
-        self._card_uptime.set_metrics(f"{h}h {m:02d}m", min(1.0, secs / 14400))
-
-    def _apply_filter(self):
-        q = self._filter_bar.input.text().strip().lower()
-        visible = (
-            [e for e in self._all_entries if q in e.get("you", "").lower()]
-            if q else self._all_entries
+    def _build_stats_strip(self) -> QWidget:
+        """Four hero metric tiles in a divide-by-vertical-rule row."""
+        wrap = QFrame()
+        wrap.setStyleSheet(
+            "QFrame {"
+            f"background: {BG_PANEL};"
+            f"border: 1px solid {CYAN_FAINT};"
+            "}"
         )
-        n = len(visible)
-        self._entry_count.setText(f"{n} {'ENTRY' if n == 1 else 'ENTRIES'}")
-        self._table.set_entries(visible[:50])
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-    # ── Public API ──────────────────────────────────────────────────────────
+        def _cell(metric: HeroMetric, *, last: bool = False) -> QWidget:
+            cell = QFrame()
+            cell.setStyleSheet(
+                "QFrame {"
+                "background: transparent;"
+                + ("border: none;" if last else f"border-right: 1px solid {CYAN_FAINT};")
+                + "}"
+            )
+            cl = QVBoxLayout(cell)
+            cl.setContentsMargins(16, 12, 16, 12)
+            cl.addWidget(metric)
+            return cell
 
-    def refresh_history(self, entries: list, uptime_str: str = ""):
-        """Called from main.py after each command completes.
+        self._stat_total      = HeroMetric("Total commands", "0", sub="all-time", value_size=30)
+        self._stat_success    = HeroMetric("Success rate",  "—", sub="today",
+                                           value_color=GREEN, value_size=30)
+        self._stat_confidence = HeroMetric("Avg confidence", "0%", sub="routing certainty", value_size=30)
+        self._stat_top_intent = HeroMetric("Top intent", "—", sub="0 calls", value_size=16)
 
-        uptime_str is accepted for API compatibility but session uptime is
-        computed internally via _tick_uptime so the card never shows '--'.
-        """
-        total = len(entries)
-        avg_conf = (
-            sum(float(e.get("confidence", e.get("conf", 0.0))) for e in entries) / total
-            if total else 0.0
+        lay.addWidget(_cell(self._stat_total), 1)
+        lay.addWidget(_cell(self._stat_success), 1)
+        lay.addWidget(_cell(self._stat_confidence), 1)
+        lay.addWidget(_cell(self._stat_top_intent, last=True), 1)
+        return wrap
+
+    def _build_sparkline_panel(self) -> QWidget:
+        panel = PanelCard()
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+        title = QLabel("ACTIVITY · LAST 24H")
+        title.setStyleSheet(
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "font-weight: 700;"
+            "letter-spacing: 2.2px;"
+            "}"
         )
-        self._card_total.set_metrics(str(total), min(1.0, total / 50.0))
-        self._card_conf.set_metrics(f"{int(avg_conf * 100)}%", avg_conf)
+        header.addWidget(title)
+        header.addStretch(1)
+        self._spark_caption = QLabel("no activity yet")
+        self._spark_caption.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "}"
+        )
+        header.addWidget(self._spark_caption)
+        panel.body().addLayout(header)
 
-        # Store newest-first; filter and table read from this
-        self._all_entries = list(reversed(entries))
+        self._spark = _Sparkline()
+        panel.add(self._spark, stretch=0)
+        return panel
+
+    def _build_filter_row(self) -> QHBoxLayout:
+        lay = QHBoxLayout()
+        lay.setSpacing(6)
+        self._chip_widgets: dict[str, ChipFilter] = {}
+        for key, label in self._CHIPS:
+            chip = ChipFilter(label, active=(key == "all"))
+            chip.clicked.connect(lambda _checked, k=key: self._on_chip_clicked(k))
+            self._chip_widgets[key] = chip
+            lay.addWidget(chip)
+        lay.addStretch(1)
+
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText("search history…")
+        self._search_input.setFixedWidth(220)
+        self._search_input.setStyleSheet(
+            "QLineEdit {"
+            f"background: {BG_PANEL};"
+            f"color: {INK};"
+            f"border: 1px solid {CYAN_FAINT};"
+            f"font-family: '{FM}';"
+            "font-size: 11px;"
+            "padding: 4px 10px;"
+            "}"
+            f"QLineEdit:focus {{ border-color: {CYAN}; }}"
+        )
+        lay.addWidget(self._search_input)
+        return lay
+
+    # ── Event handlers ───────────────────────────────────────────────────────
+
+    def _on_chip_clicked(self, key: str) -> None:
+        # Chips behave as a single-select group. Toggle off others, ensure this
+        # one stays checked. ChipFilter is a QPushButton with .setCheckable;
+        # we want exclusive behaviour so manage state by hand here.
+        for k, chip in self._chip_widgets.items():
+            chip.setChecked(k == key)
+            chip._refresh_style()  # noqa: SLF001 — internal helper, ok here
+        self._active_filter = key
         self._apply_filter()
 
-        # Breakdown always reflects the full unfiltered history
-        self._breakdown.update_breakdown(entries)
-
-    def _on_clear(self):
+    def _on_clear(self) -> None:
         self.refresh_history([])
-        self.history_cleared.emit()   # tell main.py to clear _history too
+        self.history_cleared.emit()
 
-    def paintEvent(self, _):
+    # ── Filtering / rendering ────────────────────────────────────────────────
+
+    def _apply_filter(self) -> None:
+        q = self._search_input.text().strip().lower()
+        flt = self._active_filter
+
+        def keep(e: dict) -> bool:
+            if q and q not in (e.get("you", "") + " " + e.get("jarvis", "")).lower():
+                return False
+            if flt == "all":
+                return True
+            if flt == "fail":
+                return (e.get("status") == "error")
+            return e.get("intent") == flt
+
+        visible = [e for e in self._all_entries if keep(e)]
+        self._render_rows(visible[:80])
+
+    def _render_rows(self, entries: List[dict]) -> None:
+        # Clear existing rows (everything except the trailing stretch)
+        while self._rows_lay.count():
+            item = self._rows_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        if not entries:
+            self._rows_lay.addStretch(1)
+            self._rows_lay.addWidget(_empty_label("NO ENTRIES"), 0, Qt.AlignCenter)
+            self._rows_lay.addStretch(1)
+            return
+
+        last_idx = len(entries) - 1
+        for i, entry in enumerate(entries):
+            self._rows_lay.addWidget(self._build_row(entry, last=(i == last_idx)))
+        self._rows_lay.addStretch(1)
+
+    def _build_row(self, entry: dict, *, last: bool) -> DivideRow:
+        you  = (entry.get("you") or "").strip()
+        resp = (entry.get("jarvis") or "").strip()
+        intent = entry.get("intent") or "unknown"
+        status = entry.get("status") or "success"
+        t = str(entry.get("jTime") or entry.get("time") or "--:--")[:8]
+
+        row = DivideRow(last=last, padding_y=8)
+
+        time_lbl = QLabel(t)
+        time_lbl.setFixedWidth(48)
+        time_lbl.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
+        )
+        row.add(time_lbl)
+
+        # Badge: failures get the dedicated FAIL badge regardless of intent
+        badge_key = "fail" if status == "error" else intent
+        row.add(IntentBadge(badge_key))
+
+        you_lbl = QLabel(f'"{you}"' if you else "")
+        you_lbl.setMinimumWidth(160)
+        you_lbl.setStyleSheet(
+            f"QLabel {{ color: {GREEN_DIM}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11px; }}"
+        )
+        you_lbl.setToolTip(you)
+        row.add(you_lbl, stretch=1)
+
+        arrow = QLabel("→")
+        arrow.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11px; }}"
+        )
+        row.add(arrow)
+
+        resp_lbl = QLabel(resp[:120] + ("…" if len(resp) > 120 else ""))
+        resp_color = RED if status == "error" else INK
+        resp_lbl.setStyleSheet(
+            f"QLabel {{ color: {resp_color}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11px; }}"
+        )
+        resp_lbl.setToolTip(resp)
+        row.add(resp_lbl, stretch=2)
+
+        # Outcome pip
+        pip = StatusPip("on" if status == "success" else "err")
+        row.add(pip)
+
+        return row
+
+    # ── Public API (preserved) ───────────────────────────────────────────────
+
+    def refresh_history(self, entries: list, uptime_str: str = "") -> None:
+        """Called by main.py after each command. ``uptime_str`` accepted for API
+        compatibility — we recompute internally if needed."""
+        # Store newest-first
+        self._all_entries = list(reversed(entries))
+        total = len(entries)
+
+        # Total commands
+        self._stat_total.set_value(f"{total:,}")
+        self._stat_total.set_sub("all-time" if total else "no commands yet")
+
+        # Success rate
+        if total:
+            ok_count = sum(1 for e in entries if (e.get("status") != "error"))
+            rate = ok_count / total
+            self._stat_success.set_value(
+                f"{int(rate * 100)}%",
+                color=GREEN if rate >= 0.9 else AMBER if rate >= 0.7 else RED,
+            )
+            self._stat_success.set_sub(f"{ok_count} of {total} succeeded")
+        else:
+            self._stat_success.set_value("—", color=INK_DIM)
+            self._stat_success.set_sub("no commands yet")
+
+        # Average confidence
+        if total:
+            avg_conf = sum(
+                float(e.get("confidence", e.get("conf", 0.0)) or 0.0) for e in entries
+            ) / total
+            self._stat_confidence.set_value(f"{int(avg_conf * 100)}%")
+            self._stat_confidence.set_sub("routing certainty")
+        else:
+            self._stat_confidence.set_value("0%")
+            self._stat_confidence.set_sub("routing certainty")
+
+        # Top intent
+        if total:
+            counts = Counter(
+                e.get("intent") or "unknown" for e in entries
+            )
+            top_intent, top_count = counts.most_common(1)[0]
+            label = INTENT_LABEL.get(top_intent, top_intent)
+            self._stat_top_intent.set_value(label, color=CYAN)
+            pct = int((top_count / total) * 100)
+            self._stat_top_intent.set_sub(f"{top_count} calls · {pct}% of all")
+        else:
+            self._stat_top_intent.set_value("—", color=INK_DIM)
+            self._stat_top_intent.set_sub("0 calls")
+
+        # Sparkline
+        self._spark.set_entries(entries)
+        self._spark_caption.setText(self._spark.peak_summary())
+
+        # Re-render visible rows under the current filter
+        self._apply_filter()
+
+    # ── Paint (dotted backdrop) ──────────────────────────────────────────────
+
+    def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 20))
+        p.setBrush(QColor(0, 229, 255, 18))
         for x in range(0, self.width() + 28, 28):
             for y in range(0, self.height() + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)
