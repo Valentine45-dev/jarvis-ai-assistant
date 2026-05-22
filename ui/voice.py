@@ -1,52 +1,72 @@
-"""VoiceView — VOICE_CORE: live command console. Phase 1 + 2."""
+"""VoiceView — VOICE_CORE.
+
+Redesigned 2026-05 to match the shared HUD grammar:
+  - Top 5-tile hero strip (State · Capture · Device · Wake word · TTS provider)
+  - Left active panel: big circular mic + waveform + idle hint
+  - Right panel: transcript with intent badges (divide-y rows, last 20 turns)
+  - Bottom action bar: Start / Pause wake / Clear + hotkey hint
+
+Public API preserved so main.py needs no changes:
+  - mic_toggled signal
+  - set_state(state)
+  - update_transcript(cmd, resp, intent, conf)
+  - append_jarvis_continuation(resp, intent, conf)
+  - set_execution(intent, action, conf, success, error)
+  - set_pending(intent, action, conf, message)
+  - clear_pending()
+"""
 
 from __future__ import annotations
 
-import html as _html
 from datetime import datetime
+from typing import Optional
 
 import qtawesome as qta
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QTextCursor
+from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
 
-from ui.theme import BG, CYAN, FM, GREEN, IDLE_CYAN, PRIMARY, RED, TEXT_MUTED, WARNING
-from ui.widgets import GlassPanel, SegmentedBar, StatusPip, TerminalLog, WaveformStrip, _mono, _panel_header
+from config.settings import config
+from ui.components.design import (
+    AMBER,
+    BG_PANEL,
+    CYAN_FAINT,
+    CYAN_SOFT,
+    GREEN,
+    GREEN_DIM,
+    INK,
+    INK_DIM,
+    INK_FAINT,
+    RED,
+    DivideRow,
+    HeroMetric,
+    IntentBadge,
+    PanelCard,
+    StatusPip,
+)
+from ui.theme import BG, CYAN, FM
+from ui.widgets import WaveformStrip
 
 
-_STATE_LABELS = {
-    "idle":       ("AWAITING INPUT",        "rgba(195,245,255,0.35)"),
-    "listening":  ("LISTENING",             CYAN),
-    "thinking":   ("PROCESSING",            CYAN),
-    "processing": ("PROCESSING",            CYAN),
-    "speaking":   ("SPEAKING",              GREEN),
-    "awaiting":   ("AWAITING CONFIRMATION", WARNING),
-}
-
-_MIC_STATES = {
-    "idle":       ("STANDBY",    "standby", IDLE_CYAN),
-    "listening":  ("LISTENING",  "active",  CYAN),
-    "thinking":   ("PROCESSING", "active",  CYAN),
-    "processing": ("PROCESSING", "active",  CYAN),
-    "speaking":   ("SPEAKING",   "active",  GREEN),
-    "awaiting":   ("PAUSED",     "standby", WARNING),
-}
+# ── Big circular mic button (kept from prior implementation; mostly the same) ──
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Page mic button — large circular CTA, pulses when listening
-# ─────────────────────────────────────────────────────────────────────────────
+class _BigMicButton(QPushButton):
+    """Large circular mic that pulses while listening."""
 
-class _PageMicButton(QPushButton):
-    """Large circular mic button intended to live inside the inspector body."""
-
-    DIAMETER = 96
+    DIAMETER = 160
 
     pressed_toggled = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._listening = False
         self._pulse_phase = 0.0
@@ -54,14 +74,13 @@ class _PageMicButton(QPushButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Toggle microphone (Voice command capture)")
         self.setText("")
-        # Strip default QPushButton chrome — we paint everything ourselves
-        self.setStyleSheet("QPushButton{background:transparent;border:none;}")
+        self.setStyleSheet("QPushButton { background: transparent; border: none; }")
 
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(60)
         self._pulse_timer.timeout.connect(self._tick)
 
-    def set_listening(self, listening: bool):
+    def set_listening(self, listening: bool) -> None:
         if listening == self._listening:
             return
         self._listening = listening
@@ -72,590 +91,569 @@ class _PageMicButton(QPushButton):
             self._pulse_timer.stop()
         self.update()
 
-    def _tick(self):
-        # 1..0..1 oscillation via abs(1 - phase), ~1.5s per full cycle at 60ms tick
+    def _tick(self) -> None:
         self._pulse_phase = (self._pulse_phase + 0.08) % 2.0
         self.update()
 
-    def mousePressEvent(self, e):
+    def mousePressEvent(self, e) -> None:
         super().mousePressEvent(e)
         self.pressed_toggled.emit()
 
-    def paintEvent(self, _):
+    def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
         cx = self.width() / 2
         cy = self.height() / 2
-        base_r = self.DIAMETER / 2 - 2
+        base_r = self.DIAMETER / 2 - 4
 
-        # Outer pulse ring (only while listening)
         if self._listening:
-            pulse = abs(1.0 - self._pulse_phase)   # 0..1..0
-            ring_r = base_r + 6 + pulse * 8
-            ring_alpha = int(60 * (1.0 - pulse))
+            pulse = abs(1.0 - self._pulse_phase)
+            ring_r = base_r + 8 + pulse * 10
+            ring_alpha = int(70 * (1.0 - pulse))
             p.setPen(QPen(QColor(0, 229, 255, ring_alpha), 2))
             p.setBrush(Qt.NoBrush)
             p.drawEllipse(int(cx - ring_r), int(cy - ring_r),
                           int(ring_r * 2), int(ring_r * 2))
 
-        # Body
         if self._listening:
-            fill_color = QColor(0, 229, 255, 32)
-            border_color = QColor(0, 229, 255, 200)
+            fill_color = QColor(0, 229, 255, 38)
+            border_color = QColor(0, 229, 255, 210)
             border_w = 2
         else:
-            fill_color = QColor(0, 102, 255, 18)
-            border_color = QColor(0, 229, 255, 90)
+            fill_color = QColor(0, 102, 255, 20)
+            border_color = QColor(0, 229, 255, 100)
             border_w = 1
         p.setPen(QPen(border_color, border_w))
         p.setBrush(fill_color)
         p.drawEllipse(int(cx - base_r), int(cy - base_r),
                       int(base_r * 2), int(base_r * 2))
 
-        # Inner highlight ring for depth
-        inner_r = base_r - 8
-        p.setPen(QPen(QColor(0, 229, 255, 35), 1))
+        inner_r = base_r - 12
+        p.setPen(QPen(QColor(0, 229, 255, 40), 1))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(int(cx - inner_r), int(cy - inner_r),
                       int(inner_r * 2), int(inner_r * 2))
 
-        # Icon
-        icon_color = CYAN if self._listening else PRIMARY
-        icon = qta.icon("fa5s.microphone", color=icon_color)
-        icon_size = 30
+        icon = qta.icon("fa5s.microphone", color=CYAN)
+        icon_size = 48
         p.drawPixmap(int(cx - icon_size / 2), int(cy - icon_size / 2),
                      icon.pixmap(icon_size, icon_size))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Status strip — compact row of system readiness indicators
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Transcript list ──────────────────────────────────────────────────────────
 
-class _StatusStrip(QWidget):
-    def __init__(self, parent=None):
+
+class _TranscriptList(QWidget):
+    """Scrollable divide-y rows: time + (user or intent-badge) + content.
+
+    Each ``update_transcript`` call adds two rows (you, then JARVIS).
+    Older rows beyond ``MAX_ROWS`` get pruned.
+    """
+
+    MAX_ROWS = 40
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(50)
-        self.setStyleSheet(
-            "background:rgba(8,15,17,0.55);"
-            "border:1px solid rgba(0,229,255,0.09);"
-        )
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(16, 0, 16, 0)
-        lay.setSpacing(0)
-
-        self._mic_pip, self._mic_val = self._pill(
-            lay, "MIC STATE", "STANDBY", IDLE_CYAN, pip_status="standby"
-        )
-        self._divider(lay)
-        self._pill(lay, "ROUTER", "CONNECTED", GREEN, pip_status="active")
-        self._divider(lay)
-        self._pill(lay, "PIPELINE", "READY", GREEN, pip_status="active")
-        self._divider(lay)
-        _, self._conf_val = self._pill(
-            lay, "LAST CONF", "—", TEXT_MUTED, no_pip=True
-        )
-        lay.addStretch(1)
-
-    def _pill(self, layout, label: str, value: str, value_color: str,
-              pip_status: str = "standby", no_pip: bool = False):
-        pill = QWidget()
-        pill.setStyleSheet("background:transparent;")
-        pl = QHBoxLayout(pill)
-        pl.setContentsMargins(14, 0, 14, 0)
-        pl.setSpacing(7)
-
-        pip = None
-        if not no_pip:
-            pip = StatusPip(pip_status)
-            pip.setFixedSize(8, 8)
-            pl.addWidget(pip, 0, Qt.AlignVCenter)
-
-        col = QVBoxLayout()
-        col.setSpacing(1)
-        lbl = QLabel(label)
-        lbl.setStyleSheet(
-            "color:rgba(132,147,150,0.45);font-family:'Roboto Mono';"
-            "font-size:8px;letter-spacing:1px;background:transparent;border:none;"
-        )
-        val = QLabel(value)
-        val.setStyleSheet(
-            f"color:{value_color};font-family:'Roboto Mono';"
-            "font-size:10px;font-weight:700;background:transparent;border:none;"
-        )
-        col.addWidget(lbl)
-        col.addWidget(val)
-        pl.addLayout(col)
-
-        layout.addWidget(pill)
-        return pip, val
-
-    @staticmethod
-    def _divider(layout):
-        d = QFrame()
-        d.setFrameShape(QFrame.VLine)
-        d.setStyleSheet("color:rgba(0,229,255,0.10);background:rgba(0,229,255,0.10);")
-        d.setFixedWidth(1)
-        layout.addWidget(d)
-
-    def set_state(self, state: str):
-        label, pip_status, color = _MIC_STATES.get(
-            state, ("STANDBY", "standby", IDLE_CYAN)
-        )
-        self._mic_val.setText(label)
-        self._mic_val.setStyleSheet(
-            f"color:{color};font-family:'Roboto Mono';"
-            "font-size:10px;font-weight:700;background:transparent;border:none;"
-        )
-        self._mic_pip.set_status(pip_status)
-
-    def set_conf(self, conf: float):
-        color = CYAN if conf >= 0.9 else WARNING if conf >= 0.7 else RED
-        self._conf_val.setText(f"{int(conf * 100)}%")
-        self._conf_val.setStyleSheet(
-            f"color:{color};font-family:'Roboto Mono';"
-            "font-size:10px;font-weight:700;background:transparent;border:none;"
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Transcript timeline — styled conversation turns in a read-only QTextEdit
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _TranscriptTimeline(QTextEdit):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setReadOnly(True)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setStyleSheet(
-            "QTextEdit{"
-            "background:transparent;border:none;"
-            f"font-family:'{FM}';font-size:11px;"
-            "color:rgba(195,245,255,0.85);"
-            "padding:8px 12px;"
-            "}"
-        )
-        self._insert("[SYS]", "rgba(132,147,150,0.45)", "Voice pipeline ready.",        "rgba(132,147,150,0.6)")
-        self._insert("[SYS]", "rgba(132,147,150,0.45)", "Microphone standby. Awaiting activation.", "rgba(132,147,150,0.6)")
-
-    def _insert(self, prefix: str, prefix_color: str, text: str, text_color: str,
-                timestamp: str = ""):
-        ts_html = (
-            f'<span style="color:rgba(132,147,150,0.38);font-size:9px;">{_html.escape(timestamp)}&nbsp;&nbsp;</span>'
-            if timestamp else ""
-        )
-        row = (
-            f'{ts_html}'
-            f'<span style="color:{prefix_color};font-weight:700;">{_html.escape(prefix)}</span>'
-            f'&nbsp;<span style="color:{text_color};">{_html.escape(text)}</span>'
-        )
-        self.moveCursor(QTextCursor.End)
-        if not self.document().isEmpty():
-            self.insertHtml("<br>")
-        self.insertHtml(row)
-        QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(
-            self.verticalScrollBar().maximum()
-        ))
-
-    def add_system(self, text: str):
-        self._insert("[SYS]", "rgba(132,147,150,0.45)", text, "rgba(132,147,150,0.65)")
-
-    def add_user(self, timestamp: str, text: str):
-        self._insert("›", CYAN, text, "rgba(195,245,255,0.92)", timestamp)
-
-    def add_jarvis(self, timestamp: str, text: str, intent: str, conf: float):
-        tag = f"  [{intent.replace('_', '·')} {int(conf * 100)}%]"
-        # Use _insert but inline the tag manually
-        ts_html = (
-            f'<span style="color:rgba(132,147,150,0.38);font-size:9px;">{_html.escape(timestamp)}&nbsp;&nbsp;</span>'
-        )
-        row = (
-            f'{ts_html}'
-            f'<span style="color:{GREEN};font-weight:700;">»</span>'
-            f'&nbsp;<span style="color:rgba(131,251,165,0.80);">{_html.escape(text)}</span>'
-            f'<span style="color:rgba(132,147,150,0.45);font-size:9px;"> {_html.escape(tag.strip())}</span>'
-        )
-        self.moveCursor(QTextCursor.End)
-        if not self.document().isEmpty():
-            self.insertHtml("<br>")
-        self.insertHtml(row)
-        QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(
-            self.verticalScrollBar().maximum()
-        ))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Command inspector — right panel: state, waveform, intent/conf breakdown
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _CommandInspector(GlassPanel):
-    # Re-emitted from the embedded page mic button so VoiceView can route it
-    mic_clicked = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.set_fill_color(QColor(10, 17, 19, 220))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        hdr, sep = _panel_header("ACTIVE COMMAND")
-        outer.addWidget(hdr)
-        outer.addWidget(sep)
-
-        body = QWidget()
-        body.setStyleSheet("background:transparent;")
-        bl = QVBoxLayout(body)
-        bl.setContentsMargins(16, 14, 16, 14)
-        bl.setSpacing(6)
-
-        # ── State label ───────────────────────────────────────────────────────
-        self._state_lbl = QLabel("AWAITING INPUT")
-        self._state_lbl.setFont(_mono(14, bold=True))
-        self._state_lbl.setAlignment(Qt.AlignCenter)
-        self._state_lbl.setStyleSheet(
-            "color:rgba(195,245,255,0.35);letter-spacing:3px;"
-            "background:transparent;border:none;"
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 6px; }"
+            "QScrollBar::handle:vertical {"
+            "background: rgba(0,229,255,0.30); border-radius: 3px; min-height: 20px;"
+            "}"
+            "QScrollBar::handle:vertical:hover { background: rgba(0,229,255,0.55); }"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height: 0; }"
         )
-        bl.addWidget(self._state_lbl)
 
-        # ── Waveform ──────────────────────────────────────────────────────────
-        self._waveform = WaveformStrip()
-        self._waveform.setFixedHeight(28)
-        self._waveform.set_active(False)
-        self._waveform.setVisible(False)
-        bl.addWidget(self._waveform)
+        self._container = QWidget()
+        self._container.setStyleSheet("background: transparent;")
+        self._rows_lay = QVBoxLayout(self._container)
+        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setSpacing(0)
+        self._rows_lay.addStretch(1)
+        self._scroll.setWidget(self._container)
+        outer.addWidget(self._scroll, 1)
 
-        bl.addSpacing(6)
+        # Track rows (excluding the trailing stretch) so we can prune.
+        self._row_count = 0
 
-        # ── Page mic button ───────────────────────────────────────────────────
-        # Centered, prominent CTA. Mirrors the dashboard mic but lives on
-        # the Voice page itself so the page is functionally self-sufficient.
-        mic_row = QHBoxLayout()
-        mic_row.setContentsMargins(0, 0, 0, 0)
-        mic_row.addStretch(1)
-        self._mic_button = _PageMicButton()
-        self._mic_button.pressed_toggled.connect(self.mic_clicked.emit)
-        mic_row.addWidget(self._mic_button)
-        mic_row.addStretch(1)
-        bl.addLayout(mic_row)
-
-        self._mic_hint = QLabel("CLICK TO ACTIVATE")
-        self._mic_hint.setAlignment(Qt.AlignCenter)
-        self._mic_hint.setStyleSheet(
-            "color:rgba(132,147,150,0.55);font-family:'Roboto Mono';"
-            "font-size:9px;letter-spacing:2px;background:transparent;border:none;"
+    def add_user(self, time_str: str, text: str) -> None:
+        row = DivideRow(padding_y=7)
+        t = QLabel(time_str[:8])
+        t.setFixedWidth(48)
+        t.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
         )
-        bl.addWidget(self._mic_hint)
-
-        bl.addStretch(1)
-
-        # ── Inspector separator ───────────────────────────────────────────────
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setStyleSheet(
-            "color:rgba(0,229,255,0.10);background:rgba(0,229,255,0.10);"
+        row.add(t)
+        you_lbl = QLabel(f'"{text}"')
+        you_lbl.setStyleSheet(
+            f"QLabel {{ color: {GREEN_DIM}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11.5px; }}"
         )
-        sep2.setFixedHeight(1)
-        bl.addWidget(sep2)
+        you_lbl.setWordWrap(True)
+        you_lbl.setToolTip(text)
+        row.add(you_lbl, stretch=1)
+        self._insert_row(row)
 
-        # ── INTENT ───────────────────────────────────────────────────────────
-        self._intent_val = self._field(bl, "INTENT", "—", CYAN)
-
-        # ── ACTION ────────────────────────────────────────────────────────────
-        self._action_val = self._field(bl, "ACTION", "—", "rgba(132,147,150,0.45)")
-
-        # ── CONFIDENCE ────────────────────────────────────────────────────────
-        conf_head = QLabel("CONFIDENCE")
-        conf_head.setStyleSheet(
-            "color:rgba(132,147,150,0.5);font-family:'Roboto Mono';"
-            "font-size:9px;letter-spacing:1px;background:transparent;border:none;"
+    def add_jarvis(self, time_str: str, text: str, intent: str, conf: float,
+                   *, status: str = "ok") -> None:
+        row = DivideRow(padding_y=7)
+        t = QLabel(time_str[:8])
+        t.setFixedWidth(48)
+        t.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
         )
-        bl.addWidget(conf_head)
+        row.add(t)
+        badge_key = "fail" if status == "fail" else intent
+        row.add(IntentBadge(badge_key))
 
-        conf_row = QHBoxLayout()
-        conf_row.setSpacing(8)
-        self._conf_bar = SegmentedBar(segments=10, value=0.0, color=CYAN)
-        self._conf_bar.setFixedHeight(7)
-        self._conf_pct = QLabel("—")
-        self._conf_pct.setFixedWidth(32)
-        self._conf_pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._conf_pct.setStyleSheet(
-            f"color:{CYAN};font-family:'Roboto Mono';font-size:10px;"
-            "font-weight:700;background:transparent;border:none;"
+        resp = QLabel(text)
+        resp.setWordWrap(True)
+        resp.setToolTip(text)
+        color = RED if status == "fail" else INK
+        resp.setStyleSheet(
+            f"QLabel {{ color: {color}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11.5px; }}"
         )
-        conf_row.addWidget(self._conf_bar, 1)
-        conf_row.addWidget(self._conf_pct)
-        bl.addLayout(conf_row)
+        row.add(resp, stretch=1)
 
-        # ── STATUS ────────────────────────────────────────────────────────────
-        self._status_val = self._field(bl, "STATUS", "—", "rgba(132,147,150,0.45)")
+        if status != "fail" and 0.0 < conf < 1.0:
+            pct = QLabel(f"{int(conf * 100)}%")
+            pct.setStyleSheet(
+                f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+                f"font-family: '{FM}'; font-size: 10px; }}"
+            )
+            row.add(pct)
+        self._insert_row(row)
 
-        outer.addWidget(body, 1)
-
-    @staticmethod
-    def _field(layout, label_text: str, value_text: str, value_color: str) -> QLabel:
-        lbl = QLabel(label_text)
+    def add_system(self, text: str) -> None:
+        row = DivideRow(padding_y=6)
+        lbl = QLabel(text)
         lbl.setStyleSheet(
-            "color:rgba(132,147,150,0.5);font-family:'Roboto Mono';"
-            "font-size:9px;letter-spacing:1px;background:transparent;border:none;"
+            f"QLabel {{ color: {AMBER}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11px; letter-spacing: 1px; }}"
         )
-        layout.addWidget(lbl)
-        val = QLabel(value_text)
-        val.setFont(_mono(11))
-        val.setStyleSheet(
-            f"color:{value_color};background:transparent;border:none;"
-        )
-        layout.addWidget(val)
-        return val
+        lbl.setWordWrap(True)
+        row.add(lbl, stretch=1)
+        self._insert_row(row)
 
-    def set_state(self, state: str):
-        text, color = _STATE_LABELS.get(state, ("AWAITING INPUT", "rgba(195,245,255,0.35)"))
-        self._state_lbl.setText(text)
-        self._state_lbl.setStyleSheet(
-            f"color:{color};letter-spacing:3px;background:transparent;border:none;"
-        )
-        audio_active = state in ("listening", "speaking")
-        self._waveform.setVisible(audio_active)
-        self._waveform.set_active(audio_active)
+    def _insert_row(self, row: QWidget) -> None:
+        # Insert before the trailing stretch
+        self._rows_lay.insertWidget(self._rows_lay.count() - 1, row)
+        self._row_count += 1
+        # Prune oldest rows above the cap
+        while self._row_count > self.MAX_ROWS:
+            item = self._rows_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            self._row_count -= 1
+        # Scroll to bottom on next event-loop tick so the layout settles first
+        QTimer.singleShot(0, self._scroll_to_bottom)
 
-        # Mic button reflects listening state for the pulse animation
-        self._mic_button.set_listening(state == "listening")
-        self._mic_hint.setText({
-            "idle":       "CLICK TO ACTIVATE",
-            "listening":  "LISTENING — CLICK TO STOP",
-            "thinking":   "PROCESSING…",
-            "processing": "EXECUTING…",
-            "speaking":   "RESPONDING…",
-            "awaiting":   "AWAITING CONFIRMATION",
-        }.get(state, "CLICK TO ACTIVATE"))
-
-    def set_last_result(self, intent: str, conf: float):
-        self._intent_val.setText(intent.replace("_", "·"))
-        self._intent_val.setStyleSheet(
-            f"color:{CYAN};background:transparent;border:none;"
-        )
-        color = CYAN if conf >= 0.9 else WARNING if conf >= 0.7 else RED
-        self._conf_bar.color = QColor(color)
-        self._conf_bar.set_value(conf)
-        self._conf_pct.setText(f"{int(conf * 100)}%")
-        self._conf_pct.setStyleSheet(
-            f"color:{color};font-family:'Roboto Mono';font-size:10px;"
-            "font-weight:700;background:transparent;border:none;"
-        )
-
-    def set_action(self, action: str | None):
-        """Phase 2: show the resolved action name from the executor."""
-        text = (action or "—").replace("_", "·")
-        color = "rgba(195,245,255,0.85)" if action else "rgba(132,147,150,0.45)"
-        self._action_val.setText(text)
-        self._action_val.setStyleSheet(
-            f"color:{color};background:transparent;border:none;"
-        )
-
-    def set_status(self, text: str, kind: str = "ok"):
-        """Phase 2: show executor status — ok / fail / pending."""
-        color = {
-            "ok":      GREEN,
-            "fail":    RED,
-            "pending": WARNING,
-            "idle":    "rgba(132,147,150,0.45)",
-        }.get(kind, "rgba(132,147,150,0.65)")
-        self._status_val.setText(text or "—")
-        self._status_val.setStyleSheet(
-            f"color:{color};background:transparent;border:none;"
-        )
-
-    def reset(self):
-        """Wipe inspector fields back to idle defaults."""
-        self._intent_val.setText("—")
-        self._intent_val.setStyleSheet(
-            "color:rgba(132,147,150,0.45);background:transparent;border:none;"
-        )
-        self.set_action(None)
-        self.set_status("—", kind="idle")
-        self._conf_bar.set_value(0.0)
-        self._conf_pct.setText("—")
-        self._conf_pct.setStyleSheet(
-            f"color:{CYAN};font-family:'Roboto Mono';font-size:10px;"
-            "font-weight:700;background:transparent;border:none;"
-        )
+    def _scroll_to_bottom(self) -> None:
+        sb = self._scroll.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VoiceView — top-level page widget
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Action button helper ─────────────────────────────────────────────────────
+
+
+def _action_button(text: str, *, primary: bool = False, danger: bool = False) -> QPushButton:
+    btn = QPushButton(text)
+    btn.setCursor(Qt.PointingHandCursor)
+    if primary:
+        bg = CYAN
+        color = "#001a1f"
+        border = CYAN
+        hover = "background: #5ff2ff;"
+    elif danger:
+        bg = "transparent"
+        color = RED
+        border = RED
+        hover = "background: rgba(255,107,107,0.10);"
+    else:
+        bg = "transparent"
+        color = CYAN
+        border = CYAN_SOFT
+        hover = "background: rgba(0,229,255,0.10);"
+    btn.setStyleSheet(
+        "QPushButton {"
+        f"background: {bg};"
+        f"color: {color};"
+        f"border: 1px solid {border};"
+        f"font-family: '{FM}';"
+        "font-size: 10px;"
+        "font-weight: 700;"
+        "padding: 6px 14px;"
+        "letter-spacing: 2px;"
+        "}"
+        "QPushButton:hover {" + hover + "}"
+    )
+    return btn
+
+
+# ── Hotkey hint label ────────────────────────────────────────────────────────
+
+
+def _hotkey_hint(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+        f"font-family: '{FM}'; font-size: 10px; letter-spacing: 1.4px; }}"
+    )
+    return lbl
+
+
+# ── Main view ───────────────────────────────────────────────────────────────
+
 
 class VoiceView(QWidget):
+    """VOICE_CORE. See module docstring."""
+
     mic_toggled = pyqtSignal()
 
-    def __init__(self, parent=None):
+    _STATE_LABEL: dict[str, tuple[str, str]] = {
+        # state -> (display, color)
+        "idle":      ("IDLE",      INK_DIM),
+        "listening": ("LISTENING", GREEN),
+        "thinking":  ("THINKING",  CYAN),
+        "speaking":  ("SPEAKING",  CYAN),
+        "awaiting":  ("AWAITING",  AMBER),
+    }
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._state = "idle"
-        self._bg_px: "QPixmap | None" = None
+        self._bg_px: Optional[QPixmap] = None
         self._bg_sz = (-1, -1)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(10)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(14)
 
-        # ── Page header ───────────────────────────────────────────────────────
+        # ── Header ──────────────────────────────────────────────────────────
+        head = QHBoxLayout()
+        head.setSpacing(12)
         title = QLabel("VOICE_CORE")
         title.setStyleSheet(
-            "QLabel{"
-            f"color:{PRIMARY};"
-            "font-family:'Space Grotesk';font-size:40px;font-weight:700;"
-            "background:transparent;border:none;"
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 24px;"
+            "font-weight: 700;"
+            "letter-spacing: 4px;"
             "}"
         )
-        subtitle = QLabel("COMMAND INTERFACE  //  AUDIO PIPELINE")
+        head.addWidget(title)
+
+        subtitle = QLabel("COMMAND INTERFACE · AUDIO PIPELINE")
         subtitle.setStyleSheet(
-            "QLabel{color:rgba(132,147,150,0.9);font-family:'Roboto Mono';"
-            "font-size:11px;letter-spacing:1px;background:transparent;border:none;}"
+            "QLabel {"
+            f"color: {INK_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "letter-spacing: 2px;"
+            "}"
         )
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        head.addWidget(subtitle)
+        head.addStretch(1)
+        root.addLayout(head)
 
-        # ── Status strip ──────────────────────────────────────────────────────
-        self._status_strip = _StatusStrip()
-        root.addWidget(self._status_strip)
+        # ── Hero strip ──────────────────────────────────────────────────────
+        self._hero_wrap = self._build_hero_strip()
+        root.addWidget(self._hero_wrap)
 
-        # ── Main body ─────────────────────────────────────────────────────────
-        body = QHBoxLayout()
-        body.setSpacing(12)
+        # ── Main 2-column body ──────────────────────────────────────────────
+        cols = QHBoxLayout()
+        cols.setSpacing(14)
+        cols.addWidget(self._build_left_panel(), 1)
+        cols.addWidget(self._build_right_panel(), 1)
+        root.addLayout(cols, 1)
 
-        # Left: transcript timeline
-        transcript_panel = GlassPanel()
-        transcript_panel.set_fill_color(QColor(10, 17, 19, 220))
-        tp_lay = QVBoxLayout(transcript_panel)
-        tp_lay.setContentsMargins(0, 0, 0, 0)
-        tp_lay.setSpacing(0)
+        # ── Bottom action bar ───────────────────────────────────────────────
+        actions = self._build_action_bar()
+        root.addWidget(actions)
 
-        thdr, tsep = _panel_header("VOICE TRANSCRIPT")
-        tp_lay.addWidget(thdr)
-        tp_lay.addWidget(tsep)
+    # ── Builders ─────────────────────────────────────────────────────────────
 
-        self._timeline = _TranscriptTimeline()
-        tp_lay.addWidget(self._timeline, 1)
-        body.addWidget(transcript_panel, 3)
-
-        # Right: command inspector
-        self._inspector = _CommandInspector()
-        # The inspector hosts the page mic button. Re-broadcast its press
-        # through the existing mic_toggled signal so main.py keeps a single
-        # connection point regardless of where the user actually clicked.
-        self._inspector.mic_clicked.connect(self.mic_toggled.emit)
-        body.addWidget(self._inspector, 2)
-
-        # Body : log = 3 : 1 vertical stretch. Body still dominates, but the
-        # execution log gets ~25% of the free vertical space (~12-15 lines on
-        # a 900px window) instead of being capped at the old 110px (~5 lines).
-        root.addLayout(body, 3)
-
-        # ── Execution log ─────────────────────────────────────────────────────
-        log_panel = GlassPanel()
-        log_panel.set_fill_color(QColor(10, 17, 19, 220))
-        # Floor of 170px so the log stays usable on small windows; no fixed
-        # ceiling so it can grow with the window via the stretch factor below.
-        log_panel.setMinimumHeight(170)
-        lp_lay = QVBoxLayout(log_panel)
-        lp_lay.setContentsMargins(0, 0, 0, 0)
-        lp_lay.setSpacing(0)
-
-        lhdr, lsep = _panel_header("EXECUTION LOG")
-        lp_lay.addWidget(lhdr)
-        lp_lay.addWidget(lsep)
-
-        self._exec_log = TerminalLog()
-        self._exec_log.set_lines([
-            "[SYSTEM] Voice core initialized.",
-            "[SYSTEM] Intent router connected. Ready.",
-        ])
-        lp_lay.addWidget(self._exec_log, 1)
-
-        root.addWidget(log_panel, 1)
-
-    # ── Public API — signatures unchanged from Phase 0 ────────────────────────
-
-    def set_state(self, state: str):
-        self._state = state
-        self._status_strip.set_state(state)
-        self._inspector.set_state(state)
-        now = datetime.now().strftime("%H:%M:%S")
-        if state == "listening":
-            self._exec_log.append_line(f"[{now}] Mic activated. Listening...")
-        elif state == "thinking":
-            self._exec_log.append_line(f"[{now}] Parsing command sequence...")
-        elif state == "speaking":
-            self._exec_log.append_line(f"[{now}] Voice output engaged.")
-
-    def update_transcript(self, cmd: str, resp: str, intent: str, conf: float):
-        now = datetime.now().strftime("%H:%M:%S")
-        self._timeline.add_user(now, cmd)
-        self._timeline.add_jarvis(now, resp, intent, conf)
-        self._exec_log.append_line(
-            f"[{now}] Intent: {intent}  Conf: {int(conf * 100)}%"
+    def _build_hero_strip(self) -> QFrame:
+        wrap = QFrame()
+        wrap.setStyleSheet(
+            "QFrame {"
+            f"background: {BG_PANEL};"
+            f"border: 1px solid {CYAN_FAINT};"
+            "}"
         )
-        self._inspector.set_last_result(intent, conf)
-        self._status_strip.set_conf(conf)
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-    def append_jarvis_continuation(self, resp: str, intent: str, conf: float):
-        """Second JARVIS line in the same exchange (post-action follow-up)."""
-        now = datetime.now().strftime("%H:%M:%S")
-        self._timeline.add_jarvis(now, resp, intent, conf)
-        self._exec_log.append_line(f"[{now}] Follow-up: {intent}  {int(conf * 100)}%")
+        def _cell(metric: HeroMetric, *, last: bool = False) -> QWidget:
+            cell = QFrame()
+            cell.setStyleSheet(
+                "QFrame {"
+                "background: transparent;"
+                + ("border: none;" if last else f"border-right: 1px solid {CYAN_FAINT};")
+                + "}"
+            )
+            cl = QVBoxLayout(cell)
+            cl.setContentsMargins(16, 12, 16, 12)
+            cl.addWidget(metric)
+            return cell
 
-    # ── Phase 2: live executor wiring ─────────────────────────────────────────
+        # 5 tiles
+        self._hm_state = HeroMetric("State", "IDLE", sub="mic closed",
+                                    value_color=INK_DIM, value_size=20)
+        self._hm_capture = HeroMetric("Capture lvl", "—", unit="dB",
+                                      sub="ambient only", value_size=22)
+        device_name = "Default · 16kHz"
+        if config.mic_device != -1:
+            try:
+                import sounddevice as _sd  # type: ignore
+                d = _sd.query_devices(config.mic_device)
+                device_name = f"{d['name'][:24]}"
+            except Exception:
+                pass
+        self._hm_device = HeroMetric("Device", device_name,
+                                     sub=("noise-gate ON" if config.noise_gate else "noise-gate OFF"),
+                                     value_size=12)
+        self._hm_wake = HeroMetric("Wake word", f'"{config.wake_word}"',
+                                   sub="listening" if config.wake_word_enabled else "disabled",
+                                   value_color=GREEN if config.wake_word_enabled else INK_DIM,
+                                   value_size=16)
+        self._hm_tts = HeroMetric("TTS provider", "—", sub="resolving…",
+                                  value_size=12)
+        self._refresh_tts_tile()
 
-    def set_execution(self, intent: str, action: str, conf: float,
-                      success: bool, error: str | None = None):
-        """Reflect the executor result on the inspector and exec log."""
-        self._inspector.set_last_result(intent, conf)
-        self._inspector.set_action(action)
-        if success:
-            self._inspector.set_status("EXECUTED", kind="ok")
+        lay.addWidget(_cell(self._hm_state), 1)
+        lay.addWidget(_cell(self._hm_capture), 1)
+        lay.addWidget(_cell(self._hm_device), 1)
+        lay.addWidget(_cell(self._hm_wake), 1)
+        lay.addWidget(_cell(self._hm_tts, last=True), 1)
+        return wrap
+
+    def _refresh_tts_tile(self) -> None:
+        """Best-effort provider resolution at construction time."""
+        if config.elevenlabs_api_key:
+            self._hm_tts.set_value("ElevenLabs", color=CYAN)
+            self._hm_tts.set_sub("primary")
+        elif getattr(config, "gemini_api_key", ""):
+            self._hm_tts.set_value("Gemini · Kore", color=CYAN)
+            self._hm_tts.set_sub("free tier")
         else:
+            self._hm_tts.set_value("pyttsx3", color=INK_DIM)
+            self._hm_tts.set_sub("local fallback")
+
+    def _build_left_panel(self) -> PanelCard:
+        panel = PanelCard(active=True)
+        body = panel.body()
+
+        body.addStretch(1)
+
+        # Centered mic
+        mic_row = QHBoxLayout()
+        mic_row.addStretch(1)
+        self._mic = _BigMicButton()
+        self._mic.pressed_toggled.connect(self.mic_toggled.emit)
+        mic_row.addWidget(self._mic)
+        mic_row.addStretch(1)
+        body.addLayout(mic_row)
+
+        hint = QLabel(f'Tap or say "{config.wake_word}"')
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_FAINT};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "letter-spacing: 3px;"
+            "text-transform: uppercase;"
+            "}"
+        )
+        body.addWidget(hint)
+
+        body.addSpacing(16)
+
+        # Waveform
+        wf_title = QLabel("WAVEFORM · LIVE")
+        wf_title.setStyleSheet(
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "font-weight: 700;"
+            "letter-spacing: 2.2px;"
+            "}"
+        )
+        body.addWidget(wf_title)
+        self._waveform = WaveformStrip()
+        self._waveform.setMinimumHeight(60)
+        self._waveform.set_active(False)
+        body.addWidget(self._waveform)
+
+        body.addStretch(2)
+        return panel
+
+    def _build_right_panel(self) -> PanelCard:
+        panel = PanelCard()
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        title = QLabel("TRANSCRIPT · THIS SESSION")
+        title.setStyleSheet(
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "font-weight: 700;"
+            "letter-spacing: 2.2px;"
+            "}"
+        )
+        head.addWidget(title)
+        head.addStretch(1)
+        self._exchange_count = QLabel("0 exchanges")
+        self._exchange_count.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 9.5px; letter-spacing: 1.2px; }}"
+        )
+        head.addWidget(self._exchange_count)
+        panel.body().addLayout(head)
+
+        self._transcript = _TranscriptList()
+        panel.add(self._transcript, stretch=1)
+        return panel
+
+    def _build_action_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setStyleSheet(
+            "QFrame {"
+            f"background: {BG_PANEL};"
+            f"border: 1px solid {CYAN_FAINT};"
+            "}"
+        )
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(8)
+
+        self._btn_start = _action_button("⏵ START LISTENING", primary=True)
+        self._btn_start.clicked.connect(self.mic_toggled.emit)
+        lay.addWidget(self._btn_start)
+
+        self._btn_pause = _action_button("⏸ PAUSE WAKE")
+        # Pause/resume is handled externally; we just toggle visible label.
+        # Wire to wake_word_changed via mic_toggled? Keep stub for now.
+        lay.addWidget(self._btn_pause)
+
+        self._btn_clear = _action_button("⌫ CLEAR TRANSCRIPT")
+        self._btn_clear.clicked.connect(self._on_clear_transcript)
+        lay.addWidget(self._btn_clear)
+
+        lay.addStretch(1)
+        lay.addWidget(_hotkey_hint("HOTKEY  Ctrl+Shift+M  toggles mic"))
+        return bar
+
+    # ── Event handlers ───────────────────────────────────────────────────────
+
+    def _on_clear_transcript(self) -> None:
+        # Drop all child rows from the transcript list
+        lay = self._transcript._rows_lay  # noqa: SLF001 — local accessor
+        while lay.count() > 1:  # leave the trailing stretch
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._transcript._row_count = 0
+        self._exchange_count.setText("0 exchanges")
+
+    # ── Public API (preserved) ───────────────────────────────────────────────
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        # Update hero tile
+        display, color = self._STATE_LABEL.get(state, (state.upper(), INK_DIM))
+        self._hm_state.set_value(display, color=color)
+        if state == "listening":
+            self._hm_state.set_sub("mic open")
+            self._mic.set_listening(True)
+            self._waveform.set_active(True)
+        elif state == "thinking":
+            self._hm_state.set_sub("routing through Claude")
+            self._mic.set_listening(False)
+            self._waveform.set_active(False)
+        elif state == "speaking":
+            self._hm_state.set_sub("TTS playback")
+            self._mic.set_listening(False)
+            self._waveform.set_active(False)
+        elif state == "awaiting":
+            self._hm_state.set_sub("user confirmation needed")
+            self._mic.set_listening(False)
+            self._waveform.set_active(False)
+        else:  # idle
+            self._hm_state.set_sub("mic closed")
+            self._mic.set_listening(False)
+            self._waveform.set_active(False)
+
+    def update_transcript(self, cmd: str, resp: str, intent: str, conf: float) -> None:
+        now = datetime.now().strftime("%H:%M:%S")
+        self._transcript.add_user(now, cmd)
+        self._transcript.add_jarvis(now, resp, intent, conf)
+        # Each exchange = 1 user + 1 jarvis row → 2 rows; "exchanges" counts pairs.
+        pairs = self._transcript._row_count // 2  # noqa: SLF001
+        self._exchange_count.setText(f"{pairs} exchange{'s' if pairs != 1 else ''}")
+
+    def append_jarvis_continuation(self, resp: str, intent: str, conf: float) -> None:
+        now = datetime.now().strftime("%H:%M:%S")
+        self._transcript.add_jarvis(now, resp, intent, conf)
+
+    def set_execution(
+        self,
+        intent: str,
+        action: str,
+        conf: float,
+        success: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        if not success:
             short = (error or "Failed").strip()
-            if len(short) > 60:
-                short = short[:57] + "…"
-            self._inspector.set_status(f"FAILED — {short}", kind="fail")
-        now = datetime.now().strftime("%H:%M:%S")
-        outcome = "OK" if success else f"FAIL ({error or 'unknown'})"
-        self._exec_log.append_line(
-            f"[{now}] Action: {action or '—'}  →  {outcome}"
+            if len(short) > 80:
+                short = short[:77] + "…"
+            now = datetime.now().strftime("%H:%M:%S")
+            self._transcript.add_jarvis(now, short, intent, conf, status="fail")
+
+    def set_pending(self, intent: str, action: str, conf: float, message: str) -> None:
+        self.set_state("awaiting")
+        self._transcript.add_system(
+            f"Confirmation required · {intent}/{action} · {message[:80]}"
         )
 
-    # ── Confirmation pending state ────────────────────────────────────────────
+    def clear_pending(self) -> None:
+        self.set_state(self._state if self._state != "awaiting" else "idle")
+        self._transcript.add_system("Confirmation cancelled.")
 
-    def set_pending(self, intent: str, action: str, conf: float, message: str):
-        """Brain returned requires_confirmation — show holding state.
-
-        Note: main.py calls _set_state("idle") before set_pending, which puts
-        both the inspector and status strip into the idle look. We override
-        both here so the user sees a unified amber "awaiting" visual.
-        """
-        self._inspector.set_state("awaiting")
-        self._status_strip.set_state("awaiting")
-        self._inspector.set_last_result(intent, conf)
-        self._inspector.set_action(action)
-        self._inspector.set_status("AWAITING USER CONFIRMATION", kind="pending")
-        now = datetime.now().strftime("%H:%M:%S")
-        self._timeline.add_system(
-            f"Confirmation required for {intent}·{action} — {message}"
-        )
-        self._exec_log.append_line(
-            f"[{now}] Hold: {intent}·{action} pending confirmation."
-        )
-
-    def clear_pending(self):
-        """User cancelled or confirmation completed."""
-        self._inspector.set_state(self._state)
-        self._inspector.set_status("CANCELLED", kind="fail")
-        now = datetime.now().strftime("%H:%M:%S")
-        self._exec_log.append_line(f"[{now}] Pending command cancelled.")
+    # ── Paint (dotted backdrop) ──────────────────────────────────────────────
 
     def _rebuild_bg(self) -> None:
         w, h = self.width(), self.height()
@@ -666,7 +664,7 @@ class VoiceView(QWidget):
         p = QPainter(px)
         p.fillRect(0, 0, w, h, QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 20))
+        p.setBrush(QColor(0, 229, 255, 18))
         for x in range(0, w + 28, 28):
             for y in range(0, h + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)
@@ -674,11 +672,11 @@ class VoiceView(QWidget):
         self._bg_px = px
         self._bg_sz = (w, h)
 
-    def resizeEvent(self, e):
+    def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         self._bg_px = None
 
-    def paintEvent(self, _):
+    def paintEvent(self, _event) -> None:
         w, h = self.width(), self.height()
         if self._bg_px is None or self._bg_sz != (w, h):
             self._rebuild_bg()
