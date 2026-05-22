@@ -604,6 +604,10 @@ class _InputBlock(QWidget):
         # Reuse project CommandBar — pass valid @tag keys for live highlighting.
         self.cmd_bar = _MainCommandBar(frozenset(TAG_INTENT_MAP.keys()))
         self.cmd_bar._input.setPlaceholderText("AWAITING DIRECTIVE...")
+        # Style both the editor body AND its vertical scrollbar — the scrollbar
+        # becomes visible when content overflows the locked one-line height
+        # (_TagLineEdit._H_MAX == _H_MIN), so we don't want a stock Windows
+        # control showing up next to the cyan/teal HUD aesthetic.
         self.cmd_bar._input.setStyleSheet(
             "QTextEdit{"
             "background:transparent;"
@@ -613,6 +617,19 @@ class _InputBlock(QWidget):
             "font-size:13px;"
             "letter-spacing:2px;"
             "}"
+            "QScrollBar:vertical{"
+            "background:transparent;"
+            "width:6px;"
+            "margin:0;"
+            "}"
+            "QScrollBar::handle:vertical{"
+            "background:rgba(0,229,255,0.45);"
+            "min-height:14px;"
+            "border-radius:3px;"
+            "}"
+            "QScrollBar::handle:vertical:hover{background:rgba(0,229,255,0.75);}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"
         )
         self.cmd_bar._send.setText("↵")
         self.cmd_bar._send.setFixedSize(36, 36)
