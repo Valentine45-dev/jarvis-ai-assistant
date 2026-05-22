@@ -559,7 +559,13 @@ class _InputBlock(QWidget):
 
     command_sent = pyqtSignal(str)
 
-    INPUT_H = 50
+    # Card height: 70 gives the locked-48 editor + prompt/mic/send chrome
+    # comfortable vertical breathing room (was 50, felt squashed at the
+    # one-line editor height). The strip's layout slot is intentionally
+    # NOT computed from this — see _CommandStrip._SLOT_HEIGHT — so growing
+    # this constant makes the input card visually taller without shifting
+    # the reactor or right metrics.
+    INPUT_H = 70
     GLOW_H = 26
 
     def __init__(self, parent=None):
@@ -714,10 +720,13 @@ class _CommandStrip(QWidget):
 
     command_sent = pyqtSignal(str)
 
-    # Reserved height in the QVBoxLayout. Matches the collapsed _InputBlock
-    # height (INPUT_H + GLOW_H = 50 + 26 = 76). The strip never reports a
-    # different size to the layout, so cols never reflows.
-    _SLOT_HEIGHT = _InputBlock.INPUT_H + _InputBlock.GLOW_H
+    # Reserved height in the QVBoxLayout. Intentionally HARDCODED rather
+    # than computed from _InputBlock.INPUT_H so the input card can be made
+    # visually taller (INPUT_H bumps) without shifting the central reactor
+    # or right metrics — the extra block height overflows upward as the
+    # overlay grows past the slot's top edge. 76 = the historical slot size
+    # before the visual height bump (INPUT_H 50 + GLOW_H 26).
+    _SLOT_HEIGHT = 76
 
     def __init__(self, parent=None):
         super().__init__(parent)

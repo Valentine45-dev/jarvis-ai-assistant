@@ -722,14 +722,15 @@ class _TagLineEdit(QTextEdit):
     returnPressed = pyqtSignal()
     contentHeightChanged = pyqtSignal(int)  # desired editor height in px (for parent layout)
 
-    # Locked single-line height — overflow scrolls vertically inside the
+    # Locked editor height — overflow scrolls vertically inside the
     # fixed viewport instead of growing the editor. UX call (2026-05): the
-    # input bar should NEVER push or overlap the central reactor / right
+    # input bar must NEVER push or overlap the central reactor / right
     # metrics; if the user types or pastes more than fits, they scroll.
     # Set _H_MAX == _H_MIN so _reflow_height's scrollbar branch kicks in
-    # the moment content exceeds one line.
-    _H_MIN = 28
-    _H_MAX = 28
+    # the moment content exceeds the viewport. 48px ≈ comfortable two-line
+    # field at 13px mono with a bit of vertical padding.
+    _H_MIN = 48
+    _H_MAX = 48
 
     def __init__(self, valid_tags: frozenset = frozenset(), parent=None):
         super().__init__(parent)
