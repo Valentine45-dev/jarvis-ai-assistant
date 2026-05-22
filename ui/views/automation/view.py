@@ -197,8 +197,14 @@ class AutomationView(QWidget):
         self._lib_panel.add(self._lib_scroll, stretch=1)
         body.addWidget(self._lib_panel, 1)
 
-        # RIGHT: step breakdown (existing component, looks fine)
+        # RIGHT: step breakdown — action buttons live here now (run / pause /
+        # edit / delete + add step). The library rows on the left are
+        # click-to-select only; mutation goes through this pane.
         self._breakdown = StepBreakdown()
+        self._breakdown.run_requested.connect(self.run_command.emit)
+        self._breakdown.toggle_requested.connect(self._toggle_workflow)
+        self._breakdown.edit_requested.connect(self._edit_selected_workflow)
+        self._breakdown.delete_requested.connect(self._delete_workflow)
         body.addWidget(self._breakdown, 1)
 
         root.addLayout(body, 1)
