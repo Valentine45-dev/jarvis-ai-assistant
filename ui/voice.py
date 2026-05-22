@@ -294,10 +294,10 @@ def _action_button(text: str, *, primary: bool = False, danger: bool = False) ->
         f"color: {color};"
         f"border: 1px solid {border};"
         f"font-family: '{FM}';"
-        "font-size: 10px;"
+        "font-size: 11px;"
         "font-weight: 700;"
-        "padding: 6px 14px;"
-        "letter-spacing: 2px;"
+        "padding: 11px 22px;"   # roomier — was 6x14, now ~2x vertical breathing room
+        "letter-spacing: 2.5px;"
         "}"
         "QPushButton:hover {" + hover + "}"
     )
@@ -534,17 +534,16 @@ class VoiceView(QWidget):
         panel.add(self._transcript, stretch=1)
         return panel
 
-    def _build_action_bar(self) -> QFrame:
-        bar = QFrame()
-        bar.setStyleSheet(
-            "QFrame {"
-            f"background: {BG_PANEL};"
-            f"border: 1px solid {CYAN_FAINT};"
-            "}"
-        )
+    def _build_action_bar(self) -> QWidget:
+        """Bottom action bar. No outer container — buttons float on the
+        dotted page backdrop with a `QWidget` (not `QFrame`) wrapper so
+        no border/background cascades to inner labels (the hotkey hint).
+        """
+        bar = QWidget()
+        bar.setStyleSheet("QWidget { background: transparent; }")
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(14, 8, 14, 8)
-        lay.setSpacing(8)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(10)
 
         self._btn_start = _action_button("⏵ START LISTENING", primary=True)
         self._btn_start.clicked.connect(self.mic_toggled.emit)
