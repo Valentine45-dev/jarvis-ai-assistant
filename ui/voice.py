@@ -186,19 +186,27 @@ class _TranscriptList(QWidget):
         # Track rows (excluding the trailing stretch) so we can prune.
         self._row_count = 0
 
+    # Sizing constants applied across all transcript rows. Qt mono fonts
+    # render visually smaller than browser mono at the same px, so we sit
+    # above the HTML spec (11.5px / 8px) to match the visual weight.
+    _ROW_PAD_Y      = 11      # ~22px total vertical padding per row
+    _TEXT_SIZE      = 13      # 'you' / 'jarvis' line text
+    _TIME_SIZE      = 11      # leading HH:MM:SS column
+    _META_SIZE      = 11      # confidence %, etc.
+
     def add_user(self, time_str: str, text: str) -> None:
-        row = DivideRow(padding_y=7)
+        row = DivideRow(padding_y=self._ROW_PAD_Y)
         t = QLabel(time_str[:8])
-        t.setFixedWidth(48)
+        t.setFixedWidth(54)
         t.setStyleSheet(
             f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 10px; }}"
+            f"font-family: '{FM}'; font-size: {self._TIME_SIZE}px; }}"
         )
         row.add(t)
         you_lbl = QLabel(f'"{text}"')
         you_lbl.setStyleSheet(
             f"QLabel {{ color: {GREEN_DIM}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 11.5px; }}"
+            f"font-family: '{FM}'; font-size: {self._TEXT_SIZE}px; }}"
         )
         you_lbl.setWordWrap(True)
         you_lbl.setToolTip(text)
@@ -207,12 +215,12 @@ class _TranscriptList(QWidget):
 
     def add_jarvis(self, time_str: str, text: str, intent: str, conf: float,
                    *, status: str = "ok") -> None:
-        row = DivideRow(padding_y=7)
+        row = DivideRow(padding_y=self._ROW_PAD_Y)
         t = QLabel(time_str[:8])
-        t.setFixedWidth(48)
+        t.setFixedWidth(54)
         t.setStyleSheet(
             f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 10px; }}"
+            f"font-family: '{FM}'; font-size: {self._TIME_SIZE}px; }}"
         )
         row.add(t)
         badge_key = "fail" if status == "fail" else intent
@@ -224,7 +232,7 @@ class _TranscriptList(QWidget):
         color = RED if status == "fail" else INK
         resp.setStyleSheet(
             f"QLabel {{ color: {color}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 11.5px; }}"
+            f"font-family: '{FM}'; font-size: {self._TEXT_SIZE}px; }}"
         )
         row.add(resp, stretch=1)
 
@@ -232,17 +240,17 @@ class _TranscriptList(QWidget):
             pct = QLabel(f"{int(conf * 100)}%")
             pct.setStyleSheet(
                 f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
-                f"font-family: '{FM}'; font-size: 10px; }}"
+                f"font-family: '{FM}'; font-size: {self._META_SIZE}px; }}"
             )
             row.add(pct)
         self._insert_row(row)
 
     def add_system(self, text: str) -> None:
-        row = DivideRow(padding_y=6)
+        row = DivideRow(padding_y=self._ROW_PAD_Y)
         lbl = QLabel(text)
         lbl.setStyleSheet(
             f"QLabel {{ color: {AMBER}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 11px; letter-spacing: 1px; }}"
+            f"font-family: '{FM}'; font-size: {self._TEXT_SIZE}px; letter-spacing: 1px; }}"
         )
         lbl.setWordWrap(True)
         row.add(lbl, stretch=1)

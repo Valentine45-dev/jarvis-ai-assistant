@@ -460,6 +460,13 @@ class HistoryView(QWidget):
             self._rows_lay.addWidget(self._build_row(entry, last=(i == last_idx)))
         self._rows_lay.addStretch(1)
 
+    # Same sizing constants as the Voice transcript — keeps both list views
+    # visually coherent. Qt mono renders smaller per-px than browser mono,
+    # so we sit above the HTML spec.
+    _ROW_PAD_Y  = 11
+    _TEXT_SIZE  = 13
+    _TIME_SIZE  = 11
+
     def _build_row(self, entry: dict, *, last: bool) -> DivideRow:
         you  = (entry.get("you") or "").strip()
         resp = (entry.get("jarvis") or "").strip()
@@ -467,13 +474,13 @@ class HistoryView(QWidget):
         status = entry.get("status") or "success"
         t = str(entry.get("jTime") or entry.get("time") or "--:--")[:8]
 
-        row = DivideRow(last=last, padding_y=8)
+        row = DivideRow(last=last, padding_y=self._ROW_PAD_Y)
 
         time_lbl = QLabel(t)
-        time_lbl.setFixedWidth(48)
+        time_lbl.setFixedWidth(54)
         time_lbl.setStyleSheet(
             f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 10px; }}"
+            f"font-family: '{FM}'; font-size: {self._TIME_SIZE}px; }}"
         )
         row.add(time_lbl)
 
@@ -485,7 +492,7 @@ class HistoryView(QWidget):
         you_lbl.setMinimumWidth(160)
         you_lbl.setStyleSheet(
             f"QLabel {{ color: {GREEN_DIM}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 11px; }}"
+            f"font-family: '{FM}'; font-size: {self._TEXT_SIZE}px; }}"
         )
         you_lbl.setToolTip(you)
         row.add(you_lbl, stretch=1)
@@ -493,7 +500,7 @@ class HistoryView(QWidget):
         arrow = QLabel("→")
         arrow.setStyleSheet(
             f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 11px; }}"
+            f"font-family: '{FM}'; font-size: {self._TEXT_SIZE}px; }}"
         )
         row.add(arrow)
 
@@ -501,7 +508,7 @@ class HistoryView(QWidget):
         resp_color = RED if status == "error" else INK
         resp_lbl.setStyleSheet(
             f"QLabel {{ color: {resp_color}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 11px; }}"
+            f"font-family: '{FM}'; font-size: {self._TEXT_SIZE}px; }}"
         )
         resp_lbl.setToolTip(resp)
         row.add(resp_lbl, stretch=2)

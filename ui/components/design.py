@@ -119,12 +119,12 @@ class IntentBadge(QLabel):
             "QLabel {"
             f"color: {color};"
             f"border: 1px solid {color};"
-            "border-radius: 2px;"
-            "padding: 1px 6px;"
+            "border-radius: 3px;"
+            "padding: 3px 8px;"            # roomier — was 1x6, now matches 13px row text
             f"font-family: '{FM}';"
-            "font-size: 9px;"
+            "font-size: 10px;"             # was 9px — reads next to 13px transcript lines
             "font-weight: 700;"
-            "letter-spacing: 1.5px;"
+            "letter-spacing: 1.6px;"
             "background: transparent;"
             "}"
         )
