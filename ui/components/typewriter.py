@@ -1,6 +1,31 @@
 from __future__ import annotations
 
+import random
+
 from PyQt5.QtCore import QObject, QTimer
+
+
+# Pool of in-progress verbs the typewriter cycles through while the brain is
+# working. One is picked at random per request so the user doesn't watch the
+# same "Thinking…" frame on every command. Keep entries short (≤10 chars) so
+# the 3-dot animation fits inside the transcript bubble cleanly.
+_THINKING_WORDS: tuple[str, ...] = (
+    "Thinking",
+    "Pondering",
+    "Cooking",
+    "Baking",
+    "Brewing",
+    "Crunching",
+    "Computing",
+    "Processing",
+    "Working",
+    "Calculating",
+    "Considering",
+    "Reasoning",
+    "Reading",
+    "Reflecting",
+    "Cogitating",
+)
 
 
 class _TypewriterProxy(QObject):
@@ -34,6 +59,10 @@ class _TypewriterProxy(QObject):
         self._thinking_timer.setInterval(self._THINKING_INTERVAL_MS)
         self._thinking_timer.timeout.connect(self._tick_thinking)
         self._thinking_dots = 1
+        # Chosen at _start_thinking() time — stays stable for the whole
+        # request so the dots animate against a single word rather than
+        # flicker between variants every 500ms.
+        self._thinking_word: str = _THINKING_WORDS[0]
 
         # ── User speech typewriter ───────────────────────────────────────────
         self._you_timer = QTimer(self)
@@ -117,7 +146,7 @@ class _TypewriterProxy(QObject):
     # ── Thinking animation ────────────────────────────────────────────────────
 
     def _thinking_text(self):
-        return f"Thinking{'.' * self._thinking_dots}"
+        return f"{self._thinking_word}{'.' * self._thinking_dots}"
 
     def _tick_thinking(self):
         self._thinking_dots = 1 if self._thinking_dots >= 3 else self._thinking_dots + 1
@@ -125,6 +154,10 @@ class _TypewriterProxy(QObject):
 
     def _start_thinking(self):
         self._thinking_dots = 1
+        # Pick a fresh verb each time the user fires off a new command. A
+        # given long-running request shows the same word with animating
+        # dots; the NEXT request picks a different word.
+        self._thinking_word = random.choice(_THINKING_WORDS)
         self._panel.update_last_jarvis(self._thinking_text(), "", None, None)
         self._thinking_timer.start()
 
