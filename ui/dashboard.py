@@ -633,7 +633,15 @@ class _InputBlock(QWidget):
         self.cmd_bar._input.contentHeightChanged.connect(self._on_input_editor_height)
 
     def _on_input_editor_height(self, editor_h: int):
-        """Expand or shrink the input card when the directive field line count changes."""
+        """Expand or shrink the input card when the directive field line count changes.
+
+        Strip-overlay model (F-? UX fix): the block changes its OWN height but
+        does NOT push the parent strip height anymore — the strip stays at a
+        fixed minimum slot so the central reactor + right metrics never shift
+        upward when the user types a multi-line command. The block grows
+        UPWARD via reposition (`_CommandStrip._reposition_block`), keeping
+        its bottom edge anchored to the strip's bottom.
+        """
         # Match _TagLineEdit._H_MAX (~108) + row padding; do not let the card exceed ~160px
         # before the editor itself scrolls (see widgets._TagLineEdit).
         need = max(50, min(int(editor_h) + 14, 160))
@@ -643,10 +651,12 @@ class _InputBlock(QWidget):
         self.setFixedHeight(self.INPUT_H + self.GLOW_H)
         self.input_card.setGeometry(0, 0, self.width(), self.INPUT_H)
         self.update()
-        # _CommandStrip was only sized once in __init__; keep strip height in sync
+        # Trigger the parent strip's reposition so the block's bottom stays
+        # anchored to the strip's bottom and the extra height extends UPWARD
+        # into the central area (no layout shift on cols / right panels).
         p = self.parent()
-        if p is not None:
-            p.setFixedHeight(self.height())
+        if p is not None and hasattr(p, "_reposition_block"):
+            p._reposition_block()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -667,30 +677,73 @@ class _InputBlock(QWidget):
 
 
 class _CommandStrip(QWidget):
-    """Outer strip — centers the constrained input block within full width."""
+    """Outer strip — bottom layout slot for the input bar.
+
+    Architecture (overlay model):
+        The strip itself is a FIXED-HEIGHT slot in DashboardView's vertical
+        layout — it never grows. The actual _InputBlock is a manually-
+        positioned child of the strip, anchored bottom-center. When the
+        block expands vertically (multi-line input), it grows UPWARD by
+        moving its top edge into negative-y coordinates relative to the
+        strip — Qt doesn't clip children to parent bounds by default, so
+        the visual block extends above the strip's top.
+
+        Net effect: the central reactor + right metrics never shift when
+        the input grows, because the strip's layout-reported size stays
+        constant. The expanding input simply overlaps the empty space
+        above the strip — at worst clipping into the lower edge of the
+        reactor's bloom, which is invisible cyan anyway.
+    """
 
     command_sent = pyqtSignal(str)
+
+    # Reserved height in the QVBoxLayout. Matches the collapsed _InputBlock
+    # height (INPUT_H + GLOW_H = 50 + 26 = 76). The strip never reports a
+    # different size to the layout, so cols never reflows.
+    _SLOT_HEIGHT = _InputBlock.INPUT_H + _InputBlock.GLOW_H
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background:transparent;")
+        self.setFixedHeight(self._SLOT_HEIGHT)
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        lay.addStretch(1)
+        # Block is a child of the strip, but positioned manually — NOT in a
+        # layout. _reposition_block() centers it horizontally and anchors
+        # its bottom to the strip's bottom on every resize / growth event.
         self._block = _InputBlock(self)
-        lay.addWidget(self._block)
-        lay.addStretch(1)
-
-        # Strip height = block height; the bloom lives inside the block bounds.
-        self.setFixedHeight(self._block.height())
+        self._block.command_sent.connect(self.command_sent.emit)
 
         # Forward block's signal + expose the contracts main.py / LeftColumn use.
-        self._block.command_sent.connect(self.command_sent.emit)
         self.mic = self._block.mic
         self.waveform = self._block.waveform
         self.cmd_bar = self._block.cmd_bar
+
+        self._reposition_block()
+
+    def _reposition_block(self) -> None:
+        """Center horizontally, anchor bottom to the strip's bottom edge.
+
+        When the block is taller than the strip's _SLOT_HEIGHT (i.e. user
+        typed a multi-line command), the block's top y becomes negative —
+        Qt renders the overflow above the strip's top edge, overlapping
+        the central panel without disturbing its layout.
+        """
+        block_w = self._block.width()
+        if block_w <= 0:
+            # Block hasn't received a size yet — fall back to its preferred
+            # width so the first paint isn't anchored to (0, ...).
+            block_w = self._block.sizeHint().width() or self._block.minimumWidth()
+        # Width: respect block's own min/max bounds, but clamp to the strip
+        # so a very narrow window doesn't push the input off-screen.
+        avail = self.width()
+        target_w = max(self._block.minimumWidth(), min(avail, self._block.maximumWidth()))
+        x = max(0, (avail - target_w) // 2)
+        y = self._SLOT_HEIGHT - self._block.height()  # may be negative; intentional
+        self._block.setGeometry(x, y, target_w, self._block.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_block()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
