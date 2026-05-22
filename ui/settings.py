@@ -1,194 +1,401 @@
-"""SettingsView — SYSTEM_CONFIG: real AppConfig wired to interactive controls."""
+"""SettingsView — SYSTEM_CONFIG.
+
+Redesigned 2026-05 to match the shared HUD grammar:
+  - Top 6-tile health strip (Anthropic · ElevenLabs · Gemini · Mic · Wake · Browser)
+  - Three sectioned columns:
+        API & connectivity   ·  Voice & audio  ·  Behaviour & visuals
+  - Each section: PanelCard + divide-y rows with inline labels + descriptions
+  - Theme picker: 5 visual swatch tiles (Stark / Teal / Amber / Indigo / Matrix)
+  - Bottom apply bar with an "unsaved" pip
+
+Public API preserved so main.py needs no changes:
+  - signals: scanline_toggled, mic_muted_changed, tts_muted_changed,
+             auto_confirm_changed, dim_mode_changed, wake_word_changed
+  - sync_state(mic_muted, tts_muted, auto_confirm, dim_mode, wake_word)
+"""
 
 from __future__ import annotations
+
+from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSlider, QVBoxLayout, QWidget,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
 )
 
 from config.settings import config
 from core.voice import _EL_VOICES
-from ui.theme import BG, CYAN, FM, GREEN, PRIMARY, RED, WARNING
-from ui.widgets import GlassPanel, StatusPip, ToggleSwitch, _mono, _panel_header
+from ui.components.design import (
+    AMBER,
+    BG_PANEL,
+    CYAN_FAINT,
+    CYAN_SOFT,
+    GREEN,
+    INK,
+    INK_DIM,
+    INK_FAINT,
+    RED,
+    HeroMetric,
+    PanelCard,
+    StatusPip,
+)
+from ui.theme import BG, CYAN, FM
+from ui.widgets import ToggleSwitch, _mono
+
+
+# ── Stylesheet constants ────────────────────────────────────────────────────
 
 
 _INPUT_SS = (
-    "QLineEdit{"
-    "background:rgba(8,15,17,0.85);"
-    "border:1px solid rgba(0,229,255,0.30);"
-    f"color:{CYAN};"
-    f"font-family:'{FM}';"
-    "font-size:12px;letter-spacing:1px;padding:6px 10px;"
+    "QLineEdit {"
+    "background: rgba(8,15,17,0.85);"
+    f"border: 1px solid {CYAN_FAINT};"
+    f"color: {CYAN};"
+    f"font-family: '{FM}';"
+    "font-size: 11px;"
+    "letter-spacing: 0.5px;"
+    "padding: 5px 10px;"
     "}"
-    "QLineEdit:focus{border:1px solid rgba(0,229,255,0.65);}"
+    "QLineEdit:focus { border: 1px solid rgba(0,229,255,0.65); }"
 )
 
 _COMBO_SS = (
-    "QComboBox{"
-    "background:rgba(8,15,17,0.85);"
-    "border:1px solid rgba(0,229,255,0.30);"
-    f"color:{CYAN};"
-    f"font-family:'{FM}';"
-    "font-size:12px;padding:6px 10px;"
+    "QComboBox {"
+    "background: rgba(8,15,17,0.85);"
+    f"border: 1px solid {CYAN_FAINT};"
+    f"color: {CYAN};"
+    f"font-family: '{FM}';"
+    "font-size: 11px;"
+    "padding: 5px 10px;"
     "}"
-    "QComboBox:focus{border:1px solid rgba(0,229,255,0.65);}"
-    "QComboBox::drop-down{border:none;width:20px;}"
-    "QComboBox QAbstractItemView{"
-    "background:rgba(10,20,22,0.97);"
-    f"color:{CYAN};"
-    f"font-family:'{FM}';"
-    "font-size:12px;selection-background-color:rgba(0,229,255,0.15);"
-    "border:1px solid rgba(0,229,255,0.30);"
+    "QComboBox:focus { border: 1px solid rgba(0,229,255,0.65); }"
+    "QComboBox::drop-down { border: none; width: 20px; }"
+    "QComboBox QAbstractItemView {"
+    "background: rgba(10,20,22,0.97);"
+    f"color: {CYAN};"
+    f"font-family: '{FM}';"
+    "font-size: 11px;"
+    "selection-background-color: rgba(0,229,255,0.15);"
+    f"border: 1px solid {CYAN_FAINT};"
     "}"
 )
 
 _SLIDER_SS = (
-    "QSlider::groove:horizontal{"
-    "height:4px;background:rgba(0,229,255,0.12);border-radius:2px;"
+    "QSlider::groove:horizontal {"
+    "height: 4px; background: rgba(0,229,255,0.12); border-radius: 2px;"
     "}"
-    f"QSlider::sub-page:horizontal{{background:rgba(0,229,255,0.45);border-radius:2px;}}"
-    "QSlider::handle:horizontal{"
-    f"background:{CYAN};width:12px;height:12px;"
-    "border-radius:6px;margin:-4px 0;"
+    "QSlider::sub-page:horizontal {"
+    f"background: {CYAN_SOFT}; border-radius: 2px;"
+    "}"
+    "QSlider::handle:horizontal {"
+    f"background: {CYAN};"
+    "width: 12px; height: 12px;"
+    "border-radius: 6px;"
+    "margin: -4px 0;"
     "}"
 )
 
 
-def _section_lbl(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setFont(_mono(8, bold=True))
-    lbl.setStyleSheet(
-        "color:rgba(186,201,204,0.50);letter-spacing:2px;"
-        "background:transparent;border:none;"
-    )
-    return lbl
+# ── Theme swatch picker ──────────────────────────────────────────────────────
 
 
+class _ThemeSwatch(QFrame):
+    """Single theme tile: accent + bg swatches and a label. Click to select."""
 
-def _field(label: str, widget: QWidget, label_w: int = 132) -> QHBoxLayout:
-    row = QHBoxLayout()
-    row.setSpacing(10)
-    lbl = QLabel(label)
-    lbl.setFixedWidth(label_w)
-    lbl.setFont(_mono(9))
-    lbl.setStyleSheet(
-        "color:rgba(186,201,204,0.65);background:transparent;border:none;"
-    )
-    row.addWidget(lbl)
-    row.addWidget(widget, 1)
-    return row
+    clicked = pyqtSignal(str)  # theme key
 
-
-# ── Connection health strip ────────────────────────────────────────────────
-
-class _HealthStrip(QWidget):
-    """Three-pill strip showing live connection state for key subsystems."""
-
-    def __init__(self, parent=None):
+    def __init__(self, key: str, name: str, accent: str, bg: str, *,
+                 active: bool = False, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(50)
+        self._key = key
+        self._active = active
+        self._accent = accent
+        self._bg = bg
+
+        self.setFixedHeight(58)
+        self.setCursor(Qt.PointingHandCursor)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(4)
+
+        # Swatch row: two coloured bars side by side
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        accent_bar = QFrame()
+        accent_bar.setStyleSheet(
+            f"QFrame {{ background: {accent}; border: none; }}"
+        )
+        accent_bar.setFixedHeight(16)
+        bg_bar = QFrame()
+        bg_bar.setStyleSheet(
+            f"QFrame {{ background: {bg}; border: 1px solid rgba(255,255,255,0.10); }}"
+        )
+        bg_bar.setFixedHeight(16)
+        row.addWidget(accent_bar)
+        row.addWidget(bg_bar)
+        lay.addLayout(row)
+
+        self._name_lbl = QLabel(name.upper())
+        lay.addWidget(self._name_lbl)
+        lay.addStretch(1)
+
+        self._refresh_style()
+
+    def set_active(self, active: bool) -> None:
+        if active == self._active:
+            return
+        self._active = active
+        self._refresh_style()
+
+    def _refresh_style(self) -> None:
+        if self._active:
+            border = f"2px solid {self._accent}"
+            bg = "rgba(0,229,255,0.06)"
+            label_color = self._accent
+        else:
+            border = f"1px solid {CYAN_FAINT}"
+            bg = "transparent"
+            label_color = INK_DIM
         self.setStyleSheet(
-            "background:rgba(8,15,17,0.55);"
-            "border:1px solid rgba(0,229,255,0.09);"
+            "QFrame {"
+            f"background: {bg};"
+            f"border: {border};"
+            "}"
+        )
+        self._name_lbl.setStyleSheet(
+            "QLabel {"
+            f"color: {label_color};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "font-weight: 700;"
+            "letter-spacing: 1.8px;"
+            "}"
+        )
+
+    def mousePressEvent(self, _event) -> None:
+        self.clicked.emit(self._key)
+
+
+# ── Health strip ─────────────────────────────────────────────────────────────
+
+
+class _HealthStrip(QFrame):
+    """Top 6-tile horizontal status row.
+
+    Each tile: status pip + label + state text. Replaces the legacy
+    3-pill compact strip with something the user can actually read.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet(
+            "QFrame {"
+            f"background: {BG_PANEL};"
+            f"border: 1px solid {CYAN_FAINT};"
+            "}"
         )
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        self._anthro_pip, self._anthro_val = self._pill(lay, "ANTHROPIC")
-        self._div(lay)
-        self._eleven_pip, self._eleven_val = self._pill(lay, "ELEVENLABS")
-        self._div(lay)
-        self._browser_pip, self._browser_val = self._pill(lay, "BROWSER")
-        lay.addStretch(1)
+        self._tiles: dict[str, tuple[StatusPip, QLabel]] = {}
+        self._add_tile(lay, "anthropic", "ANTHROPIC")
+        self._add_tile(lay, "elevenlabs", "ELEVENLABS")
+        self._add_tile(lay, "gemini",     "GEMINI TTS")
+        self._add_tile(lay, "mic",        "MIC")
+        self._add_tile(lay, "wake",       "WAKE WORD")
+        self._add_tile(lay, "browser",    "BROWSER", last=True)
 
         self.refresh()
 
-    def _pill(self, layout, label: str):
-        pill = QWidget()
-        pill.setStyleSheet("background:transparent;")
-        pl = QHBoxLayout(pill)
-        pl.setContentsMargins(14, 0, 14, 0)
-        pl.setSpacing(7)
+    def _add_tile(self, lay: QHBoxLayout, key: str, label_text: str, *, last: bool = False) -> None:
+        cell = QFrame()
+        cell.setStyleSheet(
+            "QFrame {"
+            "background: transparent;"
+            + ("border: none;" if last else f"border-right: 1px solid {CYAN_FAINT};")
+            + "}"
+        )
+        cl = QHBoxLayout(cell)
+        cl.setContentsMargins(14, 10, 14, 10)
+        cl.setSpacing(10)
 
-        pip = StatusPip("standby")
-        pip.setFixedSize(8, 8)
-        pl.addWidget(pip, 0, Qt.AlignVCenter)
+        pip = StatusPip("off")
+        cl.addWidget(pip, 0, Qt.AlignVCenter)
 
         col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(1)
-        lbl = QLabel(label)
-        lbl.setStyleSheet(
-            "color:rgba(132,147,150,0.45);font-family:'Roboto Mono';"
-            "font-size:8px;letter-spacing:1px;background:transparent;border:none;"
+        name = QLabel(label_text)
+        name.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_FAINT};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9px;"
+            "font-weight: 700;"
+            "letter-spacing: 2px;"
+            "}"
         )
+        col.addWidget(name)
         val = QLabel("—")
         val.setStyleSheet(
-            "color:rgba(132,147,150,0.65);font-family:'Roboto Mono';"
-            "font-size:10px;font-weight:700;background:transparent;border:none;"
+            "QLabel {"
+            f"color: {INK_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 11px;"
+            "}"
         )
-        col.addWidget(lbl)
         col.addWidget(val)
-        pl.addLayout(col)
-        layout.addWidget(pill)
-        return pip, val
+        cl.addLayout(col, 1)
 
-    @staticmethod
-    def _div(layout):
-        d = QFrame()
-        d.setFrameShape(QFrame.VLine)
-        d.setStyleSheet(
-            "color:rgba(0,229,255,0.10);background:rgba(0,229,255,0.10);"
-        )
-        d.setFixedWidth(1)
-        layout.addWidget(d)
+        lay.addWidget(cell, 1)
+        self._tiles[key] = (pip, val)
 
-    def _set_pill(self, pip: StatusPip, val_lbl: QLabel, ok: bool,
-                  ok_text: str = "CONNECTED", fail_text: str = "MISSING"):
-        color = GREEN if ok else RED
-        pip.set_status("active" if ok else "error")
-        val_lbl.setText(ok_text if ok else fail_text)
-        val_lbl.setStyleSheet(
-            f"color:{color};font-family:'Roboto Mono';"
-            "font-size:10px;font-weight:700;background:transparent;border:none;"
+    def _set_tile(self, key: str, pip_state: str, value: str, value_color: str) -> None:
+        pip, val = self._tiles[key]
+        pip.set_state(pip_state)
+        val.setText(value)
+        val.setStyleSheet(
+            f"QLabel {{ color: {value_color}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 11px; }}"
         )
 
-    def refresh(self):
-        """Re-read live state. Call after config save or on page show."""
-        self._set_pill(
-            self._anthro_pip, self._anthro_val,
-            bool(config.anthropic_api_key),
-        )
-        self._set_pill(
-            self._eleven_pip, self._eleven_val,
-            bool(config.elevenlabs_api_key),
-        )
+    def refresh(self) -> None:
+        """Re-read config + best-effort detect the live state of each provider."""
+        # Anthropic
+        if config.anthropic_api_key:
+            self._set_tile("anthropic", "on", "connected", GREEN)
+        else:
+            self._set_tile("anthropic", "err", "no key", RED)
+
+        # ElevenLabs
+        if config.elevenlabs_api_key:
+            self._set_tile("elevenlabs", "on", "key set", GREEN)
+        else:
+            self._set_tile("elevenlabs", "off", "not configured", INK_DIM)
+
+        # Gemini
+        gemini_key = getattr(config, "gemini_api_key", "")
+        if gemini_key:
+            self._set_tile("gemini", "on", "free tier", GREEN)
+        else:
+            self._set_tile("gemini", "off", "not configured", INK_DIM)
+
+        # Mic — best effort via sounddevice
         try:
-            from core.browser import browser
-            ready = browser.is_ready
+            import sounddevice as _sd  # type: ignore
+            inputs = [d for d in _sd.query_devices() if d.get("max_input_channels", 0) > 0]
+            if inputs:
+                self._set_tile("mic", "on", "detected", GREEN)
+            else:
+                self._set_tile("mic", "warn", "no inputs", AMBER)
         except Exception:
-            ready = False
-        self._set_pill(
-            self._browser_pip, self._browser_val,
-            ready, ok_text="READY", fail_text="STARTING",
+            self._set_tile("mic", "warn", "unavailable", AMBER)
+
+        # Wake word
+        if getattr(config, "wake_word_enabled", True):
+            self._set_tile("wake", "on", "listening", GREEN)
+        else:
+            self._set_tile("wake", "off", "disabled", INK_DIM)
+
+        # Browser — Playwright session: best-effort
+        try:
+            from core.browser import browser as _b
+            if getattr(_b, "_context", None):
+                self._set_tile("browser", "on", "running", GREEN)
+            else:
+                self._set_tile("browser", "off", "not started", INK_DIM)
+        except Exception:
+            self._set_tile("browser", "off", "not started", INK_DIM)
+
+
+# ── Field-row helper used inside section panels ─────────────────────────────
+
+
+def _section_row(
+    label: str,
+    control: QWidget,
+    helper: str = "",
+    *,
+    parent: Optional[QWidget] = None,
+) -> QWidget:
+    """One divide-y row inside a section panel.
+
+    Layout:
+        ┌─────────────────────────────────────────┐
+        │  LABEL                       [control]  │
+        │  (optional helper text on a 2nd line)   │
+        └─────────────────────────────────────────┘
+    """
+    w = QFrame(parent)
+    w.setStyleSheet(
+        "QFrame {"
+        "background: transparent;"
+        "border-bottom: 1px solid rgba(0,229,255,0.07);"
+        "}"
+    )
+    outer = QVBoxLayout(w)
+    outer.setContentsMargins(0, 8, 0, 8)
+    outer.setSpacing(4)
+
+    row = QHBoxLayout()
+    row.setSpacing(12)
+    lbl = QLabel(label.upper())
+    lbl.setStyleSheet(
+        "QLabel {"
+        f"color: {INK};"
+        "background: transparent;"
+        "border: none;"
+        f"font-family: '{FM}';"
+        "font-size: 10.5px;"
+        "letter-spacing: 1.5px;"
+        "}"
+    )
+    row.addWidget(lbl, 1)
+    row.addWidget(control, 0)
+    outer.addLayout(row)
+
+    if helper:
+        hl = QLabel(helper)
+        hl.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_FAINT};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "letter-spacing: 0.3px;"
+            "}"
         )
-        if not ready:
-            # amber instead of red — browser may still be initialising
-            self._browser_pip.set_status("standby")
-            self._browser_val.setStyleSheet(
-                f"color:{WARNING};font-family:'Roboto Mono';"
-                "font-size:10px;font-weight:700;background:transparent;border:none;"
-            )
+        hl.setWordWrap(True)
+        outer.addWidget(hl)
+    return w
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Main view ───────────────────────────────────────────────────────────────
 
 
 class SettingsView(QWidget):
+    """SYSTEM_CONFIG. See module docstring."""
+
     scanline_toggled     = pyqtSignal(bool)
     mic_muted_changed    = pyqtSignal(bool)
     tts_muted_changed    = pyqtSignal(bool)
@@ -196,349 +403,229 @@ class SettingsView(QWidget):
     dim_mode_changed     = pyqtSignal(bool)
     wake_word_changed    = pyqtSignal(bool)
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._bg_px: "QPixmap | None" = None
-        self._bg_sz = (-1, -1)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(12)
+    # Theme catalogue: keys match config.theme; mockup constants reused.
+    _THEMES: tuple[tuple[str, str, str, str], ...] = (
+        # (key, display, accent, bg)
+        ("cyan",     "Stark",   "#00e5ff", "#080A0A"),
+        ("teal",     "Teal",    "#3dc7d6", "#0a1010"),
+        ("amber",    "Amber",   "#ffaa00", "#0d0a04"),
+        ("indigo",   "Indigo",  "#818cf8", "#060912"),
+        ("matrix",   "Matrix",  "#00ff66", "#050a06"),
+    )
 
-        # ── Header ────────────────────────────────────────────────────────────
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._bg_px: Optional[QPixmap] = None
+        self._bg_sz = (-1, -1)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(14)
+
+        # ── Header ──────────────────────────────────────────────────────────
         head = QHBoxLayout()
+        head.setSpacing(12)
         title = QLabel("SYSTEM_CONFIG")
         title.setStyleSheet(
-            "QLabel{"
-            f"color:{PRIMARY};"
-            "font-family:'Space Grotesk';font-size:40px;font-weight:700;"
-            "background:transparent;border:none;"
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 24px;"
+            "font-weight: 700;"
+            "letter-spacing: 4px;"
             "}"
         )
-        head.addWidget(title, 1)
+        head.addWidget(title)
+
+        subtitle = QLabel("RUNTIME CONFIGURATION · API · AUDIO · SESSION FLAGS")
+        subtitle.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "letter-spacing: 2px;"
+            "}"
+        )
+        head.addWidget(subtitle)
+        head.addStretch(1)
 
         self._unsaved_lbl = QLabel("● UNSAVED")
-        self._unsaved_lbl.setFont(_mono(9, bold=True))
         self._unsaved_lbl.setStyleSheet(
-            f"color:{WARNING};letter-spacing:2px;background:transparent;border:none;"
+            "QLabel {"
+            f"color: {AMBER};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9px;"
+            "font-weight: 700;"
+            "letter-spacing: 2px;"
+            "}"
         )
         self._unsaved_lbl.setVisible(False)
-        head.addWidget(self._unsaved_lbl, 0, Qt.AlignVCenter)
+        head.addWidget(self._unsaved_lbl)
         root.addLayout(head)
 
-        subtitle = QLabel("RUNTIME CONFIGURATION  //  API, AUDIO & SESSION FLAGS")
-        subtitle.setStyleSheet(
-            "QLabel{color:rgba(132,147,150,0.9);font-family:'Roboto Mono';"
-            "font-size:11px;letter-spacing:1px;background:transparent;border:none;}"
-        )
-        root.addWidget(subtitle)
-
-        # ── Health strip ──────────────────────────────────────────────────────
+        # ── Health strip ────────────────────────────────────────────────────
         self._health = _HealthStrip()
         root.addWidget(self._health)
 
-        # ── Upper row: API config + JARVIS meta ───────────────────────────────
-        upper = QHBoxLayout()
-        upper.setSpacing(12)
+        # ── 3-column body ───────────────────────────────────────────────────
+        cols = QHBoxLayout()
+        cols.setSpacing(14)
+        cols.addWidget(self._build_api_panel(), 1)
+        cols.addWidget(self._build_voice_panel(), 1)
+        cols.addWidget(self._build_behaviour_panel(), 1)
+        root.addLayout(cols, 1)
 
-        # Left: API Configuration
-        api_panel = GlassPanel()
-        api_panel.set_fill_color(QColor(10, 17, 19, 220))
-        api_lay = QVBoxLayout(api_panel)
-        api_lay.setContentsMargins(0, 0, 0, 0)
-        api_lay.setSpacing(0)
-
-        hdr, sep = _panel_header("API CONFIGURATION")
-        api_lay.addWidget(hdr)
-        api_lay.addWidget(sep)
-
-        api_body = QWidget()
-        api_body.setStyleSheet("background:transparent;")
-        ab = QVBoxLayout(api_body)
-        ab.setContentsMargins(14, 14, 14, 14)
-        ab.setSpacing(12)
-
-        self._anthro_key = QLineEdit(config.anthropic_api_key)
-        self._anthro_key.setEchoMode(QLineEdit.Password)
-        self._anthro_key.setPlaceholderText("sk-ant-...")
-        self._anthro_key.setStyleSheet(_INPUT_SS)
-        self._anthro_key.setToolTip("Anthropic API key — kept in .env, not saved to JSON")
-        ab.addLayout(_field("ANTHROPIC_KEY", self._anthro_key))
-
-        self._eleven_key = QLineEdit(config.elevenlabs_api_key)
-        self._eleven_key.setEchoMode(QLineEdit.Password)
-        self._eleven_key.setPlaceholderText("el-...")
-        self._eleven_key.setStyleSheet(_INPUT_SS)
-        self._eleven_key.setToolTip("ElevenLabs API key for TTS — kept in .env, not saved to JSON")
-        ab.addLayout(_field("ELEVENLABS_KEY", self._eleven_key))
-
-        self._vapi_key = QLineEdit(config.vapi_api_key)
-        self._vapi_key.setEchoMode(QLineEdit.Password)
-        self._vapi_key.setPlaceholderText("vapi-...")
-        self._vapi_key.setStyleSheet(_INPUT_SS)
-        self._vapi_key.setToolTip("Vapi API key")
-        ab.addLayout(_field("VAPI_KEY", self._vapi_key))
-
-        self._model_combo = QComboBox()
-        self._model_combo.setStyleSheet(_COMBO_SS)
-        self._model_combo.setToolTip("Claude model used for intent routing")
-        _models = [
-            ("Claude Sonnet 4.6", "claude-sonnet-4-6"),
-            ("Claude Opus 4.7",   "claude-opus-4-7"),
-            ("Claude Haiku 4.5",  "claude-haiku-4-5-20251001"),
-        ]
-        for display, model_id in _models:
-            self._model_combo.addItem(display, userData=model_id)
-        current_idx = next(
-            (i for i, (_, mid) in enumerate(_models) if mid == config.claude_model), 0
+        # ── Apply bar ───────────────────────────────────────────────────────
+        apply_bar = QFrame()
+        apply_bar.setStyleSheet(
+            "QFrame {"
+            f"background: {BG_PANEL};"
+            f"border: 1px solid {CYAN_FAINT};"
+            "}"
         )
-        self._model_combo.setCurrentIndex(current_idx)
-        ab.addLayout(_field("MODEL", self._model_combo))
+        abl = QHBoxLayout(apply_bar)
+        abl.setContentsMargins(14, 8, 14, 8)
+        abl.setSpacing(12)
 
-        debug_row = QHBoxLayout()
-        debug_row.setSpacing(10)
-        debug_lbl = QLabel("DEBUG_MODE")
-        debug_lbl.setFixedWidth(120)
-        debug_lbl.setFont(_mono(9))
-        debug_lbl.setStyleSheet(
-            "color:rgba(186,201,204,0.65);background:transparent;border:none;"
+        hint = QLabel("Apply writes API keys to .env and other prefs to data/jarvis.json.")
+        hint.setStyleSheet(
+            f"QLabel {{ color: {INK_DIM}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
         )
-        self._debug_toggle = ToggleSwitch(config.debug_mode)
-        debug_row.addWidget(debug_lbl)
-        debug_row.addWidget(self._debug_toggle)
-        debug_row.addStretch(1)
-        ab.addLayout(debug_row)
-
-        ab.addStretch(1)
-        api_lay.addWidget(api_body, 1)
-        upper.addWidget(api_panel, 1)
-
-        # Right: JARVIS Meta
-        meta_panel = GlassPanel()
-        meta_panel.set_fill_color(QColor(10, 17, 19, 220))
-        meta_lay = QVBoxLayout(meta_panel)
-        meta_lay.setContentsMargins(0, 0, 0, 0)
-        meta_lay.setSpacing(0)
-
-        mhdr, msep = _panel_header("JARVIS_META")
-        meta_lay.addWidget(mhdr)
-        meta_lay.addWidget(msep)
-
-        meta_body = QWidget()
-        meta_body.setStyleSheet("background:transparent;")
-        mb = QVBoxLayout(meta_body)
-        mb.setContentsMargins(14, 14, 14, 14)
-        mb.setSpacing(12)
-
-        self._voice_combo = QComboBox()
-        self._voice_combo.setStyleSheet(_COMBO_SS)
-        self._voice_combo.setToolTip("Select an available ElevenLabs voice profile")
-        for key in sorted(_EL_VOICES.keys()):
-            self._voice_combo.addItem(key.replace("-", " ").title(), userData=key)
-        voice_idx = next(
-            (i for i in range(self._voice_combo.count())
-             if self._voice_combo.itemData(i) == config.tts_voice),
-            0,
-        )
-        self._voice_combo.setCurrentIndex(voice_idx)
-        mb.addLayout(_field("VOICE_MATRIX", self._voice_combo))
-
-        self._wake_input = QLineEdit(config.wake_word)
-        self._wake_input.setStyleSheet(_INPUT_SS)
-        self._wake_input.setToolTip("Wake word to activate voice input")
-        mb.addLayout(_field("WAKE_PROTOCOL", self._wake_input))
-
-        self._theme_combo = QComboBox()
-        self._theme_combo.setStyleSheet(_COMBO_SS)
-        for theme in ("cyan", "gold", "emerald", "crimson"):
-            self._theme_combo.addItem(theme.upper(), userData=theme)
-        theme_idx = next(
-            (i for i in range(self._theme_combo.count())
-             if self._theme_combo.itemData(i) == config.theme), 0
-        )
-        self._theme_combo.setCurrentIndex(theme_idx)
-        mb.addLayout(_field("HUD_THEME", self._theme_combo))
-
-        scan_row = QHBoxLayout()
-        scan_row.setSpacing(10)
-        scan_lbl = QLabel("SCANLINE_FX")
-        scan_lbl.setFixedWidth(120)
-        scan_lbl.setFont(_mono(9))
-        scan_lbl.setStyleSheet(
-            "color:rgba(186,201,204,0.65);background:transparent;border:none;"
-        )
-        self._scan_toggle = ToggleSwitch(True)
-        self._scan_toggle.toggled.connect(self.scanline_toggled.emit)
-        scan_row.addWidget(scan_lbl)
-        scan_row.addWidget(self._scan_toggle)
-        scan_row.addStretch(1)
-        mb.addLayout(scan_row)
-
-        mb.addStretch(1)
+        abl.addWidget(hint, 1)
 
         self._apply_btn = QPushButton("APPLY_CFG")
         self._apply_btn.setCursor(Qt.PointingHandCursor)
         self._apply_btn.setToolTip("Save configuration")
         self._apply_btn.setStyleSheet(
-            "QPushButton{"
-            f"color:{CYAN};border:1px solid rgba(0,229,255,0.60);"
-            "font-family:'Roboto Mono';font-size:12px;font-weight:700;"
-            "padding:8px;background:transparent;"
+            "QPushButton {"
+            "background: transparent;"
+            f"color: {CYAN};"
+            f"border: 1px solid {CYAN_SOFT};"
+            f"font-family: '{FM}';"
+            "font-size: 11px;"
+            "font-weight: 700;"
+            "padding: 6px 18px;"
+            "letter-spacing: 2px;"
             "}"
-            "QPushButton:hover{background:rgba(0,229,255,0.08);}"
-            "QPushButton:pressed{background:rgba(0,229,255,0.16);}"
+            "QPushButton:hover { background: rgba(0,229,255,0.10); }"
+            "QPushButton:pressed { background: rgba(0,229,255,0.18); }"
         )
         self._apply_btn.clicked.connect(self._apply_cfg)
-        mb.addWidget(self._apply_btn)
+        abl.addWidget(self._apply_btn)
+        root.addWidget(apply_bar)
 
-        meta_lay.addWidget(meta_body, 1)
-        upper.addWidget(meta_panel, 1)
+        # Wire dirty markers on every field
+        self._wire_dirty_indicators()
 
-        root.addLayout(upper, 1)
+    # ── Panel builders ───────────────────────────────────────────────────────
 
-        # ── Session flags ─────────────────────────────────────────────────────
-        flags_panel = GlassPanel()
-        flags_panel.set_fill_color(QColor(10, 17, 19, 220))
-        flags_lay = QVBoxLayout(flags_panel)
-        flags_lay.setContentsMargins(0, 0, 0, 0)
-        flags_lay.setSpacing(0)
+    def _build_api_panel(self) -> PanelCard:
+        panel = PanelCard("API & connectivity", active=True)
 
-        sfhdr, sfsep = _panel_header("SESSION_FLAGS")
-        flags_lay.addWidget(sfhdr)
-        flags_lay.addWidget(sfsep)
+        self._anthro_key = QLineEdit(config.anthropic_api_key)
+        self._anthro_key.setEchoMode(QLineEdit.Password)
+        self._anthro_key.setPlaceholderText("sk-ant-…")
+        self._anthro_key.setStyleSheet(_INPUT_SS)
+        panel.add(_section_row(
+            "Anthropic key", self._anthro_key,
+            "Required. Routes every command through Claude.",
+        ))
 
-        sfbody = QWidget()
-        sfbody.setStyleSheet("background:transparent;")
-        sfb = QHBoxLayout(sfbody)
-        sfb.setContentsMargins(14, 10, 14, 10)
-        sfb.setSpacing(32)
+        self._eleven_key = QLineEdit(config.elevenlabs_api_key)
+        self._eleven_key.setEchoMode(QLineEdit.Password)
+        self._eleven_key.setPlaceholderText("el-…")
+        self._eleven_key.setStyleSheet(_INPUT_SS)
+        panel.add(_section_row(
+            "ElevenLabs key", self._eleven_key,
+            "Primary TTS provider. Falls back to Gemini when quota-locked.",
+        ))
 
-        sf_left = QVBoxLayout()
-        sf_left.setSpacing(4)
-        self._flag_mic = self._make_flag_row(
-            sf_left, "MUTE_MIC",
-            "Block voice capture session-wide.",
+        self._gemini_key = QLineEdit(getattr(config, "gemini_api_key", ""))
+        self._gemini_key.setEchoMode(QLineEdit.Password)
+        self._gemini_key.setPlaceholderText("AIza…")
+        self._gemini_key.setStyleSheet(_INPUT_SS)
+        panel.add(_section_row(
+            "Gemini key", self._gemini_key,
+            "Fallback TTS. 10 calls/day on the free tier.",
+        ))
+
+        self._vapi_key = QLineEdit(config.vapi_api_key)
+        self._vapi_key.setEchoMode(QLineEdit.Password)
+        self._vapi_key.setPlaceholderText("vapi-…")
+        self._vapi_key.setStyleSheet(_INPUT_SS)
+        panel.add(_section_row(
+            "Vapi key", self._vapi_key,
+            "Optional. Syncs the JARVIS assistant config for web/phone deployment.",
+        ))
+
+        self._model_combo = QComboBox()
+        self._model_combo.setStyleSheet(_COMBO_SS)
+        for display, model_id in (
+            ("Claude Sonnet 4.6", "claude-sonnet-4-6"),
+            ("Claude Opus 4.7",   "claude-opus-4-7"),
+            ("Claude Haiku 4.5",  "claude-haiku-4-5-20251001"),
+        ):
+            self._model_combo.addItem(display, userData=model_id)
+        current_idx = next(
+            (i for i in range(self._model_combo.count())
+             if self._model_combo.itemData(i) == config.claude_model), 0
         )
-        self._flag_mic.toggled.connect(self.mic_muted_changed.emit)
-        self._flag_tts = self._make_flag_row(
-            sf_left, "MUTE_TTS",
-            "Suppress spoken responses; transcript still updates.",
+        self._model_combo.setCurrentIndex(current_idx)
+        panel.add(_section_row(
+            "Claude model", self._model_combo,
+            "Sonnet 4.6 for routing. Opus available for heavier reasoning.",
+        ))
+
+        self._debug_toggle = ToggleSwitch(config.debug_mode)
+        panel.add(_section_row(
+            "Debug mode", self._debug_toggle,
+            "Print raw brain JSON, FOLLOW lines, and per-handler traces to stderr.",
+        ))
+
+        panel.body().addStretch(1)
+        return panel
+
+    def _build_voice_panel(self) -> PanelCard:
+        panel = PanelCard("Voice & audio")
+
+        self._voice_combo = QComboBox()
+        self._voice_combo.setStyleSheet(_COMBO_SS)
+        for key in sorted(_EL_VOICES.keys()):
+            self._voice_combo.addItem(key.replace("-", " ").title(), userData=key)
+        voice_idx = next(
+            (i for i in range(self._voice_combo.count())
+             if self._voice_combo.itemData(i) == config.tts_voice), 0
         )
-        self._flag_tts.toggled.connect(self.tts_muted_changed.emit)
+        self._voice_combo.setCurrentIndex(voice_idx)
+        panel.add(_section_row(
+            "Voice profile", self._voice_combo,
+            "ElevenLabs voice ID. Falls back to pyttsx3 when no TTS provider available.",
+        ))
 
-        sf_right = QVBoxLayout()
-        sf_right.setSpacing(4)
-        self._flag_conf = self._make_flag_row(
-            sf_right, "AUTO_CONFIRM",
-            "Skip confirmation prompts. Destructive actions run instantly.",
-            warn=True,
-        )
-        self._flag_conf.toggled.connect(self.auto_confirm_changed.emit)
-        self._flag_dim = self._make_flag_row(
-            sf_right, "DIM_MODE",
-            "Reduce brightness for low-light use.",
-        )
-        self._flag_dim.toggled.connect(self.dim_mode_changed.emit)
-        self._flag_wake = self._make_flag_row(
-            sf_left, "WAKE_WORD",
-            "Listen for 'Jarvis' to activate voice input.",
-        )
-        self._flag_wake.setChecked(True)
-        self._flag_wake.toggled.connect(self.wake_word_changed.emit)
-
-        sfb.addLayout(sf_left, 1)
-        sfb.addLayout(sf_right, 1)
-        flags_lay.addWidget(sfbody)
-        root.addWidget(flags_panel)
-
-        # ── Lower: Audio Configuration ────────────────────────────────────────
-        audio_panel = GlassPanel()
-        audio_panel.set_fill_color(QColor(10, 17, 19, 220))
-        audio_lay = QVBoxLayout(audio_panel)
-        audio_lay.setContentsMargins(0, 0, 0, 0)
-        audio_lay.setSpacing(0)
-
-        ahdr, asep = _panel_header("AUDIO_CONFIG")
-        audio_lay.addWidget(ahdr)
-        audio_lay.addWidget(asep)
-
-        audio_body = QWidget()
-        audio_body.setStyleSheet("background:transparent;")
-        ab2 = QHBoxLayout(audio_body)
-        ab2.setContentsMargins(14, 12, 14, 12)
-        ab2.setSpacing(24)
-
-        mic_col = QVBoxLayout()
-        mic_col.setSpacing(6)
-        mic_col.addWidget(_section_lbl("MIC_SENSITIVITY"))
-        mic_row = QHBoxLayout()
-        self._mic_slider = QSlider(Qt.Horizontal)
-        self._mic_slider.setRange(0, 100)
-        self._mic_slider.setValue(config.mic_sensitivity)
-        self._mic_slider.setStyleSheet(_SLIDER_SS)
-        self._mic_val = QLabel(f"{config.mic_sensitivity}%")
-        self._mic_val.setFixedWidth(34)
-        self._mic_val.setFont(_mono(10))
-        self._mic_val.setStyleSheet(f"color:{CYAN};background:transparent;border:none;")
-        self._mic_slider.valueChanged.connect(lambda v: self._mic_val.setText(f"{v}%"))
-        mic_row.addWidget(self._mic_slider, 1)
-        mic_row.addWidget(self._mic_val)
-        mic_col.addLayout(mic_row)
-        ab2.addLayout(mic_col, 1)
-
-        tts_col = QVBoxLayout()
-        tts_col.setSpacing(6)
-        tts_col.addWidget(_section_lbl("TTS_SPEED"))
-        tts_row = QHBoxLayout()
-        self._tts_slider = QSlider(Qt.Horizontal)
-        self._tts_slider.setRange(50, 200)
-        self._tts_slider.setValue(config.tts_speed)
-        self._tts_slider.setStyleSheet(_SLIDER_SS)
-        self._tts_val = QLabel(f"{config.tts_speed}%")
-        self._tts_val.setFixedWidth(38)
-        self._tts_val.setFont(_mono(10))
-        self._tts_val.setStyleSheet(f"color:{CYAN};background:transparent;border:none;")
-        self._tts_slider.valueChanged.connect(lambda v: self._tts_val.setText(f"{v}%"))
-        tts_row.addWidget(self._tts_slider, 1)
-        tts_row.addWidget(self._tts_val)
-        tts_col.addLayout(tts_row)
-        ab2.addLayout(tts_col, 1)
-
-        ng_col = QVBoxLayout()
-        ng_col.setSpacing(6)
-        ng_col.addWidget(_section_lbl("NOISE_GATE"))
-        ng_row = QHBoxLayout()
-        self._noise_toggle = ToggleSwitch(config.noise_gate)
-        ng_row.addWidget(self._noise_toggle)
-        ng_row.addStretch(1)
-        ng_col.addLayout(ng_row)
-        ng_col.addStretch(1)
-        ab2.addLayout(ng_col)
-
-        audio_lay.addWidget(audio_body, 1)
-
-        # ── Mic input device selector ─────────────────────────────────────────
-        dev_body = QWidget()
-        dev_lay = QHBoxLayout(dev_body)
-        dev_lay.setContentsMargins(14, 8, 14, 8)
-        dev_lay.setSpacing(12)
-        dev_lay.addWidget(_section_lbl("MIC_INPUT_DEVICE"))
+        self._wake_input = QLineEdit(config.wake_word)
+        self._wake_input.setStyleSheet(_INPUT_SS)
+        self._wake_input.setFixedWidth(160)
+        panel.add(_section_row(
+            "Wake word", self._wake_input,
+            "Phrase that activates voice input. Lowercase; one or two words works best.",
+        ))
 
         self._mic_device_combo = QComboBox()
-        self._mic_device_combo.setStyleSheet(
-            f"QComboBox{{background:rgba(0,212,255,0.07);color:#d2dcf5;"
-            f"border:1px solid rgba(0,212,255,0.25);border-radius:4px;"
-            f"font-family:{FM};font-size:11px;padding:3px 8px;}}"
-            f"QComboBox::drop-down{{border:none;}}"
-            f"QComboBox QAbstractItemView{{background:#0d1f24;color:#d2dcf5;"
-            f"selection-background-color:rgba(0,212,255,0.20);}}"
-        )
+        self._mic_device_combo.setStyleSheet(_COMBO_SS)
         self._mic_device_combo.addItem("System Default", -1)
         try:
-            import sounddevice as _sd
+            import sounddevice as _sd  # type: ignore
             for idx, dev in enumerate(_sd.query_devices()):
                 if dev["max_input_channels"] > 0:
                     self._mic_device_combo.addItem(
-                        f"[{idx}] {dev['name']}", idx
+                        f"[{idx}] {dev['name'][:36]}", idx
                     )
                     if idx == config.mic_device:
                         self._mic_device_combo.setCurrentIndex(
@@ -546,23 +633,164 @@ class SettingsView(QWidget):
                         )
         except Exception:
             pass
-        dev_lay.addWidget(self._mic_device_combo, 1)
-        audio_lay.addWidget(dev_body)
+        panel.add(_section_row(
+            "Mic device", self._mic_device_combo,
+            "Input device for STT. System default works for most laptops.",
+        ))
 
-        root.addWidget(audio_panel)
+        # Sensitivity slider
+        sens_row = QHBoxLayout()
+        sens_row.setSpacing(10)
+        self._mic_slider = QSlider(Qt.Horizontal)
+        self._mic_slider.setRange(0, 100)
+        self._mic_slider.setValue(config.mic_sensitivity)
+        self._mic_slider.setStyleSheet(_SLIDER_SS)
+        self._mic_slider.setFixedWidth(140)
+        self._mic_val = QLabel(f"{config.mic_sensitivity}")
+        self._mic_val.setFixedWidth(28)
+        self._mic_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._mic_val.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
+        )
+        self._mic_slider.valueChanged.connect(lambda v: self._mic_val.setText(f"{v}"))
+        sens_row.addWidget(self._mic_slider)
+        sens_row.addWidget(self._mic_val)
+        sens_wrap = QWidget()
+        sens_wrap.setLayout(sens_row)
+        panel.add(_section_row("Mic sensitivity", sens_wrap,
+                               "Threshold for voice detection. Lower → more sensitive."))
 
-        # ── Wire all fields → unsaved indicator ───────────────────────────────
+        # TTS speed slider
+        tts_row = QHBoxLayout()
+        tts_row.setSpacing(10)
+        self._tts_slider = QSlider(Qt.Horizontal)
+        self._tts_slider.setRange(50, 200)
+        self._tts_slider.setValue(config.tts_speed)
+        self._tts_slider.setStyleSheet(_SLIDER_SS)
+        self._tts_slider.setFixedWidth(140)
+        self._tts_val = QLabel(f"{config.tts_speed}")
+        self._tts_val.setFixedWidth(28)
+        self._tts_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._tts_val.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
+        )
+        self._tts_slider.valueChanged.connect(lambda v: self._tts_val.setText(f"{v}"))
+        tts_row.addWidget(self._tts_slider)
+        tts_row.addWidget(self._tts_val)
+        tts_wrap = QWidget()
+        tts_wrap.setLayout(tts_row)
+        panel.add(_section_row("TTS speed", tts_wrap,
+                               "Speech rate of the TTS engine. 100 = default."))
+
+        # Noise gate + wake word listener
+        self._noise_toggle = ToggleSwitch(config.noise_gate)
+        panel.add(_section_row("Noise gate", self._noise_toggle,
+                               "Filter ambient noise before voice detection."))
+
+        self._flag_wake = ToggleSwitch(getattr(config, "wake_word_enabled", True))
+        self._flag_wake.toggled.connect(self.wake_word_changed.emit)
+        panel.add(_section_row("Wake listener", self._flag_wake,
+                               "Listen for the wake word in the background."))
+
+        panel.body().addStretch(1)
+        return panel
+
+    def _build_behaviour_panel(self) -> PanelCard:
+        panel = PanelCard("Behaviour & visuals")
+
+        # Session-mute toggles (mic / TTS)
+        self._flag_mic = ToggleSwitch(getattr(config, "mic_muted", False))
+        self._flag_mic.toggled.connect(self.mic_muted_changed.emit)
+        panel.add(_section_row("Mute mic", self._flag_mic,
+                               "Block voice capture session-wide. Hotkey: Ctrl+Shift+M."))
+
+        self._flag_tts = ToggleSwitch(getattr(config, "tts_muted", False))
+        self._flag_tts.toggled.connect(self.tts_muted_changed.emit)
+        panel.add(_section_row("Mute TTS", self._flag_tts,
+                               "Suppress spoken responses. Transcript still updates."))
+
+        self._flag_conf = ToggleSwitch(getattr(config, "auto_confirm", False))
+        self._flag_conf.toggled.connect(self.auto_confirm_changed.emit)
+        panel.add(_section_row("Auto-confirm", self._flag_conf,
+                               "Skip confirmation prompts. Destructive actions run instantly."))
+
+        self._flag_dim = ToggleSwitch(getattr(config, "dim_mode", False))
+        self._flag_dim.toggled.connect(self.dim_mode_changed.emit)
+        panel.add(_section_row("Dim mode", self._flag_dim,
+                               "Reduce brightness for low-light use."))
+
+        self._scan_toggle = ToggleSwitch(True)
+        self._scan_toggle.toggled.connect(self.scanline_toggled.emit)
+        panel.add(_section_row("Scanline FX", self._scan_toggle,
+                               "Animated horizontal scanline overlay across the HUD."))
+
+        # ── Theme swatch picker ─────────────────────────────────────────────
+        theme_label = QLabel("HUD THEME")
+        theme_label.setStyleSheet(
+            "QLabel {"
+            f"color: {INK};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 10.5px;"
+            "letter-spacing: 1.5px;"
+            "margin-top: 8px;"
+            "}"
+        )
+        panel.body().addWidget(theme_label)
+
+        swatch_grid = QHBoxLayout()
+        swatch_grid.setSpacing(6)
+        self._swatches: dict[str, _ThemeSwatch] = {}
+        current_theme = getattr(config, "theme", "cyan")
+        for key, name, accent, bg in self._THEMES:
+            sw = _ThemeSwatch(key, name, accent, bg, active=(key == current_theme))
+            sw.clicked.connect(self._on_swatch_clicked)
+            self._swatches[key] = sw
+            swatch_grid.addWidget(sw, 1)
+        panel.body().addLayout(swatch_grid)
+
+        # Hidden field — tracks the selected theme for _apply_cfg to read
+        self._selected_theme = current_theme
+
+        theme_helper = QLabel("5 variants. Stark Cyan is default.")
+        theme_helper.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_FAINT};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "}"
+        )
+        panel.body().addWidget(theme_helper)
+
+        panel.body().addStretch(1)
+        return panel
+
+    # ── Event handlers ───────────────────────────────────────────────────────
+
+    def _on_swatch_clicked(self, key: str) -> None:
+        if key == self._selected_theme:
+            return
+        self._selected_theme = key
+        for k, sw in self._swatches.items():
+            sw.set_active(k == key)
+        self._mark_dirty()
+
+    def _wire_dirty_indicators(self) -> None:
         for sig in (
             self._anthro_key.textChanged,
             self._eleven_key.textChanged,
+            self._gemini_key.textChanged,
             self._vapi_key.textChanged,
             self._wake_input.textChanged,
         ):
             sig.connect(lambda _: self._mark_dirty())
-
         self._voice_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
         self._model_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
-        self._theme_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
         self._debug_toggle.toggled.connect(lambda _: self._mark_dirty())
         self._scan_toggle.toggled.connect(lambda _: self._mark_dirty())
         self._mic_slider.valueChanged.connect(lambda _: self._mark_dirty())
@@ -570,25 +798,26 @@ class SettingsView(QWidget):
         self._noise_toggle.toggled.connect(lambda _: self._mark_dirty())
         self._mic_device_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
 
-    # ── Unsaved indicator ─────────────────────────────────────────────────────
-
-    def _mark_dirty(self):
+    def _mark_dirty(self) -> None:
         self._unsaved_lbl.setVisible(True)
 
-    def _mark_clean(self):
+    def _mark_clean(self) -> None:
         self._unsaved_lbl.setVisible(False)
 
-    # ── Actions ───────────────────────────────────────────────────────────────
+    # ── Actions ──────────────────────────────────────────────────────────────
 
-    def _apply_cfg(self):
+    def _apply_cfg(self) -> None:
         from core.signals import signals
         from core.voice import voice_engine
 
         config.anthropic_api_key = self._anthro_key.text().strip()
         config.elevenlabs_api_key = self._eleven_key.text().strip()
-        config.vapi_api_key       = self._vapi_key.text().strip()
-        config.claude_model       = self._model_combo.currentData()
-        config.wake_word          = self._wake_input.text().strip() or "jarvis"
+        if hasattr(config, "gemini_api_key"):
+            config.gemini_api_key = self._gemini_key.text().strip()
+        config.vapi_api_key      = self._vapi_key.text().strip()
+        config.claude_model      = self._model_combo.currentData()
+        config.wake_word         = self._wake_input.text().strip() or "jarvis"
+
         selected_voice = self._voice_combo.currentData() or config.tts_voice
         voice_err = ""
         if selected_voice != config.tts_voice:
@@ -607,19 +836,19 @@ class SettingsView(QWidget):
                 )
                 self._voice_combo.setCurrentIndex(voice_idx)
         config.tts_voice = selected_voice
-        config.theme              = self._theme_combo.currentData()
-        config.debug_mode         = self._debug_toggle.isChecked()
-        config.mic_sensitivity    = self._mic_slider.value()
-        config.tts_speed          = self._tts_slider.value()
-        config.noise_gate         = self._noise_toggle.isChecked()
-        config.mic_device         = self._mic_device_combo.currentData()
-        # Session flags — capture current toggle state so APPLY_CFG is a
-        # complete snapshot of all settings, not just API/audio fields.
-        config.mic_muted          = self._flag_mic.isChecked()
-        config.tts_muted          = self._flag_tts.isChecked()
-        config.auto_confirm       = self._flag_conf.isChecked()
-        config.dim_mode           = self._flag_dim.isChecked()
-        config.wake_word_enabled  = self._flag_wake.isChecked()
+
+        config.theme            = self._selected_theme
+        config.debug_mode       = self._debug_toggle.isChecked()
+        config.mic_sensitivity  = self._mic_slider.value()
+        config.tts_speed        = self._tts_slider.value()
+        config.noise_gate       = self._noise_toggle.isChecked()
+        config.mic_device       = self._mic_device_combo.currentData()
+        # Session flags snapshot
+        config.mic_muted        = self._flag_mic.isChecked()
+        config.tts_muted        = self._flag_tts.isChecked()
+        config.auto_confirm     = self._flag_conf.isChecked()
+        config.dim_mode         = self._flag_dim.isChecked()
+        config.wake_word_enabled = self._flag_wake.isChecked()
 
         try:
             config.save()
@@ -633,12 +862,10 @@ class SettingsView(QWidget):
 
         QTimer.singleShot(2000, lambda: self._apply_btn.setText("APPLY_CFG"))
 
-    def showEvent(self, event):
-        """Sync input fields from live config each time the Settings page is shown.
+    # ── External hooks ───────────────────────────────────────────────────────
 
-        Prevents stale values (e.g. voice changed via command) from being
-        written back when the user clicks APPLY_CFG.
-        """
+    def showEvent(self, event) -> None:
+        """Re-sync voice combo from live config each time the page is shown."""
         voice_idx = next(
             (i for i in range(self._voice_combo.count())
              if self._voice_combo.itemData(i) == config.tts_voice),
@@ -656,46 +883,20 @@ class SettingsView(QWidget):
         wake_word: bool = True,
     ) -> None:
         """Reflect external flag values without re-emitting toggle signals."""
-        self._flag_mic.setChecked(mic_muted)
-        self._flag_tts.setChecked(tts_muted)
-        self._flag_conf.setChecked(auto_confirm)
-        self._flag_dim.setChecked(dim_mode)
-        self._flag_wake.setChecked(wake_word)
+        for tog, val in (
+            (self._flag_mic,  mic_muted),
+            (self._flag_tts,  tts_muted),
+            (self._flag_conf, auto_confirm),
+            (self._flag_dim,  dim_mode),
+            (self._flag_wake, wake_word),
+        ):
+            tog.blockSignals(True)
+            try:
+                tog.setChecked(val)
+            finally:
+                tog.blockSignals(False)
 
-    @staticmethod
-    def _make_flag_row(
-        layout: QVBoxLayout,
-        label: str,
-        helper: str,
-        warn: bool = False,
-    ) -> ToggleSwitch:
-        row = QWidget()
-        row.setStyleSheet("background:transparent;")
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(0, 5, 0, 5)
-        rl.setSpacing(10)
-        col = QVBoxLayout()
-        col.setSpacing(2)
-        lbl = QLabel(label)
-        lbl.setFont(_mono(9, bold=True))
-        lbl.setStyleSheet(
-            "color:rgba(195,245,255,0.90);letter-spacing:1px;"
-            "background:transparent;border:none;"
-        )
-        col.addWidget(lbl)
-        hlp = QLabel(helper)
-        hlp.setStyleSheet(
-            ("color:rgba(255,219,60,0.85);" if warn else "color:rgba(160,180,185,0.72);")
-            + "font-family:'Roboto Mono';font-size:9px;"
-            "letter-spacing:0.3px;background:transparent;border:none;"
-        )
-        hlp.setWordWrap(True)
-        col.addWidget(hlp)
-        rl.addLayout(col, 1)
-        tog = ToggleSwitch(False)
-        rl.addWidget(tog, 0, Qt.AlignVCenter)
-        layout.addWidget(row)
-        return tog
+    # ── Paint (dotted backdrop) ──────────────────────────────────────────────
 
     def _rebuild_bg(self) -> None:
         w, h = self.width(), self.height()
@@ -706,7 +907,7 @@ class SettingsView(QWidget):
         p = QPainter(px)
         p.fillRect(0, 0, w, h, QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 20))
+        p.setBrush(QColor(0, 229, 255, 18))
         for x in range(0, w + 28, 28):
             for y in range(0, h + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)
@@ -714,11 +915,11 @@ class SettingsView(QWidget):
         self._bg_px = px
         self._bg_sz = (w, h)
 
-    def resizeEvent(self, e: object) -> None:
+    def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         self._bg_px = None
 
-    def paintEvent(self, _):
+    def paintEvent(self, _event) -> None:
         w, h = self.width(), self.height()
         if self._bg_px is None or self._bg_sz != (w, h):
             self._rebuild_bg()
