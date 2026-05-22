@@ -720,13 +720,15 @@ class _CommandStrip(QWidget):
 
     command_sent = pyqtSignal(str)
 
-    # Reserved height in the QVBoxLayout. Intentionally HARDCODED rather
-    # than computed from _InputBlock.INPUT_H so the input card can be made
-    # visually taller (INPUT_H bumps) without shifting the central reactor
-    # or right metrics — the extra block height overflows upward as the
-    # overlay grows past the slot's top edge. 76 = the historical slot size
-    # before the visual height bump (INPUT_H 50 + GLOW_H 26).
-    _SLOT_HEIGHT = 76
+    # Reserved height in the QVBoxLayout. Sized to fit the full collapsed
+    # block (INPUT_H + GLOW_H) so the block never overflows upward into
+    # cols — that overflow was visibly clipping the input's top edge.
+    # Net effect: the strip is ~20px taller than the pre-bump version, so
+    # the reactor + right metrics shift up by ~20px (acceptable; the user
+    # asked for the input to sit closer to the footer). When the user
+    # types multiple lines, the internal scrollbar handles overflow within
+    # the locked editor viewport — the block still doesn't grow.
+    _SLOT_HEIGHT = _InputBlock.INPUT_H + _InputBlock.GLOW_H
 
     def __init__(self, parent=None):
         super().__init__(parent)
