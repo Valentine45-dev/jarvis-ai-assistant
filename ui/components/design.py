@@ -320,16 +320,25 @@ class DivideRow(QFrame):
 
     Caller assembles whatever inner widgets they want via ``row.layout()``.
     Set ``last=True`` on the final row to suppress the divider.
+
+    Important: we explicitly set ``border: none`` BEFORE setting
+    ``border-bottom`` because parent `PanelCard` panels apply
+    ``QFrame { border: 1px solid ... }`` which cascades to this widget
+    (DivideRow IS a QFrame). Without the explicit reset, each row gets a
+    full top/left/right border from the parent cascade and only the
+    bottom from us — looking like a stacked card grid instead of clean
+    divide-y rows.
     """
 
     def __init__(self, *, last: bool = False, padding_y: int = 8, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        underline = "" if last else "border-bottom: 1px solid rgba(0,229,255,0.07);"
         self.setStyleSheet(
             "QFrame {"
             "background: transparent;"
-            + ("" if last else
-               "border-bottom: 1px solid rgba(0,229,255,0.07);")
-            + "}"
+            "border: none;"   # clear top/left/right that would cascade from parent
+            f"{underline}"
+            "}"
         )
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, padding_y, 0, padding_y)

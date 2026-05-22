@@ -346,9 +346,13 @@ def _section_row(
         └─────────────────────────────────────────┘
     """
     w = QFrame(parent)
+    # `border: none` before `border-bottom` so the parent PanelCard's
+    # `QFrame { border: ... }` cascade doesn't paint top/left/right edges
+    # on each row (same bug as DivideRow — see its docstring).
     w.setStyleSheet(
         "QFrame {"
         "background: transparent;"
+        "border: none;"
         "border-bottom: 1px solid rgba(0,229,255,0.07);"
         "}"
     )
