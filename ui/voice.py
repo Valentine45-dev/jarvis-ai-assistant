@@ -353,12 +353,12 @@ class VoiceView(QWidget):
             "background: transparent;"
             "border: none;"
             f"font-family: '{FM}';"
-            "font-size: 24px;"
+            "font-size: 32px;"
             "font-weight: 700;"
-            "letter-spacing: 4px;"
+            "letter-spacing: 5px;"
             "}"
         )
-        head.addWidget(title)
+        head.addWidget(title, 0, Qt.AlignBottom)
 
         subtitle = QLabel("COMMAND INTERFACE · AUDIO PIPELINE")
         subtitle.setStyleSheet(
@@ -369,9 +369,11 @@ class VoiceView(QWidget):
             f"font-family: '{FM}';"
             "font-size: 10px;"
             "letter-spacing: 2px;"
+            "padding-bottom: 6px;"  # nudge the baseline up so it visually
+                                    # sits alongside the bigger title's lower-case zone
             "}"
         )
-        head.addWidget(subtitle)
+        head.addWidget(subtitle, 0, Qt.AlignBottom)
         head.addStretch(1)
         root.addLayout(head)
 

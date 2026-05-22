@@ -81,12 +81,12 @@ class AutomationView(QWidget):
             "background: transparent;"
             "border: none;"
             f"font-family: '{FM}';"
-            "font-size: 24px;"
+            "font-size: 32px;"
             "font-weight: 700;"
-            "letter-spacing: 4px;"
+            "letter-spacing: 5px;"
             "}"
         )
-        head.addWidget(title)
+        head.addWidget(title, 0, Qt.AlignBottom)
 
         subtitle = QLabel("WORKFLOW ORCHESTRATOR · ROUTINE MANAGEMENT")
         subtitle.setStyleSheet(
@@ -97,9 +97,10 @@ class AutomationView(QWidget):
             f"font-family: '{FM}';"
             "font-size: 10px;"
             "letter-spacing: 2px;"
+            "padding-bottom: 6px;"
             "}"
         )
-        head.addWidget(subtitle)
+        head.addWidget(subtitle, 0, Qt.AlignBottom)
         head.addStretch(1)
 
         self._new_btn = QPushButton("+ NEW WORKFLOW")
