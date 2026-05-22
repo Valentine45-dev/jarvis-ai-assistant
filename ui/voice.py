@@ -407,11 +407,15 @@ class VoiceView(QWidget):
         lay.setSpacing(28)  # the visual "gap" between metrics — mockup uses 14px,
                             # bumped here to compensate for the lost dividers
 
-        # 5 tiles
+        # 5 tiles. Per-metric value sizes mirror the HTML mockup explicitly:
+        # Capture lvl is the largest (32px) because "−18" is the hero number;
+        # State sits at 22 because LISTENING is short and bold-cased;
+        # text-heavy metrics (Device, TTS) get 14 to avoid wrapping; Wake gets
+        # 18 because `"jarvis"` is short but should read prominently.
         self._hm_state = HeroMetric("State", "IDLE", sub="mic closed",
-                                    value_color=INK_DIM, value_size=20)
+                                    value_color=INK_DIM, value_size=22)
         self._hm_capture = HeroMetric("Capture lvl", "—", unit="dB",
-                                      sub="ambient only", value_size=22)
+                                      sub="ambient only", value_size=32)
         device_name = "Default · 16kHz"
         if config.mic_device != -1:
             try:
@@ -422,13 +426,13 @@ class VoiceView(QWidget):
                 pass
         self._hm_device = HeroMetric("Device", device_name,
                                      sub=("noise-gate ON" if config.noise_gate else "noise-gate OFF"),
-                                     value_size=12)
+                                     value_size=14)
         self._hm_wake = HeroMetric("Wake word", f'"{config.wake_word}"',
                                    sub="listening" if config.wake_word_enabled else "disabled",
                                    value_color=GREEN if config.wake_word_enabled else INK_DIM,
-                                   value_size=16)
+                                   value_size=18)
         self._hm_tts = HeroMetric("TTS provider", "—", sub="resolving…",
-                                  value_size=12)
+                                  value_size=14)
         self._refresh_tts_tile()
 
         for metric in (self._hm_state, self._hm_capture, self._hm_device,
