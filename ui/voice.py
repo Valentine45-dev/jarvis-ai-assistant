@@ -392,30 +392,18 @@ class VoiceView(QWidget):
 
     # ── Builders ─────────────────────────────────────────────────────────────
 
-    def _build_hero_strip(self) -> QFrame:
-        wrap = QFrame()
-        wrap.setStyleSheet(
-            "QFrame {"
-            f"background: {BG_PANEL};"
-            f"border: 1px solid {CYAN_FAINT};"
-            "}"
-        )
+    def _build_hero_strip(self) -> QWidget:
+        """Top 5-metric row. No outer container, no dividers between cells —
+        the dotted page backdrop shows through. Metrics float on it as
+        labels + values, separated by horizontal gap. Mirrors the HTML
+        mockup layout exactly.
+        """
+        wrap = QWidget()
+        wrap.setStyleSheet("QWidget { background: transparent; }")
         lay = QHBoxLayout(wrap)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        def _cell(metric: HeroMetric, *, last: bool = False) -> QWidget:
-            cell = QFrame()
-            cell.setStyleSheet(
-                "QFrame {"
-                "background: transparent;"
-                + ("border: none;" if last else f"border-right: 1px solid {CYAN_FAINT};")
-                + "}"
-            )
-            cl = QVBoxLayout(cell)
-            cl.setContentsMargins(16, 12, 16, 12)
-            cl.addWidget(metric)
-            return cell
+        lay.setContentsMargins(4, 6, 4, 6)
+        lay.setSpacing(28)  # the visual "gap" between metrics — mockup uses 14px,
+                            # bumped here to compensate for the lost dividers
 
         # 5 tiles
         self._hm_state = HeroMetric("State", "IDLE", sub="mic closed",
@@ -441,11 +429,9 @@ class VoiceView(QWidget):
                                   value_size=12)
         self._refresh_tts_tile()
 
-        lay.addWidget(_cell(self._hm_state), 1)
-        lay.addWidget(_cell(self._hm_capture), 1)
-        lay.addWidget(_cell(self._hm_device), 1)
-        lay.addWidget(_cell(self._hm_wake), 1)
-        lay.addWidget(_cell(self._hm_tts, last=True), 1)
+        for metric in (self._hm_state, self._hm_capture, self._hm_device,
+                       self._hm_wake, self._hm_tts):
+            lay.addWidget(metric, 1)
         return wrap
 
     def _refresh_tts_tile(self) -> None:

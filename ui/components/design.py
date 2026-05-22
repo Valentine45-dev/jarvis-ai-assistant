@@ -223,19 +223,21 @@ class HeroMetric(QWidget):
         lay.setSpacing(2)
 
         self._label = QLabel(label.upper())
+        # NOTE: `border: none` is mandatory on every inner QLabel — QLabel
+        # subclasses QFrame, so a parent's `QFrame { border-right: ... }`
+        # stylesheet selector cascades and paints a border on the label
+        # itself. The explicit `border: none` blocks that.
         self._label.setStyleSheet(
             "QLabel {"
-            f"color: {CYAN};"
+            "color: rgba(0,229,255,0.78);"
             "background: transparent;"
+            "border: none;"
             f"font-family: '{FM}';"
             "font-size: 9px;"
             "font-weight: 700;"
             "letter-spacing: 2.2px;"
             "}"
         )
-        # 78% opacity look — Qt doesn't have alpha on stylesheet font color cleanly;
-        # use a slightly desaturated cyan instead.
-        self._label.setStyleSheet(self._label.styleSheet().replace(CYAN, "rgba(0,229,255,0.78)"))
         lay.addWidget(self._label)
 
         # Value row: large number + optional small inline unit
@@ -247,6 +249,7 @@ class HeroMetric(QWidget):
             "QLabel {"
             f"color: {value_color};"
             "background: transparent;"
+            "border: none;"
             f"font-family: '{FM}';"
             f"font-size: {value_size}px;"
             "font-weight: 700;"
@@ -260,6 +263,7 @@ class HeroMetric(QWidget):
             "QLabel {"
             f"color: {INK_FAINT};"
             "background: transparent;"
+            "border: none;"
             f"font-family: '{FM}';"
             "font-size: 10px;"
             "letter-spacing: 1px;"
@@ -274,6 +278,7 @@ class HeroMetric(QWidget):
             "QLabel {"
             f"color: {INK_DIM};"
             "background: transparent;"
+            "border: none;"
             f"font-family: '{FM}';"
             "font-size: 10px;"
             "}"
@@ -293,6 +298,7 @@ class HeroMetric(QWidget):
                 "QLabel {"
                 f"color: {color};"
                 "background: transparent;"
+                "border: none;"
                 f"font-family: '{FM}';"
                 f"font-size: {self._value_size}px;"
                 "font-weight: 700;"
