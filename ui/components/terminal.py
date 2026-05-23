@@ -13,6 +13,7 @@ Redesigned 2026-05 to match the shared HUD grammar:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -33,6 +34,7 @@ from PyQt5.QtWidgets import (
 from core.signals import signals
 from ui.components.design import (
     BG_PANEL,
+    ChipFilter,
     CYAN_FAINT,
     CYAN_SOFT,
     INK,
@@ -41,6 +43,24 @@ from ui.components.design import (
     PanelCard,
 )
 from ui.theme import BG, CYAN, FM, PRIMARY
+
+
+# ── Output block model (used by the @tag filter) ─────────────────────────────
+#
+# The terminal output stream is rendered into a single QTextEdit, but the
+# @ALL/@CODE/@FILES/@BROWSER chip filter needs to hide/show whole COMMANDS
+# (one user prompt + its echoed response lines together). We solve that by
+# keeping an in-memory ordered list of blocks: every block is either a
+# system message (always visible) or a command (filterable by its tag).
+# On every chip switch we clear the QTextEdit and re-paint from the
+# filtered block list. Mild flicker on filter change — fine in practice.
+
+
+@dataclass
+class _Block:
+    kind: str                              # "system" | "command"
+    tag: str = "other"                     # "code" | "files" | "browser" | "other" — for command blocks only
+    lines: list[tuple[str, str]] = field(default_factory=list)  # (text, color)
 
 
 # ── Stream colour constants ──────────────────────────────────────────────────
@@ -120,6 +140,13 @@ class TerminalPanel(QWidget):
         self._start_time = datetime.now()
         self._cmd_count = 0
         self._recent_btns: list[QPushButton] = []
+        # Output block model (see _Block docstring above).
+        self._blocks: list[_Block] = []
+        self._cur_block: Optional[_Block] = None
+        # @tag filter state — "all" shows everything, otherwise filters
+        # command blocks whose .tag matches.
+        self._active_tag_filter: str = "all"
+        self._tag_chips: dict[str, ChipFilter] = {}
 
         self._setup_ui()
         self._connect_signals()
@@ -194,6 +221,19 @@ class TerminalPanel(QWidget):
         )
         head.addWidget(self._session_lbl)
         head.addStretch(1)
+
+        # @tag filter chips — ALL / CODE / FILES / BROWSER. Click filters
+        # the visible command blocks by their tag. ALL is the no-filter case.
+        for key, label in (
+            ("all",     "@ALL"),
+            ("code",    "@CODE"),
+            ("files",   "@FILES"),
+            ("browser", "@BROWSER"),
+        ):
+            chip = ChipFilter(label, active=(key == "all"))
+            chip.clicked.connect(lambda _checked, k=key: self._on_tag_chip_clicked(k))
+            self._tag_chips[key] = chip
+            head.addWidget(chip)
 
         self._btn_clear = self._mini_btn("⌫ CLEAR")
         self._btn_clear.clicked.connect(self.clear_output)
@@ -440,7 +480,10 @@ class TerminalPanel(QWidget):
         # Echo + dispatch. If the user typed a @tag prefix themselves, pass
         # verbatim. Otherwise default to the @code routing so the executor
         # picks the right intent for shell-style inputs.
-        self._append_colored(f"❯ {text}", _COL_CMD)
+        # Open a fresh command block so subsequent streamed lines belong
+        # to this command (and the @tag filter can hide it as a unit).
+        self._begin_command_block(self._classify_tag(text))
+        self._record_into_current(f"❯ {text}", _COL_CMD)
         if text.startswith("@"):
             self.command_submitted.emit(text)
         else:
@@ -464,30 +507,32 @@ class TerminalPanel(QWidget):
         is_cmd = line.startswith("❯ ")
         is_step = line.startswith("── Step") or line.startswith("──")
         if is_cmd:
-            self._append_colored(line, _COL_CMD)
+            self._record_into_current(line, _COL_CMD)
         elif is_step:
-            self._append_colored(line, _COL_MUTED)
+            self._record_into_current(line, _COL_MUTED)
         elif any(w in lower for w in _ERROR_WORDS):
-            self._append_colored(line, _COL_STDERR)
+            self._record_into_current(line, _COL_STDERR)
         else:
-            self._append_colored(line, _COL_STDOUT)
+            self._record_into_current(line, _COL_STDOUT)
 
     def _on_done(self, exit_code: int) -> None:
         if exit_code == 0:
-            self._append_colored(f"[OK] exit 0", _COL_SUCCESS)
+            self._record_into_current(f"[OK] exit 0", _COL_SUCCESS)
         else:
-            self._append_colored(f"[ERR {exit_code}]", _COL_FAIL)
-        self._append_colored("─" * 64, _COL_MUTED)
+            self._record_into_current(f"[ERR {exit_code}]", _COL_FAIL)
+        self._record_into_current("─" * 64, _COL_MUTED)
 
     # ── Public helpers ───────────────────────────────────────────────────────
 
     def append_jarvis_response(self, text: str) -> None:
         """Show JARVIS's spoken explanation in the terminal output."""
-        self._append_colored(f"◈ {text}", _COL_WARNING)
-        self._append_colored("─" * 64, _COL_MUTED)
+        self._record_into_current(f"◈ {text}", _COL_WARNING)
+        self._record_into_current("─" * 64, _COL_MUTED)
 
     def clear_output(self) -> None:
         self._output.clear()
+        self._blocks.clear()
+        self._cur_block = None
         self._append_system("Terminal cleared.")
 
     # ── Dev helper (Ctrl+Shift+D) ────────────────────────────────────────────
@@ -499,31 +544,38 @@ class TerminalPanel(QWidget):
     # affordance, not a user feature. Safe to leave behind because it has
     # no side-effects beyond writing to the local QTextEdit + sidebar list.
 
-    _DEMO_ROWS: tuple[tuple[str, str, str, str, str], ...] = (
-        # (HH:MM:SS, prompt, intent_label, response, color_kind)
+    _DEMO_ROWS: tuple[tuple[str, str, str, str, str, str], ...] = (
+        # (HH:MM:SS, prompt, intent_label, response, color_kind, tag)
+        # 'tag' drives the @CODE/@FILES/@BROWSER chip filter — picked here
+        # explicitly so the demo covers each bucket cleanly.
         ("03:31:05", "create a file called notes.txt in Downloads",
-         "FILE",    "Created notes.txt in Downloads.",          "ok"),
+         "FILE",    "Created notes.txt in Downloads.",          "ok",   "files"),
         ("03:32:22", "switch to the youtube tab",
-         "BROWSER", "Switching to YouTube.",                    "ok"),
+         "BROWSER", "Switching to YouTube.",                    "ok",   "browser"),
         ("03:33:48", "what's on my screen",
          "VISION",  "Taking a look — JARVIS HUD with the reactor visible.",
-         "ok"),
+         "ok",   "other"),
         ("03:34:01", "open spotify",
-         "FAIL",    "Couldn't open Spotify — file not found.",  "fail"),
+         "FAIL",    "Couldn't open Spotify — file not found.",  "fail", "other"),
         ("03:35:12", "tell me a joke",
          "META",    "Why do programmers prefer dark mode? Because light attracts bugs.",
-         "ok"),
+         "ok",   "other"),
         ("03:36:30", "@code git status",
-         "CODE",    "On branch main · clean working tree.",     "ok"),
+         "CODE",    "On branch main · clean working tree.",     "ok",   "code"),
     )
 
     def seed_demo(self) -> None:
-        """Inject fake commands so the terminal looks 'used' for UI tests."""
+        """Inject fake commands so the terminal looks 'used' for UI tests.
+
+        Each row is recorded as its own command block with an explicit tag,
+        so the @CODE/@FILES/@BROWSER chips actually filter the seeded data.
+        """
         self._append_system("DEMO MODE — seeded 6 fake commands. No API calls were made.")
-        for ts, prompt, intent, response, kind in self._DEMO_ROWS:
-            self._append_colored(f"[{ts}] ❯ {prompt}",          _COL_MUTED)
+        for ts, prompt, intent, response, kind, tag in self._DEMO_ROWS:
+            self._begin_command_block(tag)
+            self._record_into_current(f"[{ts}] ❯ {prompt}", _COL_MUTED)
             color = _COL_FAIL if kind == "fail" else _COL_STDOUT
-            self._append_colored(f"   [{intent}] {response}",   color)
+            self._record_into_current(f"   [{intent}] {response}", color)
             # Mirror what _on_submit does so the sidebar + counter stay in sync.
             self._cmd_history.append(prompt)
             self._cmd_count += 1
@@ -531,12 +583,85 @@ class TerminalPanel(QWidget):
         self._refresh_recent_sidebar()
         self._refresh_session_label()
 
+    # ── Tag classification + filter wiring ───────────────────────────────────
+
+    @staticmethod
+    def _classify_tag(text: str) -> str:
+        """Map a user-typed command to one of the chip buckets. Drives both
+        the per-command tag attribute and the filter predicate."""
+        t = text.strip().lower()
+        if t.startswith("@code"):
+            return "code"
+        if t.startswith("@files") or t.startswith("@file"):
+            return "files"
+        if t.startswith("@browser"):
+            return "browser"
+        # Untagged commands default-route through @code (see _on_submit),
+        # so treat them as code for the filter too.
+        return "code"
+
+    def _on_tag_chip_clicked(self, key: str) -> None:
+        for k, chip in self._tag_chips.items():
+            chip.setChecked(k == key)
+            chip._refresh_style()  # noqa: SLF001 — internal helper, ok here
+        self._active_tag_filter = key
+        self._rerender()
+
+    def _block_visible(self, block: _Block) -> bool:
+        """Filter predicate. System blocks are always visible; command blocks
+        are visible when the active filter is 'all' or matches their tag."""
+        if block.kind == "system":
+            return True
+        return self._active_tag_filter == "all" or block.tag == self._active_tag_filter
+
+    def _rerender(self) -> None:
+        """Clear the QTextEdit and re-paint from the filtered block list."""
+        self._output.clear()
+        for block in self._blocks:
+            if not self._block_visible(block):
+                continue
+            for text, color in block.lines:
+                self._paint(text, color)
+
     # ── Internal rendering ───────────────────────────────────────────────────
 
     def _append_system(self, msg: str) -> None:
-        self._append_colored(f"⬡  {msg}", _COL_WARNING)
+        # System messages are their own one-line block — always visible
+        # regardless of filter. Use this for app banners, save errors,
+        # "terminal cleared", and the welcome line.
+        block = _Block(kind="system")
+        text = f"⬡  {msg}"
+        block.lines.append((text, _COL_WARNING))
+        self._blocks.append(block)
+        # System block doesn't become _cur_block — it's standalone.
+        self._paint(text, _COL_WARNING)
+
+    def _begin_command_block(self, tag: str) -> _Block:
+        """Open a new command block. Subsequent _record_into_current() calls
+        accumulate into it until the next call to this method."""
+        block = _Block(kind="command", tag=tag)
+        self._blocks.append(block)
+        self._cur_block = block
+        return block
+
+    def _record_into_current(self, text: str, color: str) -> None:
+        """Append a colored line to the current command block (if any) AND
+        paint it. Used by streaming handlers (_on_line / _on_done) and the
+        public ``append_jarvis_response``."""
+        if self._cur_block is not None:
+            self._cur_block.lines.append((text, color))
+        self._paint(text, color)
 
     def _append_colored(self, text: str, color: str) -> None:
+        """Back-compat shim — most callers now route through
+        _record_into_current or _append_system. Anything that still calls
+        this raw method paints without going into the block list (i.e.
+        won't survive a filter rerender). Kept for any future caller that
+        genuinely wants unfilterable raw text."""
+        self._paint(text, color)
+
+    def _paint(self, text: str, color: str) -> None:
+        """Pure QTextEdit write — no block bookkeeping."""
         cursor = self._output.textCursor()
         cursor.movePosition(QTextCursor.End)
         fmt = cursor.charFormat()
