@@ -23,6 +23,10 @@ data/session_history.db-wal
 data/session_history.json
 data/response_history.jsonl
 data/memory.jsonl
+# Per-step latency telemetry — rewritten on every successful workflow run.
+# Machine-specific noise that would create constant diff churn; the rolling
+# avg surfaces in the UI either way once a workflow has been run locally.
+data/workflow_metrics.json
 
 # Runtime logs (local only — churn on every run)
 logs/
