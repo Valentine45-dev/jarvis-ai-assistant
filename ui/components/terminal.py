@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QShortcut,
     QTextEdit,
     QVBoxLayout,
@@ -37,30 +38,184 @@ from ui.components.design import (
     ChipFilter,
     CYAN_FAINT,
     CYAN_SOFT,
+    GREEN,
+    GREEN_DIM,
     INK,
     INK_DIM,
     INK_FAINT,
+    IntentBadge,
     PanelCard,
 )
 from ui.theme import BG, CYAN, FM, PRIMARY
 
 
-# ── Output block model (used by the @tag filter) ─────────────────────────────
+# ── Output block model ───────────────────────────────────────────────────────
 #
-# The terminal output stream is rendered into a single QTextEdit, but the
-# @ALL/@CODE/@FILES/@BROWSER chip filter needs to hide/show whole COMMANDS
-# (one user prompt + its echoed response lines together). We solve that by
-# keeping an in-memory ordered list of blocks: every block is either a
-# system message (always visible) or a command (filterable by its tag).
-# On every chip switch we clear the QTextEdit and re-paint from the
-# filtered block list. Mild flicker on filter change — fine in practice.
+# Each block is a self-contained unit in the terminal output:
+#   * ``system`` blocks are app notices (welcome line, "terminal cleared",
+#     DEMO MODE banner, save errors). Always visible regardless of filter.
+#   * ``command`` blocks are one user prompt + its echoed response. Filtered
+#     as a unit by the @ALL/@CODE/@FILES/@BROWSER chip row.
+#
+# Blocks are rendered into a scrollable QWidget container — one widget per
+# block — so the chip styling, multi-line indent, and per-command spacing
+# can be done properly with real QLabels instead of fighting QTextEdit's
+# limited HTML support.
 
 
 @dataclass
 class _Block:
-    kind: str                              # "system" | "command"
-    tag: str = "other"                     # "code" | "files" | "browser" | "other" — for command blocks only
-    lines: list[tuple[str, str]] = field(default_factory=list)  # (text, color)
+    kind: str                          # "system" | "command"
+    tag: str = "other"                 # "code" | "files" | "browser" | "other" (command blocks)
+    # ── command-block fields ──
+    ts: str = ""                       # "HH:MM:SS" timestamp (or "")
+    prompt: str = ""                   # user-typed command
+    intent: str = ""                   # short intent label for the badge ("file" / "vision" / …)
+                                       # — empty means no badge rendered (e.g. mid-stream real cmds)
+    response: str = ""                 # one-line JARVIS reply that pairs with the badge
+    response_color: str = INK          # color used for ``response`` (RED for failures)
+    extras: list[tuple[str, str]] = field(default_factory=list)
+                                       # additional lines under the response: (text, color)
+    # ── system-block fields ──
+    system_text: str = ""              # message body for ``system`` blocks
+
+
+# ── Row widgets ──────────────────────────────────────────────────────────────
+
+
+_TS_FONT_SIZE     = 11
+_PROMPT_FONT_SIZE = 12
+_BODY_FONT_SIZE   = 11
+_BODY_INDENT      = 24    # px of left padding under the prompt for body lines
+
+
+class _SystemRow(QLabel):
+    """Single-line app notice with the ⬡ glyph."""
+
+    def __init__(self, text: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(f"⬡  {text}", parent)
+        self.setWordWrap(True)
+        self.setStyleSheet(
+            "QLabel {"
+            f"color: {CYAN};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            f"font-size: {_BODY_FONT_SIZE}px;"
+            "padding: 2px 0;"
+            "letter-spacing: 0.5px;"
+            "}"
+        )
+
+
+class _CommandRow(QFrame):
+    """One command block rendered as a real widget tree.
+
+    Layout (matches the HTML mockup):
+
+        [HH:MM:SS]  ❯ user prompt text                       ← header row
+                    [BADGE]  one-line JARVIS reply           ← response row
+                    additional dim detail line 1             ← extras
+                    additional dim detail line 2
+
+    The badge is reused from the design system's ``IntentBadge``, so colors
+    track the rest of the app (cyan FILE/BROWSER/CODE/META, purple VISION,
+    red FAIL, amber SYSTEM, etc.).
+    """
+
+    def __init__(self, block: _Block, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet("QFrame { background: transparent; border: none; }")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(3)
+
+        # ── Header row: [ts] ❯ prompt ───────────────────────────────────────
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        header.setContentsMargins(0, 0, 0, 0)
+
+        if block.ts:
+            ts_lbl = QLabel(f"[{block.ts}]")
+            ts_lbl.setStyleSheet(
+                "QLabel {"
+                f"color: {INK_FAINT};"
+                "background: transparent;"
+                "border: none;"
+                f"font-family: '{FM}';"
+                f"font-size: {_TS_FONT_SIZE}px;"
+                "}"
+            )
+            header.addWidget(ts_lbl)
+
+        arrow = QLabel("❯")
+        arrow.setStyleSheet(
+            "QLabel {"
+            f"color: {GREEN_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            f"font-size: {_PROMPT_FONT_SIZE}px;"
+            "font-weight: 700;"
+            "}"
+        )
+        header.addWidget(arrow)
+
+        prompt_lbl = QLabel(block.prompt or "")
+        prompt_lbl.setWordWrap(True)
+        prompt_lbl.setStyleSheet(
+            "QLabel {"
+            f"color: {GREEN};"   # mockup uses lime green for the user input
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            f"font-size: {_BODY_FONT_SIZE}px;"
+            "}"
+        )
+        header.addWidget(prompt_lbl, 1)
+        outer.addLayout(header)
+
+        # ── Response row: [badge] response text ─────────────────────────────
+        if block.response or block.intent:
+            body = QHBoxLayout()
+            body.setSpacing(8)
+            body.setContentsMargins(_BODY_INDENT, 0, 0, 0)
+
+            if block.intent:
+                body.addWidget(IntentBadge(block.intent), 0, Qt.AlignTop)
+
+            if block.response:
+                resp = QLabel(block.response)
+                resp.setWordWrap(True)
+                resp.setStyleSheet(
+                    "QLabel {"
+                    f"color: {block.response_color or INK};"
+                    "background: transparent;"
+                    "border: none;"
+                    f"font-family: '{FM}';"
+                    f"font-size: {_BODY_FONT_SIZE}px;"
+                    "}"
+                )
+                body.addWidget(resp, 1, Qt.AlignTop)
+            else:
+                body.addStretch(1)
+            outer.addLayout(body)
+
+        # ── Extra lines (dim by default, color-tagged when caller cares) ───
+        for text, color in block.extras:
+            extra = QLabel(text)
+            extra.setWordWrap(True)
+            extra.setStyleSheet(
+                "QLabel {"
+                f"color: {color or INK_DIM};"
+                "background: transparent;"
+                "border: none;"
+                f"font-family: '{FM}';"
+                f"font-size: {_BODY_FONT_SIZE}px;"
+                f"padding-left: {_BODY_INDENT}px;"
+                "}"
+            )
+            outer.addWidget(extra)
 
 
 # ── Stream colour constants ──────────────────────────────────────────────────
@@ -141,6 +296,10 @@ class TerminalPanel(QWidget):
         # Output block model (see _Block docstring above).
         self._blocks: list[_Block] = []
         self._cur_block: Optional[_Block] = None
+        # block_id → widget mapping so we can replace one block's row in
+        # place when its data changes (e.g. a streamed line arrives) without
+        # flickering the whole panel.
+        self._block_widgets: dict[int, QWidget] = {}
         # @tag filter state — "all" shows everything, otherwise filters
         # command blocks whose .tag matches.
         self._active_tag_filter: str = "all"
@@ -251,21 +410,18 @@ class TerminalPanel(QWidget):
             f"border-left: 2px solid {CYAN};"
             "}"
         )
-        lay = QVBoxLayout(wrap)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        wrap_lay = QVBoxLayout(wrap)
+        wrap_lay.setContentsMargins(0, 0, 0, 0)
+        wrap_lay.setSpacing(0)
 
-        self._output = QTextEdit()
-        self._output.setReadOnly(True)
-        self._output.setFont(QFont(FM, 11))
-        self._output.setStyleSheet(
-            "QTextEdit {"
-            "background: transparent;"
-            f"color: {CYAN};"
-            "border: none;"
-            "padding: 12px 14px;"
-            f"selection-background-color: rgba(0,229,255,0.20);"
-            "}"
+        # Scrollable container of block widgets (one widget per _Block).
+        # 14px spacing between blocks gives the per-command breathing room
+        # the mockup shows; 16/14 outer padding mirrors the other panels.
+        self._output_scroll = QScrollArea()
+        self._output_scroll.setWidgetResizable(True)
+        self._output_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._output_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
             "QScrollBar:vertical { background: transparent; width: 6px; }"
             "QScrollBar::handle:vertical {"
             "background: rgba(0,229,255,0.30); border-radius: 3px; min-height: 20px;"
@@ -273,7 +429,16 @@ class TerminalPanel(QWidget):
             "QScrollBar::handle:vertical:hover { background: rgba(0,229,255,0.55); }"
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height: 0; }"
         )
-        lay.addWidget(self._output)
+
+        self._output_container = QWidget()
+        self._output_container.setStyleSheet("QWidget { background: transparent; }")
+        self._output_lay = QVBoxLayout(self._output_container)
+        self._output_lay.setContentsMargins(16, 14, 16, 14)
+        self._output_lay.setSpacing(14)
+        self._output_lay.addStretch(1)   # push rows to the top
+
+        self._output_scroll.setWidget(self._output_container)
+        wrap_lay.addWidget(self._output_scroll)
         return wrap
 
     def _build_sidebar(self) -> QWidget:
@@ -483,8 +648,10 @@ class TerminalPanel(QWidget):
         # picks the right intent for shell-style inputs.
         # Open a fresh command block so subsequent streamed lines belong
         # to this command (and the @tag filter can hide it as a unit).
-        self._begin_command_block(self._classify_tag(text))
-        self._record_into_current(f"❯ {text}", _COL_CMD)
+        block = self._begin_command_block(self._classify_tag(text))
+        block.ts = datetime.now().strftime("%H:%M:%S")
+        block.prompt = text
+        self._rebuild_block_widget(block)
         if text.startswith("@"):
             self.command_submitted.emit(text)
         else:
@@ -496,42 +663,84 @@ class TerminalPanel(QWidget):
         try:
             out_path = Path(__file__).parent.parent.parent / "logs" / "terminal_dump.txt"
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(self._output.toPlainText(), encoding="utf-8")
+            out_path.write_text(self._serialize_buffer(), encoding="utf-8")
             self._append_system(f"Saved to {out_path.name}.")
         except OSError as exc:
-            self._append_colored(f"[save failed] {exc}", _COL_FAIL)
+            self._append_system(f"save failed — {exc}")
+
+    def _serialize_buffer(self) -> str:
+        """Flatten the block model into plain text for the SAVE button."""
+        out: list[str] = []
+        for block in self._blocks:
+            if block.kind == "system":
+                out.append(f"⬡  {block.system_text}")
+            else:
+                header = ""
+                if block.ts:
+                    header += f"[{block.ts}] "
+                header += f"❯ {block.prompt}"
+                out.append(header)
+                if block.intent or block.response:
+                    bits = []
+                    if block.intent:
+                        bits.append(f"[{block.intent.upper()}]")
+                    if block.response:
+                        bits.append(block.response)
+                    out.append("    " + " ".join(bits))
+                for txt, _color in block.extras:
+                    out.append("    " + txt)
+            out.append("")  # blank line between blocks
+        return "\n".join(out)
 
     # ── Signal handlers ──────────────────────────────────────────────────────
 
     def _on_line(self, line: str) -> None:
+        # Streamed lines from a running handler land in the current command
+        # block's ``extras`` so they appear under the prompt + (optional)
+        # response. Color heuristics match the old QTextEdit path so terminal
+        # output, errors, and step dividers stay visually distinct.
         lower = line.lower()
-        is_cmd = line.startswith("❯ ")
         is_step = line.startswith("── Step") or line.startswith("──")
-        if is_cmd:
-            self._record_into_current(line, _COL_CMD)
-        elif is_step:
-            self._record_into_current(line, _COL_MUTED)
+        if is_step:
+            color = _COL_MUTED
         elif any(w in lower for w in _ERROR_WORDS):
-            self._record_into_current(line, _COL_STDERR)
+            color = _COL_STDERR
         else:
-            self._record_into_current(line, _COL_STDOUT)
+            color = _COL_STDOUT
+        self._record_extra(line, color)
 
     def _on_done(self, exit_code: int) -> None:
         if exit_code == 0:
-            self._record_into_current(f"[OK] exit 0", _COL_SUCCESS)
+            self._record_extra("[OK] exit 0", _COL_SUCCESS)
         else:
-            self._record_into_current(f"[ERR {exit_code}]", _COL_FAIL)
-        self._record_into_current("─" * 64, _COL_MUTED)
+            self._record_extra(f"[ERR {exit_code}]", _COL_FAIL)
 
     # ── Public helpers ───────────────────────────────────────────────────────
 
-    def append_jarvis_response(self, text: str) -> None:
-        """Show JARVIS's spoken explanation in the terminal output."""
-        self._record_into_current(f"◈ {text}", _COL_WARNING)
-        self._record_into_current("─" * 64, _COL_MUTED)
+    def append_jarvis_response(self, text: str, *, intent: str = "") -> None:
+        """Show JARVIS's spoken reply in the current command block.
+
+        ``intent`` is optional but recommended — when provided, it drives
+        the colored chip next to the response (FILE / BROWSER / VISION /
+        etc.). Without it the response shows without a badge.
+        """
+        if self._cur_block is None or self._cur_block.kind != "command":
+            # Defensive: no open command (e.g. JARVIS spoke unprompted).
+            # Drop into an extras-only system-flavoured block so the message
+            # is still visible.
+            self._append_system(text)
+            return
+        self._cur_block.response = text
+        if intent:
+            self._cur_block.intent = intent
+        self._rebuild_block_widget(self._cur_block)
 
     def clear_output(self) -> None:
-        self._output.clear()
+        # Drop every spawned widget AND the underlying block model so the
+        # filter / rerender path starts from a clean slate.
+        for w in list(self._block_widgets.values()):
+            w.deleteLater()
+        self._block_widgets.clear()
         self._blocks.clear()
         self._cur_block = None
         self._append_system("Terminal cleared.")
@@ -573,10 +782,30 @@ class TerminalPanel(QWidget):
         """
         self._append_system("DEMO MODE — seeded 6 fake commands. No API calls were made.")
         for ts, prompt, intent, response, kind, tag in self._DEMO_ROWS:
-            self._begin_command_block(tag)
-            self._record_into_current(f"[{ts}] ❯ {prompt}", _COL_MUTED)
-            color = _COL_FAIL if kind == "fail" else _COL_STDOUT
-            self._record_into_current(f"   [{intent}] {response}", color)
+            block = self._begin_command_block(tag)
+            block.ts = ts
+            block.prompt = prompt
+            # Map our short label → IntentBadge's intent key. The chip
+            # constructor accepts either the short label or the full intent
+            # name; we already use short labels here.
+            block.intent = intent.lower()
+            block.response = response
+            block.response_color = _COL_FAIL if kind == "fail" else INK
+            # One demo extra to show what multi-line responses look like.
+            if intent == "FILE":
+                block.extras.append(
+                    ("Path: C:\\Users\\Lenovo\\Downloads\\notes.txt", INK_DIM)
+                )
+            elif intent == "BROWSER":
+                block.extras.append(
+                    ("Active tab: YouTube · Music · Lofi Hip Hop Radio", INK_DIM)
+                )
+            elif intent == "FAIL":
+                block.extras.append(
+                    ("WinError 2: The system cannot find the file specified: 'Spotify'",
+                     _COL_FAIL),
+                )
+            self._rebuild_block_widget(block)
             # Mirror what _on_submit does so the sidebar + counter stay in sync.
             self._cmd_history.append(prompt)
             self._cmd_count += 1
@@ -615,62 +844,101 @@ class TerminalPanel(QWidget):
             return True
         return self._active_tag_filter == "all" or block.tag == self._active_tag_filter
 
-    def _rerender(self) -> None:
-        """Clear the QTextEdit and re-paint from the filtered block list."""
-        self._output.clear()
-        for block in self._blocks:
-            if not self._block_visible(block):
-                continue
-            for text, color in block.lines:
-                self._paint(text, color)
+    # ── Widget-based rendering ───────────────────────────────────────────────
+    #
+    # The output panel is a QScrollArea wrapping a QVBoxLayout of one widget
+    # per block. Three operations matter:
+    #   * append_block — block created, spawn its widget at the end
+    #   * rebuild_block — block data changed, swap widget in place
+    #   * rerender — filter changed, clear + respawn visible blocks
+    # The block_id → widget dict makes the swap O(1).
 
-    # ── Internal rendering ───────────────────────────────────────────────────
+    def _spawn_widget(self, block: _Block) -> QWidget:
+        if block.kind == "system":
+            return _SystemRow(block.system_text)
+        return _CommandRow(block)
+
+    def _append_block_widget(self, block: _Block) -> None:
+        if not self._block_visible(block):
+            return
+        widget = self._spawn_widget(block)
+        self._block_widgets[id(block)] = widget
+        # Insert above the trailing stretch (always the last item).
+        self._output_lay.insertWidget(self._output_lay.count() - 1, widget)
+        self._scroll_to_bottom()
+
+    def _rebuild_block_widget(self, block: _Block) -> None:
+        """Replace this block's widget in place. Called after the block's
+        data changes (streamed line, response set, etc.)."""
+        old = self._block_widgets.get(id(block))
+        if old is None:
+            # Block isn't currently rendered (e.g. filter is hiding it OR
+            # the widget hasn't been spawned yet). Append if visible.
+            if self._block_visible(block):
+                self._append_block_widget(block)
+            return
+        # Find the index of the old widget and replace it.
+        idx = self._output_lay.indexOf(old)
+        if idx < 0:
+            return
+        old.deleteLater()
+        if self._block_visible(block):
+            new = self._spawn_widget(block)
+            self._block_widgets[id(block)] = new
+            self._output_lay.insertWidget(idx, new)
+        else:
+            del self._block_widgets[id(block)]
+        self._scroll_to_bottom()
+
+    def _rerender(self) -> None:
+        """Full clear + respawn from filtered _blocks. Used on filter switch."""
+        for w in list(self._block_widgets.values()):
+            w.deleteLater()
+        self._block_widgets.clear()
+        for block in self._blocks:
+            if self._block_visible(block):
+                widget = self._spawn_widget(block)
+                self._block_widgets[id(block)] = widget
+                self._output_lay.insertWidget(self._output_lay.count() - 1, widget)
+
+    def _scroll_to_bottom(self) -> None:
+        # Defer to give Qt time to lay the new widget out before we ask
+        # the scrollbar for its new max value.
+        QTimer.singleShot(0, lambda: (
+            self._output_scroll.verticalScrollBar().setValue(
+                self._output_scroll.verticalScrollBar().maximum()
+            )
+        ))
+
+    # ── Block lifecycle ──────────────────────────────────────────────────────
 
     def _append_system(self, msg: str) -> None:
-        # System messages are their own one-line block — always visible
-        # regardless of filter. Use this for app banners, save errors,
-        # "terminal cleared", and the welcome line.
-        block = _Block(kind="system")
-        text = f"⬡  {msg}"
-        block.lines.append((text, _COL_WARNING))
+        """System notice — its own one-line block, always visible."""
+        block = _Block(kind="system", system_text=msg)
         self._blocks.append(block)
-        # System block doesn't become _cur_block — it's standalone.
-        self._paint(text, _COL_WARNING)
+        self._append_block_widget(block)
+        # System blocks don't take over _cur_block — they're standalone, so
+        # subsequent streamed lines still belong to whichever command was
+        # mid-flight (none in practice when system messages fire).
 
     def _begin_command_block(self, tag: str) -> _Block:
-        """Open a new command block. Subsequent _record_into_current() calls
-        accumulate into it until the next call to this method."""
+        """Open a new command block. Caller fills in ts/prompt/intent/etc.,
+        then calls _rebuild_block_widget(block) to render it."""
         block = _Block(kind="command", tag=tag)
         self._blocks.append(block)
         self._cur_block = block
+        # Spawn an empty widget shell; caller is expected to populate the
+        # block and call _rebuild_block_widget once data lands.
+        self._append_block_widget(block)
         return block
 
-    def _record_into_current(self, text: str, color: str) -> None:
-        """Append a colored line to the current command block (if any) AND
-        paint it. Used by streaming handlers (_on_line / _on_done) and the
-        public ``append_jarvis_response``."""
-        if self._cur_block is not None:
-            self._cur_block.lines.append((text, color))
-        self._paint(text, color)
-
-    def _append_colored(self, text: str, color: str) -> None:
-        """Back-compat shim — most callers now route through
-        _record_into_current or _append_system. Anything that still calls
-        this raw method paints without going into the block list (i.e.
-        won't survive a filter rerender). Kept for any future caller that
-        genuinely wants unfilterable raw text."""
-        self._paint(text, color)
-
-    def _paint(self, text: str, color: str) -> None:
-        """Pure QTextEdit write — no block bookkeeping."""
-        cursor = self._output.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        fmt = cursor.charFormat()
-        fmt.setForeground(QColor(color))
-        cursor.setCharFormat(fmt)
-        cursor.insertText(text + "\n")
-        self._output.setTextCursor(cursor)
-        self._output.ensureCursorVisible()
+    def _record_extra(self, text: str, color: str) -> None:
+        """Append a colored extra line to the current command block AND
+        re-render it. Used by streaming handlers (_on_line / _on_done)."""
+        if self._cur_block is None or self._cur_block.kind != "command":
+            return
+        self._cur_block.extras.append((text, color))
+        self._rebuild_block_widget(self._cur_block)
 
     def _refresh_session_label(self) -> None:
         # 'session · MM:SS · N commands' (HH:MM:SS once we cross an hour).
