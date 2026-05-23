@@ -195,7 +195,12 @@ class AutomationView(QWidget):
         self._row_container_lay.addStretch(1)
         self._lib_scroll.setWidget(self._row_container)
         self._lib_panel.add(self._lib_scroll, stretch=1)
-        body.addWidget(self._lib_panel, 1)
+        # Mockup width — library is a narrow column (~310px), detail pane takes
+        # the rest. Min/max keeps the ratio stable across window sizes instead
+        # of stretching 50/50 with the breakdown.
+        self._lib_panel.setMinimumWidth(280)
+        self._lib_panel.setMaximumWidth(340)
+        body.addWidget(self._lib_panel, 0)
 
         # RIGHT: step breakdown — action buttons live here now (run / pause /
         # edit / delete + add step). The library rows on the left are
