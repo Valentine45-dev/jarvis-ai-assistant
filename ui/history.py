@@ -574,8 +574,23 @@ class HistoryView(QWidget):
         self._spark.set_entries(entries)
         self._spark_caption.setText(self._spark.peak_summary())
 
+        # Chip counts (ALL · 87, BROWSER · 22, ...)
+        self._refresh_chip_counts(entries)
+
         # Re-render visible rows under the current filter
         self._apply_filter()
+
+    def _refresh_chip_counts(self, entries: list) -> None:
+        """Update each chip's label with its bucket count."""
+        labels = dict(self._CHIPS)
+        for key, chip in self._chip_widgets.items():
+            if key == "all":
+                count = len(entries)
+            elif key == "fail":
+                count = sum(1 for e in entries if e.get("status") == "error")
+            else:
+                count = sum(1 for e in entries if e.get("intent") == key)
+            chip.setText(f"{labels[key].upper()} · {count}")
 
     # ── Paint (dotted backdrop) ──────────────────────────────────────────────
 
