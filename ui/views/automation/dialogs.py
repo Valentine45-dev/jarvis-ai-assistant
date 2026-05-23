@@ -74,22 +74,27 @@ class GlassDialog(QDialog):
 class NewWorkflowDialog(GlassDialog):
     def __init__(self, parent=None, workflow: dict | None = None):
         super().__init__(parent)
-        self.setMinimumWidth(460)
+        # Roomier than before — old 460px / 32px-tall fields felt cramped
+        # against the rest of the redesigned automation surface. Bump every
+        # font + control by ~25-30% so the dialog reads at the same density
+        # as the WorkflowRow / StepBreakdown panels.
+        self.setMinimumWidth(580)
+        self.setMinimumHeight(620)
         is_edit = workflow is not None
 
         title_bar = QWidget()
-        title_bar.setFixedHeight(40)
+        title_bar.setFixedHeight(48)
         title_bar.setStyleSheet("background:transparent;")
         tb = QHBoxLayout(title_bar)
-        tb.setContentsMargins(16, 0, 12, 0)
+        tb.setContentsMargins(18, 0, 14, 0)
         lbl = QLabel("EDIT WORKFLOW" if is_edit else "NEW WORKFLOW")
-        lbl.setFont(_mono(11, bold=True))
-        lbl.setStyleSheet(f"color:{CYAN};letter-spacing:2px;background:transparent;border:none;")
+        lbl.setFont(_mono(13, bold=True))
+        lbl.setStyleSheet(f"color:{CYAN};letter-spacing:2.4px;background:transparent;border:none;")
         x_btn = QPushButton("✕")
-        x_btn.setFixedSize(20, 20)
+        x_btn.setFixedSize(26, 26)
         x_btn.setCursor(Qt.PointingHandCursor)
         x_btn.setStyleSheet(
-            "QPushButton{color:rgba(255,80,80,0.6);background:transparent;border:none;font-size:11px;}"
+            "QPushButton{color:rgba(255,80,80,0.6);background:transparent;border:none;font-size:14px;}"
             "QPushButton:hover{color:rgba(255,80,80,1.0);}"
         )
         x_btn.clicked.connect(self.reject)
@@ -106,8 +111,8 @@ class NewWorkflowDialog(GlassDialog):
         form = QWidget()
         form.setStyleSheet("background:transparent;")
         fl = QVBoxLayout(form)
-        fl.setContentsMargins(16, 14, 16, 16)
-        fl.setSpacing(10)
+        fl.setContentsMargins(20, 18, 20, 20)
+        fl.setSpacing(12)
 
         self._name_inp = self._field(fl, "WORKFLOW NAME", "Morning Routine")
         self._trigger_inp = self._field(fl, "TRIGGER PHRASE", "run morning routine")
@@ -128,7 +133,7 @@ class NewWorkflowDialog(GlassDialog):
         )
         sched_hint.setStyleSheet(
             "color:rgba(132,147,150,0.82);font-family:'Roboto Mono';"
-            "font-size:10px;letter-spacing:0.3px;"
+            "font-size:11.5px;letter-spacing:0.3px;line-height:1.5;"
             "background:transparent;border:none;"
         )
         sched_hint.setWordWrap(True)
@@ -136,15 +141,15 @@ class NewWorkflowDialog(GlassDialog):
         fl.addWidget(sched_hint)
 
         preset_row = QHBoxLayout()
-        preset_row.setSpacing(6)
+        preset_row.setSpacing(8)
         for label, expr in _CRON_PRESETS:
             chip = QPushButton(label)
             chip.setCursor(Qt.PointingHandCursor)
             chip.setStyleSheet(
                 "QPushButton{color:rgba(0,229,255,0.78);"
                 "background:transparent;border:1px solid rgba(0,229,255,0.25);"
-                "border-radius:3px;padding:3px 8px;"
-                "font-family:'Roboto Mono';font-size:9px;font-weight:700;letter-spacing:1px;}"
+                "border-radius:3px;padding:5px 12px;"
+                "font-family:'Roboto Mono';font-size:10.5px;font-weight:700;letter-spacing:1.2px;}"
                 "QPushButton:hover{background:rgba(0,229,255,0.10);}"
             )
             chip.clicked.connect(
@@ -156,20 +161,20 @@ class NewWorkflowDialog(GlassDialog):
 
         steps_lbl = QLabel("STEPS  —  one command per line")
         steps_lbl.setStyleSheet(
-            f"color:{CYAN};font-size:10px;letter-spacing:1.5px;background:transparent;border:none;"
+            f"color:{CYAN};font-size:11.5px;letter-spacing:1.8px;background:transparent;border:none;"
         )
         fl.addWidget(steps_lbl)
 
         self._steps_edit = QTextEdit()
         self._steps_edit.setAcceptRichText(False)
-        self._steps_edit.setMinimumHeight(110)
+        self._steps_edit.setMinimumHeight(160)
         self._steps_edit.setPlaceholderText(
             "open chrome\nsearch youtube for lofi beats\ntake a screenshot"
         )
         self._steps_edit.setStyleSheet(
             "QTextEdit{background:#121a1b;color:#dce4e5;"
             "border:1px solid rgba(0,229,255,0.22);border-radius:4px;"
-            "padding:8px 10px;font-family:'Roboto Mono';font-size:11px;}"
+            "padding:10px 12px;font-family:'Roboto Mono';font-size:13px;}"
             "QTextEdit:focus{border:1px solid rgba(0,229,255,0.55);}"
         )
         self._steps_edit.textChanged.connect(self._update_counter)
@@ -178,7 +183,7 @@ class NewWorkflowDialog(GlassDialog):
         self._counter_lbl = QLabel("0 STEPS")
         self._counter_lbl.setStyleSheet(
             "color:rgba(132,147,150,0.6);font-family:'Roboto Mono';"
-            "font-size:10px;background:transparent;border:none;"
+            "font-size:11px;background:transparent;border:none;"
         )
         fl.addWidget(self._counter_lbl, 0, Qt.AlignRight)
 
@@ -187,24 +192,24 @@ class NewWorkflowDialog(GlassDialog):
         btn_row.addStretch(1)
 
         cancel = QPushButton("CANCEL")
-        cancel.setFixedHeight(30)
+        cancel.setFixedHeight(36)
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.setStyleSheet(
             "QPushButton{color:rgba(132,147,150,0.7);background:transparent;"
             "border:1px solid rgba(132,147,150,0.25);border-radius:4px;"
-            "font-family:'Roboto Mono';font-size:10px;font-weight:700;padding:0 18px;}"
+            "font-family:'Roboto Mono';font-size:11.5px;font-weight:700;padding:0 22px;letter-spacing:1.5px;}"
             "QPushButton:hover{color:rgba(195,245,255,0.8);}"
         )
         cancel.clicked.connect(self.reject)
 
         create = QPushButton("SAVE" if is_edit else "CREATE")
-        create.setFixedHeight(30)
+        create.setFixedHeight(36)
         create.setCursor(Qt.PointingHandCursor)
         create.setDefault(True)
         create.setStyleSheet(
             f"QPushButton{{color:{CYAN};background:rgba(0,229,255,0.08);"
             "border:1px solid rgba(0,229,255,0.35);border-radius:4px;"
-            "font-family:'Roboto Mono';font-size:10px;font-weight:700;padding:0 18px;}"
+            "font-family:'Roboto Mono';font-size:11.5px;font-weight:700;padding:0 22px;letter-spacing:1.5px;}"
             "QPushButton:hover{background:rgba(0,229,255,0.20);}"
         )
         create.clicked.connect(self.accept)
@@ -226,15 +231,15 @@ class NewWorkflowDialog(GlassDialog):
     def _field(layout: QVBoxLayout, label: str, placeholder: str) -> QLineEdit:
         lbl = QLabel(label)
         lbl.setStyleSheet(
-            f"color:{CYAN};font-size:10px;letter-spacing:1.5px;background:transparent;border:none;"
+            f"color:{CYAN};font-size:11.5px;letter-spacing:1.8px;background:transparent;border:none;"
         )
         inp = QLineEdit()
-        inp.setFixedHeight(32)
+        inp.setFixedHeight(38)
         inp.setPlaceholderText(placeholder)
         inp.setStyleSheet(
             "QLineEdit{background:#121a1b;color:#dce4e5;"
             "border:1px solid rgba(0,229,255,0.22);border-radius:4px;"
-            "padding:0 10px;font-family:'Roboto Mono';font-size:12px;}"
+            "padding:0 12px;font-family:'Roboto Mono';font-size:13.5px;}"
             "QLineEdit:focus{border:1px solid rgba(0,229,255,0.55);}"
         )
         layout.addWidget(lbl)
