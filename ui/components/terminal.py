@@ -86,10 +86,8 @@ _QUICK_ACTIONS: tuple[tuple[str, str], ...] = (
     ("GIT STATUS",   "@code git status"),
     ("GIT LOG -5",   "@code git log --oneline -5"),
     ("NPM RUN DEV",  "@code npm run dev"),
-    ("PYTEST",       "@code uv run pytest -q"),
     ("SCREENSHOT",   "take a screenshot"),
     ("READ SCREEN",  "what's on my screen"),
-    ("LIST WORKFLOWS", "list my workflows"),
 )
 
 
@@ -357,7 +355,10 @@ class TerminalPanel(QWidget):
         self._input.installEventFilter(self)
         lay.addWidget(self._input, 1)
 
-        hint = QLabel("Enter · send  ·  Shift+Enter · newline")
+        # Mockup phrasing: two compact phrases ("Enter to send" / "Shift+Enter
+        # newline") separated by a single dot — reads less like a checklist
+        # than the four-word-three-dots version we had.
+        hint = QLabel("Enter to send  ·  Shift+Enter newline")
         hint.setStyleSheet(
             f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
             f"font-family: '{FM}'; font-size: 9.5px; letter-spacing: 1px; }}"
