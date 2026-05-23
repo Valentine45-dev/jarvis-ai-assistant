@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from PyQt5.QtCore import Qt, QEvent, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QKeySequence, QTextCursor
+from PyQt5.QtGui import QColor, QFont, QKeySequence, QPainter, QTextCursor
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -339,7 +339,7 @@ class TerminalPanel(QWidget):
         root.addLayout(middle, 1)
 
         # ── Input row ───────────────────────────────────────────────────────
-        root.addLayout(self._build_input_row())
+        root.addWidget(self._build_input_row())
 
         # Ctrl+L → clear
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self.clear_output)
@@ -483,8 +483,25 @@ class TerminalPanel(QWidget):
         cl.addStretch(1)
         return col
 
-    def _build_input_row(self) -> QHBoxLayout:
-        lay = QHBoxLayout()
+    def _build_input_row(self) -> QWidget:
+        """Bordered transparent shell wrapping ❯ + QLineEdit + hint.
+
+        Mockup look: thin cyan border, transparent interior so the panel's
+        dotted backdrop shows through. The QLineEdit itself has no border
+        and no background — the wrapper QFrame owns the chrome.
+        """
+        wrap = QFrame()
+        wrap.setStyleSheet(
+            "QFrame {"
+            "background: transparent;"
+            f"border: 1px solid {CYAN_FAINT};"
+            "}"
+            "QFrame:focus-within {"
+            f"border: 1px solid {CYAN_SOFT};"
+            "}"
+        )
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(10)
 
         prompt = QLabel("❯")
@@ -504,16 +521,15 @@ class TerminalPanel(QWidget):
         self._input = QLineEdit()
         self._input.setPlaceholderText("enter command or describe what you want…")
         self._input.setFont(QFont(FM, 11))
+        # Transparent + borderless — chrome lives on the wrapper QFrame
+        # above so the input row looks like ONE bordered box, not a
+        # padded button-style field nested inside a row.
         self._input.setStyleSheet(
             "QLineEdit {"
-            f"background: {BG_PANEL};"
+            "background: transparent;"
             f"color: {INK};"
-            f"border: 1px solid {CYAN_FAINT};"
-            "padding: 7px 12px;"
-            "}"
-            "QLineEdit:focus {"
-            f"border: 1px solid {CYAN_SOFT};"
-            "background: rgba(0,229,255,0.05);"
+            "border: none;"
+            "padding: 0;"
             "}"
         )
         self._input.returnPressed.connect(self._on_submit)
@@ -529,7 +545,7 @@ class TerminalPanel(QWidget):
             f"font-family: '{FM}'; font-size: 9.5px; letter-spacing: 1px; }}"
         )
         lay.addWidget(hint)
-        return lay
+        return wrap
 
     # ── Component helpers ────────────────────────────────────────────────────
 
@@ -975,3 +991,17 @@ class TerminalPanel(QWidget):
             btn.setStyleSheet(btn.styleSheet().replace("padding: 5px 8px", "padding: 3px 8px"))
             body.insertWidget(body.count() - 1, btn)
             self._recent_btns.append(btn)
+
+    # ── Paint (dotted backdrop) ──────────────────────────────────────────────
+
+    def paintEvent(self, _event) -> None:
+        """Same cyan-dot grid the other top-level views use (History, Voice,
+        Settings). Child panels with semi-transparent BG_PANEL let the dots
+        show faintly through; gaps between panels show them clearly."""
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(BG))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 229, 255, 18))
+        for x in range(0, self.width() + 28, 28):
+            for y in range(0, self.height() + 28, 28):
+                p.drawEllipse(x - 1, y - 1, 2, 2)
