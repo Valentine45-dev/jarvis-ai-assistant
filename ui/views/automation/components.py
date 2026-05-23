@@ -163,18 +163,10 @@ class WorkflowRow(QWidget):
         info.setContentsMargins(0, 0, 0, 0)
         info.setSpacing(3)
 
+        # Name color is driven by _set_style(): INK when inactive, CYAN when
+        # active — matches the mockup where only the selected row's name
+        # lights up cyan.
         self._name_lbl = QLabel(str(wf.get("name", wf.get("id", "—"))))
-        self._name_lbl.setStyleSheet(
-            "QLabel {"
-            f"color: {CYAN};"
-            "background: transparent;"
-            "border: none;"
-            f"font-family: '{FM}';"
-            "font-size: 13px;"
-            "font-weight: 700;"
-            "letter-spacing: 0.5px;"
-            "}"
-        )
         info.addWidget(self._name_lbl)
 
         sub_row = QHBoxLayout()
@@ -259,6 +251,10 @@ class WorkflowRow(QWidget):
     # ── Style helpers ────────────────────────────────────────────────────────
 
     def _set_style(self, active: bool) -> None:
+        # Bottom divider runs on every row (matches mockup), regardless of
+        # active state. The 0.07 alpha is intentionally thinner than
+        # CYAN_FAINT so the list reads as a quiet ladder, not a grid.
+        divider = "rgba(0,229,255,0.07)"
         if active:
             self.setStyleSheet(
                 "QWidget {"
@@ -266,7 +262,7 @@ class WorkflowRow(QWidget):
                 f"border-left: 2px solid {CYAN};"
                 "border-top: 1px solid transparent;"
                 "border-right: 1px solid transparent;"
-                "border-bottom: 1px solid transparent;"
+                f"border-bottom: 1px solid {divider};"
                 "}"
             )
         else:
@@ -276,9 +272,22 @@ class WorkflowRow(QWidget):
                 "border-left: 2px solid transparent;"
                 "border-top: 1px solid transparent;"
                 "border-right: 1px solid transparent;"
-                "border-bottom: 1px solid transparent;"
+                f"border-bottom: 1px solid {divider};"
                 "}"
             )
+        # Name color flip: cyan when selected, plain ink otherwise.
+        name_color = CYAN if active else INK
+        self._name_lbl.setStyleSheet(
+            "QLabel {"
+            f"color: {name_color};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 13px;"
+            "font-weight: 700;"
+            "letter-spacing: 0.5px;"
+            "}"
+        )
 
     @staticmethod
     def _status_style(enabled: bool) -> str:
