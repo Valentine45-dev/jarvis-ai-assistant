@@ -67,7 +67,7 @@ from ui.theme import BG, CYAN, FM
 # ── Big circular mic button (kept from prior implementation; mostly the same) ──
 
 
-class _OrbMic(QPushButton):
+class _OrbMic(QWidget):
     """Iridescent Siri-style orb. Multi-color radial gradient composition.
 
     Matches the M5 mockup pixel-for-pixel:
@@ -105,8 +105,11 @@ class _OrbMic(QPushButton):
         self.setFixedSize(self.WIDGET_SIZE, self.WIDGET_SIZE)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Toggle microphone (Voice command capture)")
-        self.setText("")
-        self.setStyleSheet("QPushButton { background: transparent; border: none; }")
+        # QWidget (not QPushButton) so no default button chrome / focus
+        # rectangle paints behind the orb. We handle the click manually via
+        # mousePressEvent below.
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.NoFocus)
 
         # Slow pulse — 40ms tick gives ~25fps which is smooth enough for an
         # orb that doesn't need to spike on audio. Faster pulse looks twitchy.
@@ -131,8 +134,12 @@ class _OrbMic(QPushButton):
         self.update()
 
     def mousePressEvent(self, e) -> None:
+        # Emit on left-click only — QWidget gets ALL mouse events including
+        # right-click, so we filter here. (QPushButton handled that for free
+        # before; the trade for losing the focus rect is a 3-line check.)
+        if e.button() == Qt.LeftButton:
+            self.pressed_toggled.emit()
         super().mousePressEvent(e)
-        self.pressed_toggled.emit()
 
     # ── Painting ─────────────────────────────────────────────────────────────
 
