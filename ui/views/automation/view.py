@@ -198,8 +198,8 @@ class AutomationView(QWidget):
         # Mockup width — library is a narrow column (~310px), detail pane takes
         # the rest. Min/max keeps the ratio stable across window sizes instead
         # of stretching 50/50 with the breakdown.
-        self._lib_panel.setMinimumWidth(280)
-        self._lib_panel.setMaximumWidth(340)
+        self._lib_panel.setMinimumWidth(340)
+        self._lib_panel.setMaximumWidth(420)
         body.addWidget(self._lib_panel, 0)
 
         # RIGHT: step breakdown — action buttons live here now (run / pause /
