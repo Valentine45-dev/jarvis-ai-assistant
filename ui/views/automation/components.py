@@ -409,7 +409,10 @@ class StepBreakdown(PanelCard):
         self._wf: dict = {}
 
         body = self.body()
-        body.setContentsMargins(16, 14, 16, 14)
+        # Roomier padding than the HTML's 12/14 — Qt's mono font sits flush
+        # to the type box so we need a touch more outer whitespace to feel
+        # equivalent. Was 16/14, now 20/18 all round.
+        body.setContentsMargins(20, 18, 20, 18)
         body.setSpacing(12)
 
         # ── Empty state ─────────────────────────────────────────────────────
@@ -440,7 +443,8 @@ class StepBreakdown(PanelCard):
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
         title_col = QVBoxLayout()
-        title_col.setSpacing(4)
+        # Slight bump from 4 → 6 — title + subtitle want a hair more air.
+        title_col.setSpacing(6)
         self._wf_name_lbl = QLabel("—")
         self._wf_name_lbl.setStyleSheet(
             "QLabel {"
@@ -499,7 +503,10 @@ class StepBreakdown(PanelCard):
         )
         meta_lay = QVBoxLayout(meta)
         meta_lay.setContentsMargins(0, 0, 0, 0)
-        meta_lay.setSpacing(8)
+        # HTML grid uses 10px row-gap; Qt mono reads tighter at the same
+        # value, so we sit at 12. The big cramped feel between SCHEDULE /
+        # TRIGGER / ENABLED came from this being 8.
+        meta_lay.setSpacing(12)
         self._row_schedule = self._mk_meta_row("SCHEDULE", "—")
         self._row_trigger  = self._mk_meta_row("TRIGGER", "—")
         self._row_enabled  = self._mk_meta_row("ENABLED", "—",
@@ -509,7 +516,18 @@ class StepBreakdown(PanelCard):
         meta_lay.addWidget(self._row_enabled["wrap"])
         self._filled_lay.addWidget(meta)
 
-        # ── Steps section header ───────────────────────────────────────────
+        # ── Steps section (header + list, grouped tight) ───────────────────
+        # The HTML mockup uses a small 8px gap between "Steps · 4" and the
+        # first step row — much tighter than the 14px between top-level
+        # sections. Wrap them in a sub-layout so the header rides snug
+        # over the list without the outer _filled_lay spacing pushing
+        # them apart.
+        steps_section = QWidget()
+        steps_section.setStyleSheet("QWidget { background: transparent; }")
+        steps_section_lay = QVBoxLayout(steps_section)
+        steps_section_lay.setContentsMargins(0, 0, 0, 0)
+        steps_section_lay.setSpacing(8)
+
         self._steps_header_lbl = QLabel("STEPS · 0")
         self._steps_header_lbl.setStyleSheet(
             "QLabel {"
@@ -522,15 +540,16 @@ class StepBreakdown(PanelCard):
             "letter-spacing: 2.2px;"
             "}"
         )
-        self._filled_lay.addWidget(self._steps_header_lbl)
+        steps_section_lay.addWidget(self._steps_header_lbl)
 
-        # ── Steps container (rebuilt per workflow) ─────────────────────────
         self._steps_container = QWidget()
         self._steps_container.setStyleSheet("QWidget { background: transparent; }")
         self._steps_lay = QVBoxLayout(self._steps_container)
         self._steps_lay.setContentsMargins(0, 0, 0, 0)
         self._steps_lay.setSpacing(6)
-        self._filled_lay.addWidget(self._steps_container)
+        steps_section_lay.addWidget(self._steps_container)
+
+        self._filled_lay.addWidget(steps_section)
 
         # ── Add Step button ────────────────────────────────────────────────
         self._btn_add_step = QPushButton("+ ADD STEP")
@@ -597,10 +616,13 @@ class StepBreakdown(PanelCard):
         wrap.setStyleSheet("QFrame { background: transparent; border: none; }")
         wl = QHBoxLayout(wrap)
         wl.setContentsMargins(0, 0, 0, 0)
-        wl.setSpacing(14)
+        # HTML mockup grid uses 16px column-gap — was 14 here, bumped to 18
+        # since Qt's mono renders the LABEL slightly narrower than browser
+        # mono at the same px and the gap reads tighter.
+        wl.setSpacing(18)
 
         lbl = QLabel(label)
-        lbl.setFixedWidth(82)
+        lbl.setFixedWidth(92)
         lbl.setStyleSheet(
             "QLabel {"
             f"color: {CYAN};"
@@ -734,7 +756,9 @@ class StepBreakdown(PanelCard):
             "}"
         )
         rl = QHBoxLayout(row)
-        rl.setContentsMargins(10, 7, 12, 7)
+        # HTML spec: padding:8px 10px. Qt mono needs a hair more vertical
+        # padding to feel equivalent — 9 vertical reads about right.
+        rl.setContentsMargins(12, 9, 12, 9)
         rl.setSpacing(10)
 
         num = QLabel(f"{idx + 1}")
