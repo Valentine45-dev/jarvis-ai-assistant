@@ -47,10 +47,58 @@ def step_label(step) -> str:
 
 
 def _step_intent(step) -> str:
-    """Pull the intent string from a step dict (or guess for a string step)."""
+    """Pull the intent string from a step dict, or heuristically guess one
+    for a plain-string step.
+
+    Why guess: workflow steps stored as natural-language strings (the
+    NewWorkflowDialog format) carry no intent metadata until the brain
+    resolves them at run-time. We still want to show a coloured badge in
+    the UI immediately. The guesser uses a tiny keyword map keyed on the
+    leading verb / phrase — it's lossy but useful, and it never affects
+    actual execution (the brain still resolves at run-time).
+    """
     if isinstance(step, dict):
         return step.get("intent") or "unknown"
-    # Plain-string steps don't carry intent metadata — leave generic.
+    return _guess_intent_from_text(str(step))
+
+
+def _guess_intent_from_text(text: str) -> str:
+    """Best-effort intent classifier for natural-language step strings."""
+    t = text.lower().strip()
+    if not t:
+        return "unknown"
+    # Order matters — more specific phrases first.
+    keyword_map: tuple[tuple[tuple[str, ...], str], ...] = (
+        (("take a screenshot", "screenshot", "screen capture"), "system_control"),
+        (("volume up", "volume down", "mute", "unmute", "brightness",
+          "lock screen", "shutdown", "restart", "sleep", "wifi", "bluetooth"),
+         "system_control"),
+        (("search ", "google ", "youtube search", "wikipedia", "look up"), "search_web"),
+        (("open ", "launch ", "start "), "open_app"),
+        (("close ", "quit ", "kill "), "close_app"),
+        (("read screen", "what's on", "describe", "look at", "vision",
+          "analyze image", "what do you see"), "vision_analysis"),
+        (("ocr", "read text from"), "read_screen"),
+        (("create file", "create folder", "new file", "make a file",
+          "delete file", "rename", "move file", "copy file", "list files",
+          "find files", "find in files", "search files", "edit file",
+          "replace in", "append "), "file_operation"),
+        (("type ", "press "), "type_text"),
+        (("click ", "double click", "right click", "scroll", "drag "), "control_mouse"),
+        (("navigate", "go to", "browse", "switch tab", "close tab",
+          "click element", "fill form", "read page"), "browser_automation"),
+        (("run ", "git ", "npm ", "pip ", "python ", "powershell", "cmd ",
+          "execute"), "code_execution"),
+        (("remind", "set a reminder", "remind me"), "reminder_task"),
+        (("weather",), "weather"),
+        (("create a doc", "create document", "create a report", "write a memo",
+          "build a deck", "make slides", "compile a pdf", "create spreadsheet"),
+         "document_creation"),
+    )
+    for triggers, intent in keyword_map:
+        for kw in triggers:
+            if kw in t:
+                return intent
     return "unknown"
 
 

@@ -286,7 +286,16 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             step_n = idx + 1
             step = steps[idx]
             if isinstance(step, str):
+                # Brain resolution can transiently return `unknown` when
+                # Anthropic is overloaded (HTTP 529) — a single retry with
+                # a small delay catches the common case. Without this,
+                # a 2-second blip at fire-time kills the whole routine.
                 parsed = _ask_claude_step(step, step_n)
+                if parsed.get("intent") == "unknown":
+                    import time as _time
+                    _tlog(f"… retrying step {step_n} after brain returned 'unknown'")
+                    _time.sleep(1.2)
+                    parsed = _ask_claude_step(step, step_n)
                 if parsed.get("intent") == "unknown":
                     state["results"].append(f"Step {step_n}: FAIL — could not parse '{step}'")
                     state["all_ok"] = False

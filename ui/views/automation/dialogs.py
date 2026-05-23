@@ -113,18 +113,26 @@ class NewWorkflowDialog(GlassDialog):
         self._trigger_inp = self._field(fl, "TRIGGER PHRASE", "run morning routine")
 
         # ── Schedule (optional cron expression) ─────────────────────────────
+        # Clearer placeholder than just a cron string — most users won't
+        # know what "0 9 * * 1-5" means without context.
         self._schedule_inp = self._field(
-            fl, "SCHEDULE (OPTIONAL · CRON)", "0 9 * * 1-5"
+            fl,
+            "SCHEDULE (OPTIONAL · CRON)",
+            "Leave blank for manual-only · or click a preset below",
         )
         sched_hint = QLabel(
-            "Leave blank for manual-only. Format: <code>min hour day mon dow</code>. "
-            "Click a preset:"
+            "Five fields: <b>min&nbsp; hour&nbsp; day&nbsp; month&nbsp; weekday</b>"
+            "  &nbsp;·&nbsp;  <code>*</code> = any, <code>*/5</code> = every-N, "
+            "<code>1-5</code> = Mon–Fri."
+            "<br/>Example: <code>0 9 * * 1-5</code> → 9:00 AM every weekday."
         )
         sched_hint.setStyleSheet(
-            "color:rgba(132,147,150,0.7);font-family:'Roboto Mono';"
-            "font-size:10px;background:transparent;border:none;"
+            "color:rgba(132,147,150,0.82);font-family:'Roboto Mono';"
+            "font-size:10px;letter-spacing:0.3px;"
+            "background:transparent;border:none;"
         )
         sched_hint.setWordWrap(True)
+        sched_hint.setTextFormat(Qt.RichText)
         fl.addWidget(sched_hint)
 
         preset_row = QHBoxLayout()
