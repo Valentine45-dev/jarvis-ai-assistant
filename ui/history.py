@@ -21,6 +21,7 @@ from typing import List, Optional
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -388,8 +389,11 @@ class HistoryView(QWidget):
             chip.clicked.connect(lambda _checked, k=key: self._on_chip_clicked(k))
             self._chip_widgets[key] = chip
             lay.addWidget(chip)
-        lay.addStretch(1)
 
+        # Search sits right after the chips (small 24px gap) instead of
+        # floating to the far right edge — keeps it visually grouped with
+        # the filter controls it pairs with.
+        lay.addSpacing(24)
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("search history…")
         self._search_input.setFixedWidth(220)
@@ -405,6 +409,29 @@ class HistoryView(QWidget):
             f"QLineEdit:focus {{ border-color: {CYAN}; }}"
         )
         lay.addWidget(self._search_input)
+        lay.addStretch(1)
+
+        # Export button — writes the currently-filtered entries to CSV so
+        # the user can grab "just failures" / "just browser commands" by
+        # leaving a chip active.
+        self._export_btn = QPushButton("↓ EXPORT")
+        self._export_btn.setCursor(Qt.PointingHandCursor)
+        self._export_btn.setToolTip("Export the currently filtered history to a CSV file.")
+        self._export_btn.setStyleSheet(
+            "QPushButton {"
+            "background: transparent;"
+            f"color: {CYAN};"
+            f"border: 1px solid {CYAN_FAINT};"
+            f"font-family: '{FM}';"
+            "font-size: 10px;"
+            "font-weight: 700;"
+            "padding: 5px 14px;"
+            "letter-spacing: 1.6px;"
+            "}"
+            "QPushButton:hover { background: rgba(0,229,255,0.10); }"
+        )
+        self._export_btn.clicked.connect(self._on_export_clicked)
+        lay.addWidget(self._export_btn)
         return lay
 
     # ── Event handlers ───────────────────────────────────────────────────────
@@ -423,9 +450,61 @@ class HistoryView(QWidget):
         self.refresh_history([])
         self.history_cleared.emit()
 
+    def _on_export_clicked(self) -> None:
+        """Write the currently filtered history to a CSV the user picks.
+
+        Columns: time, intent, status, confidence, you, jarvis. UTF-8 with
+        BOM so Excel opens it cleanly on Windows. We use newline='' on the
+        file handle per csv module guidance — without it csv writes \\r\\n
+        and the OS layer adds another \\r, producing blank rows in Excel.
+        """
+        entries = self._filtered_entries()
+        if not entries:
+            return  # nothing to export — silently no-op
+
+        # Default location: ~/Documents/jarvis_history_YYYY-MM-DD.csv
+        from datetime import datetime
+        from pathlib import Path
+
+        default_dir = Path.home() / "Documents"
+        if not default_dir.exists():
+            default_dir = Path.home()
+        default_name = f"jarvis_history_{datetime.now().strftime('%Y-%m-%d')}.csv"
+        suggested = str(default_dir / default_name)
+
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Export history", suggested, "CSV files (*.csv)"
+        )
+        if not path:
+            return  # user cancelled
+
+        import csv
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+                w = csv.writer(fh)
+                w.writerow(["time", "intent", "status", "confidence", "you", "jarvis"])
+                for e in entries:
+                    w.writerow([
+                        e.get("jTime") or e.get("time") or "",
+                        e.get("intent") or "",
+                        e.get("status") or "",
+                        e.get("confidence") or e.get("conf") or "",
+                        e.get("you") or "",
+                        e.get("jarvis") or "",
+                    ])
+        except OSError as exc:
+            # Surface failures via the spark caption so the user gets
+            # feedback without us hauling in a modal error dialog.
+            self._spark_caption.setText(f"export failed: {exc}")
+            return
+        self._spark_caption.setText(f"exported {len(entries)} entries")
+
     # ── Filtering / rendering ────────────────────────────────────────────────
 
-    def _apply_filter(self) -> None:
+    def _filtered_entries(self) -> List[dict]:
+        """Apply the active chip + search-box filter and return the full
+        matching list (newest first). Export uses this so 'export' respects
+        whichever filter the user has on."""
         q = self._search_input.text().strip().lower()
         flt = self._active_filter
 
@@ -438,8 +517,12 @@ class HistoryView(QWidget):
                 return (e.get("status") == "error")
             return e.get("intent") == flt
 
-        visible = [e for e in self._all_entries if keep(e)]
-        self._render_rows(visible[:80])
+        return [e for e in self._all_entries if keep(e)]
+
+    def _apply_filter(self) -> None:
+        # Render cap stays at 80 rows so the scroll area doesn't drown in
+        # widgets; _filtered_entries() is the unbounded source.
+        self._render_rows(self._filtered_entries()[:80])
 
     def _render_rows(self, entries: List[dict]) -> None:
         # Clear existing rows (everything except the trailing stretch)
