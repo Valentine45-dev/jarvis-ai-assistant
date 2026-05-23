@@ -105,6 +105,180 @@ _SLIDER_SS = (
 )
 
 
+# ── API key field (locked-by-default + edit toggle) ─────────────────────────
+
+
+class ApiKeyField(QWidget):
+    """Read-only key preview + EDIT button, swaps to editable input on demand.
+
+    Why a custom widget instead of a bare QLineEdit: API keys shouldn't be
+    casually clickable / typo-able. Default state shows a masked preview
+    (e.g. ``sk-ant-•••••a3F2``) and an EDIT button; clicking EDIT swaps the
+    preview for a password QLineEdit + SAVE/CANCEL.
+
+    Quacks like QLineEdit for the call site: exposes ``text()``, ``setText()``,
+    and a ``textChanged(str)`` signal so the dirty-marker wiring and the
+    ``_apply_cfg`` read path keep working without touching them.
+    """
+
+    textChanged = pyqtSignal(str)
+
+    def __init__(self, value: str = "", *, placeholder: str = "",
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._value: str = value or ""
+        self._placeholder: str = placeholder or ""
+        # Snapshot used to revert on CANCEL.
+        self._snapshot: str = self._value
+
+        self._stack = QHBoxLayout(self)
+        self._stack.setContentsMargins(0, 0, 0, 0)
+        self._stack.setSpacing(8)
+
+        # ── Locked view ─────────────────────────────────────────────────────
+        self._preview_lbl = QLabel(self._format_preview())
+        self._preview_lbl.setStyleSheet(
+            "QLabel {"
+            f"color: {INK_DIM};"
+            "background: transparent;"
+            "border: none;"
+            f"font-family: '{FM}';"
+            "font-size: 11px;"
+            "letter-spacing: 0.5px;"
+            "padding: 5px 4px;"
+            "}"
+        )
+        self._preview_lbl.setMinimumWidth(180)
+        self._preview_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._stack.addWidget(self._preview_lbl, 1)
+
+        self._edit_btn = QPushButton("EDIT")
+        self._edit_btn.setCursor(Qt.PointingHandCursor)
+        self._edit_btn.setStyleSheet(self._btn_style(primary=False))
+        self._edit_btn.clicked.connect(self._on_edit_clicked)
+        self._stack.addWidget(self._edit_btn)
+
+        # ── Edit view (hidden until EDIT clicked) ──────────────────────────
+        self._input = QLineEdit(self._value)
+        self._input.setEchoMode(QLineEdit.Password)
+        self._input.setPlaceholderText(self._placeholder)
+        self._input.setStyleSheet(_INPUT_SS)
+        self._input.setMinimumWidth(180)
+        self._input.hide()
+        self._stack.addWidget(self._input, 1)
+
+        self._save_btn = QPushButton("SAVE")
+        self._save_btn.setCursor(Qt.PointingHandCursor)
+        self._save_btn.setStyleSheet(self._btn_style(primary=True))
+        self._save_btn.clicked.connect(self._on_save_clicked)
+        self._save_btn.hide()
+        self._stack.addWidget(self._save_btn)
+
+        self._cancel_btn = QPushButton("CANCEL")
+        self._cancel_btn.setCursor(Qt.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(self._btn_style(primary=False))
+        self._cancel_btn.clicked.connect(self._on_cancel_clicked)
+        self._cancel_btn.hide()
+        self._stack.addWidget(self._cancel_btn)
+
+    # ── QLineEdit-compatible API ────────────────────────────────────────────
+
+    def text(self) -> str:
+        # When the user is mid-edit, the live input has the truth; otherwise
+        # the committed _value is canonical.
+        if self._input.isVisible():
+            return self._input.text()
+        return self._value
+
+    def setText(self, value: str) -> None:
+        self._value = value or ""
+        self._snapshot = self._value
+        self._input.setText(self._value)
+        self._preview_lbl.setText(self._format_preview())
+
+    # ── Internal ────────────────────────────────────────────────────────────
+
+    def _format_preview(self) -> str:
+        """Show '<prefix>•••<last4>' so users can fingerprint without exposing
+        the key. Empty / very short keys collapse to a 'not set' hint."""
+        v = self._value or ""
+        if not v:
+            return "not set"
+        # Pick a small prefix — most keys announce their provider in the first
+        # 6-8 chars (sk-ant-, el_, AIza, vapi-). Show that + bullets + last 4.
+        if len(v) <= 8:
+            return "•" * len(v)
+        prefix_len = min(8, max(4, len(v) // 4))
+        last4 = v[-4:]
+        return f"{v[:prefix_len]}{'•' * 5}{last4}"
+
+    def _enter_edit_mode(self) -> None:
+        self._snapshot = self._value
+        self._preview_lbl.hide()
+        self._edit_btn.hide()
+        self._input.setText(self._value)
+        self._input.show()
+        self._input.setFocus()
+        self._save_btn.show()
+        self._cancel_btn.show()
+
+    def _leave_edit_mode(self) -> None:
+        self._input.hide()
+        self._save_btn.hide()
+        self._cancel_btn.hide()
+        self._preview_lbl.setText(self._format_preview())
+        self._preview_lbl.show()
+        self._edit_btn.show()
+
+    def _on_edit_clicked(self) -> None:
+        self._enter_edit_mode()
+
+    def _on_save_clicked(self) -> None:
+        new_value = self._input.text().strip()
+        changed = (new_value != self._value)
+        self._value = new_value
+        self._leave_edit_mode()
+        if changed:
+            # Only emit when something actually changed — prevents the dirty
+            # marker from flipping on for SAVE-with-no-edits.
+            self.textChanged.emit(new_value)
+
+    def _on_cancel_clicked(self) -> None:
+        # Discard whatever was typed; restore the snapshot taken on entry.
+        self._input.setText(self._snapshot)
+        self._leave_edit_mode()
+
+    @staticmethod
+    def _btn_style(*, primary: bool) -> str:
+        if primary:
+            return (
+                "QPushButton {"
+                f"background: {CYAN};"
+                "color: #001a1f;"
+                f"border: 1px solid {CYAN};"
+                f"font-family: '{FM}';"
+                "font-size: 9.5px;"
+                "font-weight: 700;"
+                "padding: 5px 12px;"
+                "letter-spacing: 1.5px;"
+                "}"
+                "QPushButton:hover { background: #5ff2ff; }"
+            )
+        return (
+            "QPushButton {"
+            "background: transparent;"
+            f"color: {CYAN};"
+            f"border: 1px solid {CYAN_FAINT};"
+            f"font-family: '{FM}';"
+            "font-size: 9.5px;"
+            "font-weight: 700;"
+            "padding: 5px 12px;"
+            "letter-spacing: 1.5px;"
+            "}"
+            "QPushButton:hover { background: rgba(0,229,255,0.10); }"
+        )
+
+
 # ── Theme swatch picker ──────────────────────────────────────────────────────
 
 
@@ -534,37 +708,29 @@ class SettingsView(QWidget):
     def _build_api_panel(self) -> PanelCard:
         panel = PanelCard("API & connectivity", active=True)
 
-        self._anthro_key = QLineEdit(config.anthropic_api_key)
-        self._anthro_key.setEchoMode(QLineEdit.Password)
-        self._anthro_key.setPlaceholderText("sk-ant-…")
-        self._anthro_key.setStyleSheet(_INPUT_SS)
+        # API key inputs use ApiKeyField — locked-by-default preview + EDIT
+        # button. The field exposes text() / setText() / textChanged so the
+        # apply path and dirty-marker wiring downstream don't need to care
+        # whether they're talking to a QLineEdit or this wrapper.
+        self._anthro_key = ApiKeyField(config.anthropic_api_key, placeholder="sk-ant-…")
         panel.add(_section_row(
             "Anthropic key", self._anthro_key,
             "Required. Routes every command through Claude.",
         ))
 
-        self._eleven_key = QLineEdit(config.elevenlabs_api_key)
-        self._eleven_key.setEchoMode(QLineEdit.Password)
-        self._eleven_key.setPlaceholderText("el-…")
-        self._eleven_key.setStyleSheet(_INPUT_SS)
+        self._eleven_key = ApiKeyField(config.elevenlabs_api_key, placeholder="el-…")
         panel.add(_section_row(
             "ElevenLabs key", self._eleven_key,
             "Primary TTS provider. Falls back to Gemini when quota-locked.",
         ))
 
-        self._gemini_key = QLineEdit(getattr(config, "gemini_api_key", ""))
-        self._gemini_key.setEchoMode(QLineEdit.Password)
-        self._gemini_key.setPlaceholderText("AIza…")
-        self._gemini_key.setStyleSheet(_INPUT_SS)
+        self._gemini_key = ApiKeyField(getattr(config, "gemini_api_key", ""), placeholder="AIza…")
         panel.add(_section_row(
             "Gemini key", self._gemini_key,
             "Fallback TTS. 10 calls/day on the free tier.",
         ))
 
-        self._vapi_key = QLineEdit(config.vapi_api_key)
-        self._vapi_key.setEchoMode(QLineEdit.Password)
-        self._vapi_key.setPlaceholderText("vapi-…")
-        self._vapi_key.setStyleSheet(_INPUT_SS)
+        self._vapi_key = ApiKeyField(config.vapi_api_key, placeholder="vapi-…")
         panel.add(_section_row(
             "Vapi key", self._vapi_key,
             "Optional. Syncs the JARVIS assistant config for web/phone deployment.",
