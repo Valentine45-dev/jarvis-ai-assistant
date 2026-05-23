@@ -790,7 +790,45 @@ class StepBreakdown(PanelCard):
         )
         summary.setToolTip(_step_summary(step))
         rl.addWidget(summary, 1)
+
+        # Right-aligned rolling avg label — '0.3s avg' style. Only present
+        # for saved workflows that have actually run a few times; inline
+        # workflows or never-run steps just leave the right side blank.
+        avg_text = self._format_avg_for_step(idx)
+        if avg_text:
+            avg_lbl = QLabel(avg_text)
+            avg_lbl.setToolTip("Average wall-clock time across the last 10 runs.")
+            avg_lbl.setStyleSheet(
+                "QLabel {"
+                f"color: {INK_FAINT};"
+                "background: transparent;"
+                "border: none;"
+                f"font-family: '{FM}';"
+                "font-size: 10px;"
+                "}"
+            )
+            rl.addWidget(avg_lbl, 0, Qt.AlignVCenter)
         return row
+
+    def _format_avg_for_step(self, idx: int) -> str:
+        """Look up the rolling avg for this step and format it for display.
+        Returns '' when no telemetry exists yet."""
+        wf_id = str(self._wf.get("id", ""))
+        if not wf_id:
+            return ""
+        # Late import to avoid hauling the metrics store into module load
+        # for the tests that don't need it.
+        try:
+            from core.workflow_metrics import workflow_metrics
+        except ImportError:
+            return ""
+        avg = workflow_metrics.get_avg(wf_id, idx)
+        if avg is None:
+            return ""
+        # Match the HTML mockup: always 'X.Ys avg'. Floor at 0.1s so very
+        # fast steps don't read as '0.0s avg' (which looks broken).
+        display = max(0.1, avg)
+        return f"{display:.1f}s avg"
 
     # ── Action handlers ──────────────────────────────────────────────────────
 

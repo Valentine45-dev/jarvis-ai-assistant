@@ -177,8 +177,11 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         return _ok(f"Workflow renamed to '{new_name}'.")
 
     # run_workflow
+    import time as _time
+
     from core.executor import dispatch  # late import — executor is fully loaded by runtime
     from core.handlers.shared import get_pending_confirmation, request_confirmation
+    from core.workflow_metrics import workflow_metrics
 
     steps     = params.get("steps", [])
     task_name = params.get("task_name", "")
@@ -316,6 +319,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             # UX-2: enter/leave the workflow context so leaf-handler _tlog
             # calls inside dispatch() auto-indent.
             _enter_workflow_step()
+            _t0 = _time.perf_counter()
             try:
                 sub = dispatch({
                     "intent":     step.get("intent", "unknown"),
@@ -325,7 +329,19 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                 }, confirmed=False)
             finally:
                 _leave_workflow_step()
+            _elapsed = _time.perf_counter() - _t0
             _yield_ui()
+
+            # Record latency for saved workflows only; inline workflows have
+            # no stable id to key on. Skip when the step needs confirmation
+            # (no real execution happened yet) or when it failed (failure
+            # times shouldn't pollute the rolling avg).
+            if (
+                workflow_id
+                and not sub.get("needs_confirmation")
+                and sub.get("success")
+            ):
+                workflow_metrics.record(workflow_id, idx, _elapsed)
 
             if sub.get("needs_confirmation"):
                 pending = get_pending_confirmation()
@@ -345,16 +361,22 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     # UX-2: re-enter workflow context so leaf _tlog calls
                     # in the deferred fn indent like the eager path.
                     _enter_workflow_step()
+                    # Time only original_fn() — the user's pre-confirm wait
+                    # is not step execution time.
+                    _t0_resume = _time.perf_counter()
                     try:
                         first = original_fn()
                     finally:
                         _leave_workflow_step()
+                    _elapsed_resume = _time.perf_counter() - _t0_resume
                     _yield_ui()
                     _append_step_result(step_n, first)
                     if not first.get("success"):
                         state["all_ok"] = False
                         _tlog(f"✗ failed at step {step_n}: {first.get('error') or first.get('output') or 'step failed'}")
                         return _err("\n".join(state["results"]))
+                    if workflow_id:
+                        workflow_metrics.record(workflow_id, idx, _elapsed_resume)
                     _absorb_step_into_state(step, first)
                     _between_step_blank()
                     return _run_from(idx + 1)
