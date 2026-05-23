@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from PyQt5.QtCore import Qt, QEvent, pyqtSignal
+from PyQt5.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QKeySequence, QTextCursor
 from PyQt5.QtWidgets import (
     QFrame,
@@ -63,28 +63,41 @@ _ERROR_WORDS = frozenset(["error", "exception", "failed", "traceback", "denied"]
 # sidebar comfortably. The pre-fill includes the @tag where appropriate so
 # the brain routes correctly.
 _QUICK_ACTIONS: tuple[tuple[str, str], ...] = (
-    ("git status",       "@code git status"),
-    ("git log -5",       "@code git log --oneline -5"),
-    ("npm run dev",      "@code npm run dev"),
-    ("pytest",           "@code uv run pytest -q"),
-    ("take a screenshot", "take a screenshot"),
-    ("what's on my screen", "what's on my screen"),
-    ("list workflows",   "list my workflows"),
+    ("GIT STATUS",   "@code git status"),
+    ("GIT LOG -5",   "@code git log --oneline -5"),
+    ("NPM RUN DEV",  "@code npm run dev"),
+    ("PYTEST",       "@code uv run pytest -q"),
+    ("SCREENSHOT",   "take a screenshot"),
+    ("READ SCREEN",  "what's on my screen"),
+    ("LIST WORKFLOWS", "list my workflows"),
 )
 
 
+# Keys wrapped in mini cyan-bordered chips ('<kbd>' style) per the HTML
+# mockup. QLabel rich-text doesn't honor every CSS property, but border /
+# padding / background on inline spans render fine.
+def _kbd(key: str) -> str:
+    return (
+        f"<span style=\"color:{CYAN};"
+        f"border:1px solid {CYAN_FAINT};"
+        f"background:rgba(0,229,255,0.05);"
+        f"padding:1px 6px;font-weight:700;"
+        f"font-family:'{FM}';font-size:9.5px;\">{key}</span>"
+    )
+
+
 _SHORTCUTS_HTML = (
-    "<table cellspacing='0' cellpadding='2' style='font-family: \"" + FM + "\";'>"
-    "<tr><td style='color:" + CYAN + ";font-weight:700;padding-right:10px;'>Ctrl+L</td>"
+    "<table cellspacing='0' cellpadding='3' style='font-family: \"" + FM + "\";'>"
+    "<tr><td style='padding-right:10px;'>" + _kbd("Ctrl+L") + "</td>"
     "<td style='color:" + INK_DIM + ";'>clear</td></tr>"
-    "<tr><td style='color:" + CYAN + ";font-weight:700;padding-right:10px;'>↑ / ↓</td>"
+    "<tr><td style='padding-right:10px;'>" + _kbd("↑/↓") + "</td>"
     "<td style='color:" + INK_DIM + ";'>history</td></tr>"
-    "<tr><td style='color:" + CYAN + ";font-weight:700;padding-right:10px;'>Tab</td>"
+    "<tr><td style='padding-right:10px;'>" + _kbd("Tab") + "</td>"
     "<td style='color:" + INK_DIM + ";'>@tag complete</td></tr>"
-    "<tr><td style='color:" + CYAN + ";font-weight:700;padding-right:10px;'>Ctrl+K</td>"
+    "<tr><td style='padding-right:10px;'>" + _kbd("Ctrl+K") + "</td>"
     "<td style='color:" + INK_DIM + ";'>palette</td></tr>"
-    "<tr><td style='color:" + CYAN + ";font-weight:700;padding-right:10px;'>Ctrl+Enter</td>"
-    "<td style='color:" + INK_DIM + ";'>force run</td></tr>"
+    "<tr><td style='padding-right:10px;'>" + _kbd("Ctrl+/") + "</td>"
+    "<td style='color:" + INK_DIM + ";'>help</td></tr>"
     "</table>"
 )
 
@@ -110,6 +123,14 @@ class TerminalPanel(QWidget):
 
         self._setup_ui()
         self._connect_signals()
+
+        # Tick the session uptime label once a second so the 'MM:SS' part
+        # stays live without waiting for the next command to land.
+        self._uptime_timer = QTimer(self)
+        self._uptime_timer.setInterval(1000)
+        self._uptime_timer.timeout.connect(self._refresh_session_label)
+        self._uptime_timer.start()
+        self._refresh_session_label()
 
         # Welcome
         self._append_system(
@@ -463,8 +484,18 @@ class TerminalPanel(QWidget):
         self._output.ensureCursorVisible()
 
     def _refresh_session_label(self) -> None:
+        # 'session · MM:SS · N commands' (HH:MM:SS once we cross an hour).
+        # Mockup shows '03:31' style — that's MM:SS on a fresh session and
+        # H:MM once you've been running long enough.
+        elapsed = datetime.now() - self._start_time
+        secs = max(0, int(elapsed.total_seconds()))
+        if secs >= 3600:
+            uptime = f"{secs // 3600}:{(secs % 3600) // 60:02d}:{secs % 60:02d}"
+        else:
+            uptime = f"{secs // 60:02d}:{secs % 60:02d}"
         self._session_lbl.setText(
-            f"session · {self._cmd_count} command{'s' if self._cmd_count != 1 else ''}"
+            f"session · {uptime} · {self._cmd_count} "
+            f"command{'s' if self._cmd_count != 1 else ''}"
         )
 
     def _refresh_recent_sidebar(self) -> None:
