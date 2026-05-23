@@ -159,6 +159,9 @@ class TerminalPanel(QWidget):
 
         # Ctrl+L → clear
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self.clear_output)
+        # Ctrl+Shift+D → seed fake history for UI testing without API calls.
+        # Undocumented in the cheat sheet on purpose (dev affordance).
+        QShortcut(QKeySequence("Ctrl+Shift+D"), self, activated=self.seed_demo)
 
     def _build_header(self) -> QHBoxLayout:
         head = QHBoxLayout()
@@ -342,21 +345,40 @@ class TerminalPanel(QWidget):
         )
         return btn
 
-    def _sidebar_btn(self, label: str, prefill: str) -> QPushButton:
-        btn = QPushButton(label)
+    def _sidebar_btn(self, label: str, prefill: str, *, active: bool = False) -> QPushButton:
+        # ``active=True`` is used by the Recent sidebar to mark the most-
+        # recent command — cursor prefix '▸ ' + cyan bold text. Quick Action
+        # buttons always pass active=False (the default).
+        display = f"▸ {label}" if active else label
+        btn = QPushButton(display)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton {"
-            "background: transparent;"
-            f"color: {INK_DIM};"
-            f"border: 1px solid {CYAN_FAINT};"
-            f"font-family: '{FM}';"
-            "font-size: 10px;"
-            "padding: 5px 8px;"
-            "text-align: left;"
-            "}"
-            f"QPushButton:hover {{ background: rgba(0,229,255,0.08); color: {CYAN}; }}"
-        )
+        if active:
+            btn.setStyleSheet(
+                "QPushButton {"
+                "background: transparent;"
+                f"color: {CYAN};"
+                "border: none;"
+                f"font-family: '{FM}';"
+                "font-size: 10px;"
+                "font-weight: 700;"
+                "padding: 5px 8px;"
+                "text-align: left;"
+                "}"
+                "QPushButton:hover { background: rgba(0,229,255,0.08); }"
+            )
+        else:
+            btn.setStyleSheet(
+                "QPushButton {"
+                "background: transparent;"
+                f"color: {INK_DIM};"
+                f"border: 1px solid {CYAN_FAINT};"
+                f"font-family: '{FM}';"
+                "font-size: 10px;"
+                "padding: 5px 8px;"
+                "text-align: left;"
+                "}"
+                f"QPushButton:hover {{ background: rgba(0,229,255,0.08); color: {CYAN}; }}"
+            )
         btn.clicked.connect(lambda _checked, p=prefill: self._fill_input(p))
         return btn
 
@@ -468,6 +490,47 @@ class TerminalPanel(QWidget):
         self._output.clear()
         self._append_system("Terminal cleared.")
 
+    # ── Dev helper (Ctrl+Shift+D) ────────────────────────────────────────────
+    #
+    # Pushes a handful of fake commands into the output stream + recent
+    # sidebar so the UI can be visually verified without burning Anthropic
+    # API credits. Triggered via Ctrl+Shift+D (wired in _setup_ui).
+    # Intentionally undocumented in the Shortcuts cheat sheet — it's a dev
+    # affordance, not a user feature. Safe to leave behind because it has
+    # no side-effects beyond writing to the local QTextEdit + sidebar list.
+
+    _DEMO_ROWS: tuple[tuple[str, str, str, str, str], ...] = (
+        # (HH:MM:SS, prompt, intent_label, response, color_kind)
+        ("03:31:05", "create a file called notes.txt in Downloads",
+         "FILE",    "Created notes.txt in Downloads.",          "ok"),
+        ("03:32:22", "switch to the youtube tab",
+         "BROWSER", "Switching to YouTube.",                    "ok"),
+        ("03:33:48", "what's on my screen",
+         "VISION",  "Taking a look — JARVIS HUD with the reactor visible.",
+         "ok"),
+        ("03:34:01", "open spotify",
+         "FAIL",    "Couldn't open Spotify — file not found.",  "fail"),
+        ("03:35:12", "tell me a joke",
+         "META",    "Why do programmers prefer dark mode? Because light attracts bugs.",
+         "ok"),
+        ("03:36:30", "@code git status",
+         "CODE",    "On branch main · clean working tree.",     "ok"),
+    )
+
+    def seed_demo(self) -> None:
+        """Inject fake commands so the terminal looks 'used' for UI tests."""
+        self._append_system("DEMO MODE — seeded 6 fake commands. No API calls were made.")
+        for ts, prompt, intent, response, kind in self._DEMO_ROWS:
+            self._append_colored(f"[{ts}] ❯ {prompt}",          _COL_MUTED)
+            color = _COL_FAIL if kind == "fail" else _COL_STDOUT
+            self._append_colored(f"   [{intent}] {response}",   color)
+            # Mirror what _on_submit does so the sidebar + counter stay in sync.
+            self._cmd_history.append(prompt)
+            self._cmd_count += 1
+        self._cmd_history = self._cmd_history[-self._MAX_HISTORY:]
+        self._refresh_recent_sidebar()
+        self._refresh_session_label()
+
     # ── Internal rendering ───────────────────────────────────────────────────
 
     def _append_system(self, msg: str) -> None:
@@ -508,12 +571,12 @@ class TerminalPanel(QWidget):
         if self._recent_empty.isVisible():
             self._recent_empty.setVisible(False)
 
-        # Build buttons for the last N (newest first)
+        # Build buttons for the last N (newest first). The first entry is
+        # the most recent — gets the ▸ cursor + cyan bold styling.
         recent = list(reversed(self._cmd_history))[: self._MAX_RECENT_SIDEBAR]
-        # Insert above the trailing stretch (index = count - 1)
-        for cmd in recent:
+        for i, cmd in enumerate(recent):
             shown = cmd if len(cmd) <= 26 else cmd[:23] + "…"
-            btn = self._sidebar_btn(shown, cmd)
+            btn = self._sidebar_btn(shown, cmd, active=(i == 0))
             # Tighter spacing than action buttons
             btn.setStyleSheet(btn.styleSheet().replace("padding: 5px 8px", "padding: 3px 8px"))
             body.insertWidget(body.count() - 1, btn)
