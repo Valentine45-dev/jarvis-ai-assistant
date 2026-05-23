@@ -46,6 +46,73 @@ def step_label(step) -> str:
     return action.replace("_", " ").title()
 
 
+# Day-of-week names for cron humaniser. Cron's dow is 0=Sun..6=Sat
+# (some impls accept 7=Sun too; we treat 7 as Sun).
+_CRON_DOW_NAMES: tuple[str, ...] = (
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+)
+
+
+def humanize_cron(expr: str) -> str:
+    """Return a short English description of a 5-field cron expression, or
+    an empty string when we don't recognise the pattern.
+
+    Covers the cases produced by the dialog's preset chips and the most
+    common hand-written patterns. We deliberately don't try to be a full
+    cron explainer — anything weirder than the patterns below just shows
+    the raw cron string without a description.
+    """
+    parts = (expr or "").split()
+    if len(parts) != 5:
+        return ""
+    minute, hour, dom, mon, dow = parts
+
+    # Every-N-minutes:  */N * * * *
+    if minute.startswith("*/") and hour == "*" and dom == "*" and mon == "*" and dow == "*":
+        try:
+            n = int(minute[2:])
+            return f"Every {n} minute{'s' if n != 1 else ''}"
+        except ValueError:
+            return ""
+
+    # Hourly on the dot:  0 * * * *
+    if minute == "0" and hour == "*" and dom == "*" and mon == "*" and dow == "*":
+        return "Every hour"
+
+    # Time-of-day patterns require concrete minute + hour
+    try:
+        m = int(minute)
+        h = int(hour)
+    except ValueError:
+        return ""
+    if not (0 <= m <= 59 and 0 <= h <= 23):
+        return ""
+
+    # Format the clock — 12h with AM/PM matches the mockup ("9:00 AM").
+    suffix = "AM" if h < 12 else "PM"
+    h12 = h % 12 or 12
+    clock = f"{h12}:{m:02d} {suffix}"
+    if m == 0 and h == 0:
+        clock = "Midnight"
+    elif m == 0 and h == 12:
+        clock = "Noon"
+
+    if dom != "*" or mon != "*":
+        return ""  # Specific date / month — skip humanising for now.
+
+    # Day-of-week interpretation
+    if dow == "*":
+        return f"{clock} every day"
+    if dow in ("1-5", "MON-FRI"):
+        return f"{clock} every weekday"
+    if dow in ("0,6", "6,0", "0,7", "SAT,SUN", "SUN,SAT"):
+        return f"{clock} every weekend"
+    if dow.isdigit():
+        idx = int(dow) % 7  # tolerate 7=Sunday
+        return f"{clock} every {_CRON_DOW_NAMES[idx]}"
+    return ""
+
+
 def _step_intent(step) -> str:
     """Pull the intent string from a step dict, or heuristically guess one
     for a plain-string step.
@@ -594,18 +661,30 @@ class StepBreakdown(PanelCard):
         # Meta rows
         schedule = str(self._wf.get("schedule", "") or "").strip()
         if schedule:
-            self._row_schedule["value"].setText(schedule)
+            # Cron in amber, human-readable suffix in dim ink (matches the
+            # mockup: "0 9 * * 1-5    9:00 AM every weekday"). Rich text
+            # lets us colour both halves inside a single QLabel.
+            human = humanize_cron(schedule)
+            suffix = (
+                f"<span style='color:{INK_DIM};margin-left:14px;'>"
+                f"&nbsp;&nbsp;&nbsp;{human}</span>"
+                if human else ""
+            )
+            self._row_schedule["value"].setTextFormat(Qt.RichText)
+            self._row_schedule["value"].setText(
+                f"<span style='color:{AMBER};letter-spacing:0.5px;'>{schedule}</span>"
+                f"{suffix}"
+            )
             self._row_schedule["value"].setStyleSheet(
                 "QLabel {"
-                f"color: {AMBER};"
                 "background: transparent;"
                 "border: none;"
                 f"font-family: '{FM}';"
                 "font-size: 11.5px;"
-                "letter-spacing: 0.5px;"
                 "}"
             )
         else:
+            self._row_schedule["value"].setTextFormat(Qt.PlainText)
             self._row_schedule["value"].setText("manual only")
             self._row_schedule["value"].setStyleSheet(
                 "QLabel {"
