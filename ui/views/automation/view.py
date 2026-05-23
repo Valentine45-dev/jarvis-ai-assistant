@@ -54,10 +54,10 @@ class AutomationView(QWidget):
     run_command = pyqtSignal(str)
 
     # Chip definitions: (key, label). 'all' is the no-filter case.
+    # Counts are appended live in _refresh_chip_counts().
     _CHIPS: tuple[tuple[str, str], ...] = (
         ("all",       "All"),
         ("scheduled", "Scheduled"),
-        ("manual",    "Manual"),
         ("paused",    "Paused"),
     )
 
@@ -149,8 +149,18 @@ class AutomationView(QWidget):
         self._stats_wrap = self._build_stats_strip()
         root.addWidget(self._stats_wrap)
 
-        # ── Chip filter row ────────────────────────────────────────────────
+        # ── 2-column body ──────────────────────────────────────────────────
+        body = QHBoxLayout()
+        body.setSpacing(14)
+
+        # LEFT: library list (active panel)
+        self._lib_panel = PanelCard("Workflow library", active=True)
+
+        # Chip filter row — lives INSIDE the library panel per the mockup,
+        # right under the WORKFLOW LIBRARY header and above the scroll list.
+        # Labels show live counts ("ALL · 7", "SCHEDULED · 3", "PAUSED · 2").
         chip_row = QHBoxLayout()
+        chip_row.setContentsMargins(0, 0, 0, 4)
         chip_row.setSpacing(6)
         self._chip_widgets: dict[str, ChipFilter] = {}
         for key, label in self._CHIPS:
@@ -159,21 +169,10 @@ class AutomationView(QWidget):
             self._chip_widgets[key] = chip
             chip_row.addWidget(chip)
         chip_row.addStretch(1)
-
-        self._wf_count_lbl = QLabel("")
-        self._wf_count_lbl.setStyleSheet(
-            f"QLabel {{ color: {INK_DIM}; background: transparent; border: none;"
-            f"font-family: '{FM}'; font-size: 10px; letter-spacing: 1px; }}"
-        )
-        chip_row.addWidget(self._wf_count_lbl)
-        root.addLayout(chip_row)
-
-        # ── 2-column body ──────────────────────────────────────────────────
-        body = QHBoxLayout()
-        body.setSpacing(14)
-
-        # LEFT: library list (active panel)
-        self._lib_panel = PanelCard("Workflow library", active=True)
+        chip_wrap = QWidget()
+        chip_wrap.setStyleSheet("QWidget { background: transparent; border: none; }")
+        chip_wrap.setLayout(chip_row)
+        self._lib_panel.add(chip_wrap)
         self._lib_scroll = QScrollArea()
         self._lib_scroll.setWidgetResizable(True)
         self._lib_scroll.setFrameShape(QScrollArea.NoFrame)
@@ -269,8 +268,8 @@ class AutomationView(QWidget):
     def _build_rows(self) -> None:
         workflows = workflow_library.list_all()
         self._refresh_stats(workflows)
+        self._refresh_chip_counts(workflows)
         visible = self._filter_workflows(workflows)
-        self._refresh_count_label(visible, workflows)
         self._render_rows(visible)
         # Restore selection if possible
         if visible:
@@ -328,17 +327,16 @@ class AutomationView(QWidget):
             self._hm_avg.set_value("—")
             self._hm_avg.set_sub("no workflows")
 
-    def _refresh_count_label(self, visible: list, all_wfs: list) -> None:
-        n = len(visible)
-        total = len(all_wfs)
-        if self._active_filter == "all" or n == total:
-            self._wf_count_lbl.setText(
-                f"{n} workflow{'s' if n != 1 else ''}"
-            )
-        else:
-            self._wf_count_lbl.setText(
-                f"{n} of {total} shown"
-            )
+    def _refresh_chip_counts(self, workflows: list) -> None:
+        """Update each chip's label with its bucket count: 'ALL · 7'."""
+        counts = {
+            "all":       len(workflows),
+            "scheduled": sum(1 for w in workflows if (w.get("schedule") or "").strip()),
+            "paused":    sum(1 for w in workflows if not w.get("enabled", True)),
+        }
+        labels = dict(self._CHIPS)
+        for key, chip in self._chip_widgets.items():
+            chip.setText(f"{labels[key].upper()} · {counts.get(key, 0)}")
 
     def _filter_workflows(self, workflows: list) -> list:
         flt = self._active_filter
@@ -346,8 +344,6 @@ class AutomationView(QWidget):
             return workflows
         if flt == "scheduled":
             return [w for w in workflows if (w.get("schedule") or "").strip()]
-        if flt == "manual":
-            return [w for w in workflows if not (w.get("schedule") or "").strip()]
         if flt == "paused":
             return [w for w in workflows if not w.get("enabled", True)]
         return workflows
