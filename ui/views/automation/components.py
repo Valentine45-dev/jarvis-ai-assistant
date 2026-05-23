@@ -153,6 +153,14 @@ class WorkflowRow(QWidget):
 
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(58)
+        # Qt gotcha: a plain QWidget will NOT paint a stylesheet background
+        # or border unless WA_StyledBackground is True. Without this the
+        # selected-row tint + cyan left border render as nothing — only the
+        # name color flip is visible. Also pin an object name so the
+        # selector in _set_style can scope to just this widget (no cascade
+        # into the inner sub_wrap / status label children).
+        self.setObjectName("WorkflowRow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 10, 14, 10)
@@ -254,11 +262,16 @@ class WorkflowRow(QWidget):
         # Bottom divider runs on every row (matches mockup), regardless of
         # active state. The 0.07 alpha is intentionally thinner than
         # CYAN_FAINT so the list reads as a quiet ladder, not a grid.
+        # Selector is scoped to #WorkflowRow so it never cascades into
+        # child labels / sub_wrap and overrides their borders.
         divider = "rgba(0,229,255,0.07)"
         if active:
+            # Bumped tint to 0.10 vs the mockup's 0.04 — Qt's compositor
+            # renders the 4% alpha noticeably weaker than browser Chrome
+            # does, so we lean a bit warmer to keep the cue legible.
             self.setStyleSheet(
-                "QWidget {"
-                "background: rgba(0,229,255,0.04);"
+                "QWidget#WorkflowRow {"
+                "background: rgba(0,229,255,0.10);"
                 f"border-left: 2px solid {CYAN};"
                 "border-top: 1px solid transparent;"
                 "border-right: 1px solid transparent;"
@@ -267,7 +280,7 @@ class WorkflowRow(QWidget):
             )
         else:
             self.setStyleSheet(
-                "QWidget {"
+                "QWidget#WorkflowRow {"
                 "background: transparent;"
                 "border-left: 2px solid transparent;"
                 "border-top: 1px solid transparent;"
