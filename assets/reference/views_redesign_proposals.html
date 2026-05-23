@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>JARVIS — View Redesigns (Voice / Automation / History / Settings / Terminal)</title>
+  <style>
+    :root {
+      --bg:           #080A0A;
+      --bg-panel:     rgba(10, 17, 19, 0.92);
+      --cyan:         #00e5ff;
+      --cyan-soft:    rgba(0, 229, 255, 0.45);
+      --cyan-faint:   rgba(0, 229, 255, 0.18);
+      --glow:         rgba(0, 229, 255, 0.45);
+      --green:        #83fba5;
+      --green-dim:    rgba(131, 251, 165, 0.78);
+      --amber:        #ffd166;
+      --red:          #ff6b6b;
+      --ink:          #c3f5ff;
+      --ink-dim:      rgba(195, 245, 255, 0.62);
+      --ink-faint:    rgba(195, 245, 255, 0.38);
+      --font-mono:    "JetBrains Mono", "IBM Plex Mono", "Roboto Mono",
+                      ui-monospace, "SF Mono", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      background: #050505;
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      letter-spacing: 0.02em;
+    }
+    body { padding: 32px 24px; }
+
+    .doc { max-width: 1480px; margin: 0 auto; display:flex; flex-direction:column; gap:48px; }
+    .doc > header h1 { font-size: 18px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan); margin: 0 0 4px; }
+    .doc > header p.lede { color: var(--ink-dim); margin: 0 0 24px; font-size: 11px; max-width: 88ch; }
+    .doc > header nav {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
+      font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    }
+    .doc > header nav a {
+      color: var(--cyan); border: 1px solid var(--cyan-soft); padding: 4px 10px;
+      text-decoration: none;
+    }
+    .doc > header nav a:hover { background: rgba(0,229,255,0.10); }
+
+    section.view {
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    section.view > header.title-row {
+      display: flex; align-items: baseline; justify-content: space-between;
+      padding-bottom: 8px; border-bottom: 1px solid var(--cyan-faint);
+    }
+    section.view > header.title-row h2 {
+      font-size: 14px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--cyan); margin: 0;
+    }
+    section.view > header.title-row .scope {
+      font-size: 10px; color: var(--ink-dim); letter-spacing: 0.08em;
+    }
+    section.view > footer.notes {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+      font-size: 10.5px; color: var(--ink-dim);
+      padding-top: 12px; border-top: 1px solid var(--cyan-faint);
+    }
+    section.view > footer.notes strong {
+      color: var(--ink); letter-spacing: 0.12em; font-size: 9.5px;
+      text-transform: uppercase; display: block; margin-bottom: 6px;
+    }
+
+    /* ── HUD container chrome ───────────────────────────────────────────── */
+    .hud {
+      width: 100%;
+      min-height: 720px;
+      background:
+        radial-gradient(60% 50% at 52% 56%, rgba(0,229,255,0.08) 0%, rgba(0,229,255,0.02) 38%, transparent 100%),
+        var(--bg);
+      border: 1px solid var(--cyan-soft);
+      position: relative;
+      overflow: hidden;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .hud::before {
+      content: ""; position: absolute; inset: 0;
+      background-image: radial-gradient(rgba(0,229,255,0.10) 1px, transparent 1.2px);
+      background-size: 18px 18px; opacity: 0.6; pointer-events: none;
+    }
+    .hud > * { position: relative; z-index: 1; }
+
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--cyan-faint);
+      padding: 12px 14px;
+    }
+    .panel.active { border-left: 2px solid var(--cyan); }
+    .label {
+      font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--cyan); font-weight: 700;
+    }
+    .panel > .label { margin-bottom: 10px; display: block; }
+
+    /* Generic badge */
+    .badge {
+      display: inline-block; padding: 1px 6px; font-size: 9px;
+      letter-spacing: 0.12em; text-transform: uppercase;
+      border: 1px solid currentColor; border-radius: 2px;
+      font-weight: 700;
+    }
+    .b-file { color: #66dd8b; }
+    .b-browser { color: var(--cyan); }
+    .b-vision { color: #c792ea; }
+    .b-meta { color: var(--ink-dim); }
+    .b-system { color: var(--amber); }
+    .b-fail { color: var(--red); }
+    .b-ok { color: var(--green); }
+    .b-auto { color: #ff9bd6; }
+    .b-code { color: #6cc6ff; }
+
+    /* Hero metric */
+    .hero-metric { display: flex; flex-direction: column; gap: 4px; }
+    .hero-metric .h-label {
+      font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--cyan); opacity: 0.78;
+    }
+    .hero-metric .h-val {
+      font-size: 32px; font-weight: 700; line-height: 1; letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .hero-metric .h-sub { font-size: 10px; color: var(--ink-dim); }
+
+    /* Divide-y rows */
+    .divrow { display: flex; align-items: center; gap: 12px;
+      padding: 8px 0; border-bottom: 1px solid rgba(0,229,255,0.07);
+      font-size: 11.5px;
+    }
+    .divrow:last-child { border-bottom: 0; }
+    .divrow .time { color: var(--ink-faint); font-size: 10px; min-width: 48px; }
+    .divrow .you { color: var(--green-dim); }
+    .divrow .arrow { color: var(--ink-faint); }
+    .divrow .resp { color: var(--ink); flex: 1; }
+    .divrow .dur { color: var(--ink-faint); font-size: 10px; margin-left: auto; }
+    .divrow .ok { color: var(--green); font-size: 10px; }
+    .divrow .fail { color: var(--red); font-size: 10px; }
+
+    /* Pip */
+    .pip { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); display: inline-block; }
+    .pip.on { background: var(--green); box-shadow: 0 0 8px var(--green-dim); }
+    .pip.warn { background: var(--amber); }
+    .pip.err { background: var(--red); }
+
+    /* Mic + reactor styles re-used */
+    .mic-big {
+      width: 180px; height: 180px; border-radius: 50%;
+      background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.95) 0%, rgba(0,229,255,0.85) 8%, rgba(0,229,255,0.45) 22%, rgba(0,229,255,0.15) 45%, transparent 65%);
+      border: 2px solid var(--cyan);
+      box-shadow: 0 0 50px rgba(0,229,255,0.45), inset 0 0 35px rgba(0,229,255,0.35);
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--cyan); font-size: 36px; font-weight: 700;
+    }
+    .mic-big::after {
+      content: ""; position: absolute; inset: -12px; border-radius: 50%;
+      border: 1px dashed var(--cyan-soft);
+    }
+
+    /* Waveform bars */
+    .waveform { display: flex; align-items: flex-end; gap: 3px; height: 60px; padding: 4px 0; }
+    .waveform span { display: inline-block; width: 4px; background: var(--cyan); opacity: 0.85; }
+
+    /* Toggle */
+    .toggle { display: inline-block; width: 32px; height: 16px; border-radius: 8px;
+      background: rgba(195, 245, 255, 0.18); position: relative; vertical-align: middle; }
+    .toggle::after { content: ""; position: absolute; left: 2px; top: 2px;
+      width: 12px; height: 12px; border-radius: 50%; background: var(--ink-dim); transition: 200ms; }
+    .toggle.on { background: rgba(0, 229, 255, 0.35); }
+    .toggle.on::after { left: 18px; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+
+    /* Slider */
+    .slider-track {
+      height: 4px; background: rgba(0,229,255,0.15); border-radius: 2px;
+      position: relative; flex: 1;
+    }
+    .slider-track .fill {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      background: var(--cyan); border-radius: 2px;
+    }
+    .slider-track .knob {
+      position: absolute; width: 12px; height: 12px; border-radius: 50%;
+      background: var(--cyan); top: 50%; transform: translate(-50%, -50%);
+      box-shadow: 0 0 8px var(--cyan);
+    }
+
+    /* Theme swatch tiles */
+    .swatch-tile {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 10px; border: 1px solid var(--cyan-faint);
+      cursor: pointer;
+    }
+    .swatch-tile.active { border-color: var(--cyan); background: rgba(0,229,255,0.06); }
+    .swatch-tile .sw-row { display: flex; gap: 4px; height: 16px; }
+    .swatch-tile .sw-row span { flex: 1; }
+    .swatch-tile .sw-name {
+      font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--ink-dim);
+    }
+    .swatch-tile.active .sw-name { color: var(--cyan); }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border: 1px solid var(--cyan-soft); color: var(--cyan);
+      background: transparent; font-family: inherit; font-size: 10px;
+      letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700;
+    }
+    .btn:hover { background: rgba(0,229,255,0.10); }
+    .btn.primary { background: var(--cyan); color: #001a1f; }
+    .btn.primary:hover { background: #5ff2ff; }
+    .btn.ghost { border-color: var(--cyan-faint); color: var(--ink-dim); }
+
+    /* Chip */
+    .chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 10px; border: 1px solid var(--cyan-faint);
+      font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--ink-dim);
+    }
+    .chip.active { color: var(--cyan); border-color: var(--cyan); background: rgba(0,229,255,0.08); }
+
+    code.kbd {
+      background: rgba(0,229,255,0.08);
+      border: 1px solid var(--cyan-faint);
+      padding: 1px 5px; font-size: 10px;
+      color: var(--cyan);
+    }
+  </style>
+</head>
+<body>
+  <div class="doc">
+    <header>
+      <h1>JARVIS — View Redesigns (Voice · Automation · History · Settings · Terminal)</h1>
+      <p class="lede">
+        Five tabs redesigned to match the same principles applied to the dashboard:
+        typography hierarchy, intent badges, divide-y rows instead of card framing
+        where density warrants, active-vs-passive panel borders, off-center weight
+        where it makes sense. All rendered in the Stark Cyan theme (default); the
+        other four themes apply on top by token-swap.
+      </p>
+      <nav>
+        <a href="#voice">Voice</a>
+        <a href="#automation">Automation</a>
+        <a href="#history">History</a>
+        <a href="#settings">Settings</a>
+        <a href="#terminal">Terminal</a>
+      </nav>
+    </header>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- VOICE VIEW                                                            -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <section class="view" id="voice">
+      <header class="title-row">
+        <h2>Voice · push-to-talk + live transcript</h2>
+        <span class="scope">Hero mic + waveform · live status pills · per-turn intent badges · voice controls right</span>
+      </header>
+
+      <div class="hud" style="grid-template-columns: 1.05fr 1fr; grid-template-rows: auto 1fr auto;">
+        <!-- Top status row (spans both columns) -->
+        <div style="grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;">
+          <div class="hero-metric">
+            <span class="h-label">State</span>
+            <span class="h-val" style="font-size:22px; color:var(--cyan);">LISTENING</span>
+            <span class="h-sub"><span class="pip on"></span> mic open · 2.1s capture</span>
+          </div>
+          <div class="hero-metric">
+            <span class="h-label">Capture lvl</span>
+            <span class="h-val">−18<span style="font-size:10px; color:var(--ink-faint)"> dB</span></span>
+            <span class="h-sub">peak −9 · avg −22</span>
+          </div>
+          <div class="hero-metric">
+            <span class="h-label">Device</span>
+            <span class="h-val" style="font-size:14px;">Default · 16kHz</span>
+            <span class="h-sub">noise-gate ON</span>
+          </div>
+          <div class="hero-metric">
+            <span class="h-label">Wake word</span>
+            <span class="h-val" style="font-size:18px; color:var(--green);">"jarvis"</span>
+            <span class="h-sub">last heard 03:31</span>
+          </div>
+          <div class="hero-metric">
+            <span class="h-label">TTS provider</span>
+            <span class="h-val" style="font-size:14px;">Gemini · Kore</span>
+            <span class="h-sub" style="color:var(--green);"><span class="pip on"></span> healthy</span>
+          </div>
+        </div>
+
+        <!-- LEFT: mic + waveform + transcript -->
+        <div class="panel active" style="display:flex; flex-direction:column; gap:14px;">
+          <div style="display:flex; flex-direction:column; align-items:center; gap:14px; padding: 18px 0;">
+            <div class="mic-big">🎙</div>
+            <div style="font-size:10px; letter-spacing:0.32em; color:var(--ink-faint); text-transform:uppercase;">
+              Tap or say "jarvis"
+            </div>
+          </div>
+          <div>
+            <div class="label" style="margin-bottom:8px;">Waveform · live</div>
+            <div class="waveform">
+              <!-- 60 bars -->
+              <span style="height:8px"></span><span style="height:14px"></span><span style="height:22px"></span><span style="height:34px"></span>
+              <span style="height:44px"></span><span style="height:52px"></span><span style="height:48px"></span><span style="height:30px"></span>
+              <span style="height:18px"></span><span style="height:26px"></span><span style="height:40px"></span><span style="height:54px"></span>
+              <span style="height:60px"></span><span style="height:50px"></span><span style="height:38px"></span><span style="height:20px"></span>
+              <span style="height:12px"></span><span style="height:22px"></span><span style="height:36px"></span><span style="height:48px"></span>
+              <span style="height:56px"></span><span style="height:52px"></span><span style="height:40px"></span><span style="height:28px"></span>
+              <span style="height:16px"></span><span style="height:24px"></span><span style="height:38px"></span><span style="height:50px"></span>
+              <span style="height:58px"></span><span style="height:46px"></span><span style="height:32px"></span><span style="height:18px"></span>
+              <span style="height:10px"></span><span style="height:20px"></span><span style="height:32px"></span><span style="height:44px"></span>
+              <span style="height:54px"></span><span style="height:50px"></span><span style="height:34px"></span><span style="height:22px"></span>
+              <span style="height:14px"></span><span style="height:26px"></span><span style="height:38px"></span><span style="height:50px"></span>
+              <span style="height:56px"></span><span style="height:42px"></span><span style="height:28px"></span><span style="height:16px"></span>
+              <span style="height:10px"></span><span style="height:18px"></span><span style="height:30px"></span><span style="height:42px"></span>
+              <span style="height:48px"></span><span style="height:34px"></span><span style="height:22px"></span><span style="height:14px"></span>
+              <span style="height:8px"></span><span style="height:18px"></span><span style="height:28px"></span><span style="height:40px"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: per-turn transcript with intent badges -->
+        <div class="panel" style="overflow:hidden;">
+          <div class="label" style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+            <span>Transcript · this session</span>
+            <span style="font-size:9px; color:var(--ink-faint); letter-spacing:0.12em;">12 exchanges</span>
+          </div>
+
+          <div class="divrow">
+            <span class="time">03:31</span><span class="you">"create a file called notes.txt"</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:31</span><span class="badge b-file">file</span>
+            <span class="resp">Creating notes.txt in your Downloads folder.</span>
+            <span class="dur">0.04s</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:32</span><span class="you">"switch to the youtube tab"</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:32</span><span class="badge b-browser">browser</span>
+            <span class="resp">Switching to YouTube.</span>
+            <span class="dur">0.21s</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:33</span><span class="you">"what's on my screen"</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:33</span><span class="badge b-vision">vision</span>
+            <span class="resp">JARVIS HUD with the reactor and right-side metrics…</span>
+            <span class="dur">3.8s</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:34</span><span class="you">"open spotify"</span>
+            <span class="fail">✗</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:34</span><span class="badge b-fail">fail</span>
+            <span class="resp">Couldn't open Spotify — file not found.</span>
+            <span class="dur">0.6s</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:35</span><span class="you">"tell me a joke"</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:35</span><span class="badge b-meta">meta</span>
+            <span class="resp">Why do programmers prefer dark mode? Because light attracts bugs.</span>
+            <span class="dur">0.9s</span>
+          </div>
+        </div>
+
+        <!-- Bottom action bar (spans both cols) -->
+        <div style="grid-column: 1 / -1; display:flex; align-items:center; gap:14px; padding: 10px 0;">
+          <button class="btn primary">⏵ Start Listening</button>
+          <button class="btn ghost">⏸ Pause Wake</button>
+          <button class="btn ghost">⌫ Clear Transcript</button>
+          <span style="margin-left:auto; font-size:10px; color:var(--ink-faint); letter-spacing:0.12em;">
+            HOTKEY <code class="kbd">Ctrl+Shift+M</code> toggles mic
+          </span>
+        </div>
+      </div>
+
+      <footer class="notes">
+        <div><strong>What changes</strong>
+          Top status row replaces the cluttered legacy strip — five hero metrics (State, Capture, Device, Wake word, TTS) each with a giant value and a tiny label/sub. Mic remains the focal point but no longer fights the rest of the screen. Transcript turns into a divide-y list with intent badges and duration tags so the same data reads at a glance.
+        </div>
+        <div><strong>What stays</strong>
+          The big circular mic button (with its glow) is the single hero. Wake word, mic device, and TTS provider stay visible. Waveform stays inline — moved below the mic to give it width.
+        </div>
+        <div><strong>Motion budget</strong>
+          Mic glow pulse only while listening (off when idle). Waveform reacts to RMS at 60fps. State value crossfades 180ms when it changes. Transcript rows fade in 200ms on append. Everything gated on prefers-reduced-motion.
+        </div>
+      </footer>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- AUTOMATION VIEW                                                       -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <section class="view" id="automation">
+      <header class="title-row">
+        <h2>Automation · workflow library + editor</h2>
+        <span class="scope">Top stats · list-on-left / detail-on-right · schedule badges · step pipeline · new workflow inline</span>
+      </header>
+
+      <div class="hud" style="grid-template-rows: auto 1fr;">
+        <!-- Top stats strip -->
+        <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:0; border:1px solid var(--cyan-faint);">
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Workflows</span>
+            <span style="font-size:30px; font-weight:700; line-height:1;">7</span>
+            <span style="font-size:10px; color:var(--ink-dim);">5 enabled · 2 paused</span>
+          </div>
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Scheduled</span>
+            <span style="font-size:30px; font-weight:700; line-height:1;">3</span>
+            <span style="font-size:10px; color:var(--ink-dim);">next: 09:00 weekdays</span>
+          </div>
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Total runs</span>
+            <span style="font-size:30px; font-weight:700; line-height:1;">142</span>
+            <span style="font-size:10px; color:var(--ink-dim);">21 today · 96% success</span>
+          </div>
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Last fired</span>
+            <span style="font-size:14px; font-weight:700; line-height:1.2; color:var(--cyan);">morning_routine</span>
+            <span style="font-size:10px; color:var(--ink-dim);">today 09:00 · 4 steps</span>
+          </div>
+          <div style="padding:14px 18px; display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Avg latency</span>
+            <span style="font-size:30px; font-weight:700; line-height:1;">2.1<span style="font-size:11px; color:var(--ink-faint)">s</span></span>
+            <span style="font-size:10px; color:var(--ink-dim);">per-step median</span>
+          </div>
+        </div>
+
+        <!-- 2-column body: library list (left) + detail (right) -->
+        <div style="display:grid; grid-template-columns: 360px 1fr; gap:14px; min-height:0;">
+          <!-- LIBRARY -->
+          <div class="panel active" style="overflow:hidden;">
+            <div class="label" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+              <span>Workflow library</span>
+              <button class="btn primary" style="padding:3px 8px; font-size:9px;">+ NEW</button>
+            </div>
+            <div style="display:flex; gap:6px; margin-bottom:10px;">
+              <span class="chip active">All · 7</span>
+              <span class="chip">Scheduled · 3</span>
+              <span class="chip">Paused · 2</span>
+            </div>
+
+            <!-- Workflow rows -->
+            <div style="display:flex; flex-direction:column;">
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07); border-left:2px solid var(--cyan); padding-left:8px; background:rgba(0,229,255,0.04);">
+                <div style="flex:1;">
+                  <div style="font-size:12px; font-weight:700; color:var(--cyan);">morning_routine</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">4 steps · <span class="badge b-system" style="font-size:8px; padding:0 4px;">0 9 * * 1-5</span></div>
+                </div>
+                <span style="font-size:10px; color:var(--green); letter-spacing:0.1em;">ON</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="flex:1;">
+                  <div style="font-size:12px;">end_of_day</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">3 steps · <span class="badge b-system" style="font-size:8px; padding:0 4px;">0 18 * * 1-5</span></div>
+                </div>
+                <span style="font-size:10px; color:var(--green); letter-spacing:0.1em;">ON</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="flex:1;">
+                  <div style="font-size:12px;">coffee_break</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">2 steps · manual</div>
+                </div>
+                <span style="font-size:10px; color:var(--green); letter-spacing:0.1em;">ON</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="flex:1;">
+                  <div style="font-size:12px;">hourly_screenshot</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">1 step · <span class="badge b-system" style="font-size:8px; padding:0 4px;">0 * * * *</span></div>
+                </div>
+                <span style="font-size:10px; color:var(--ink-faint); letter-spacing:0.1em;">PAUSED</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="flex:1;">
+                  <div style="font-size:12px;">git_status_check</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">1 step · manual</div>
+                </div>
+                <span style="font-size:10px; color:var(--green); letter-spacing:0.1em;">ON</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="flex:1;">
+                  <div style="font-size:12px;">deploy_dev</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">5 steps · manual</div>
+                </div>
+                <span style="font-size:10px; color:var(--green); letter-spacing:0.1em;">ON</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 0;">
+                <div style="flex:1;">
+                  <div style="font-size:12px;">scratch</div>
+                  <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">2 steps · manual</div>
+                </div>
+                <span style="font-size:10px; color:var(--ink-faint); letter-spacing:0.1em;">PAUSED</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- DETAIL -->
+          <div class="panel" style="display:flex; flex-direction:column; gap:14px;">
+            <div style="display:flex; align-items:baseline; justify-content:space-between;">
+              <div>
+                <div style="font-size:18px; font-weight:700; color:var(--cyan); letter-spacing:0.04em;">morning_routine</div>
+                <div style="font-size:10px; color:var(--ink-dim); margin-top:2px;">last fired today 09:00 · 4 steps · 96% success over 42 runs</div>
+              </div>
+              <div style="display:flex; gap:6px;">
+                <button class="btn">▶ Run now</button>
+                <button class="btn ghost">Pause</button>
+                <button class="btn ghost">Edit</button>
+                <button class="btn ghost" style="color:var(--red); border-color:var(--red);">Delete</button>
+              </div>
+            </div>
+
+            <!-- Schedule editor inline -->
+            <div style="display:grid; grid-template-columns: 120px 1fr; gap:10px 16px; align-items:center;">
+              <span class="label">Schedule</span>
+              <span><code class="kbd">0 9 * * 1-5</code> &nbsp; <span style="color:var(--ink-dim); font-size:10px;">9:00 AM every weekday</span></span>
+              <span class="label">Trigger</span>
+              <span style="color:var(--ink-dim); font-size:11px;">Manual / scheduled / wake-word phrase: "morning routine"</span>
+              <span class="label">Enabled</span>
+              <span><span class="toggle on"></span> &nbsp; <span style="color:var(--green); font-size:10px; letter-spacing:0.14em;">ON</span></span>
+            </div>
+
+            <!-- Step pipeline -->
+            <div>
+              <div class="label" style="margin-bottom:8px;">Steps · 4</div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--cyan-faint);">
+                  <span style="font-size:9px; color:var(--ink-faint); min-width:18px;">1</span>
+                  <span class="badge b-browser">browser</span>
+                  <span style="flex:1; font-size:11px;">open_url · https://gmail.com</span>
+                  <span style="font-size:10px; color:var(--ink-faint);">0.3s avg</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--cyan-faint);">
+                  <span style="font-size:9px; color:var(--ink-faint); min-width:18px;">2</span>
+                  <span class="badge b-system">system</span>
+                  <span style="flex:1; font-size:11px;">screenshot · save to ~/Documents/morning</span>
+                  <span style="font-size:10px; color:var(--ink-faint);">0.1s avg</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--cyan-faint);">
+                  <span style="font-size:9px; color:var(--ink-faint); min-width:18px;">3</span>
+                  <span class="badge b-vision">vision</span>
+                  <span style="flex:1; font-size:11px;">read_text · summarise visible content</span>
+                  <span style="font-size:10px; color:var(--ink-faint);">3.5s avg</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--cyan-faint);">
+                  <span style="font-size:9px; color:var(--ink-faint); min-width:18px;">4</span>
+                  <span class="badge b-meta">meta</span>
+                  <span style="flex:1; font-size:11px;">status_report · CPU + MEM + battery</span>
+                  <span style="font-size:10px; color:var(--ink-faint);">0.2s avg</span>
+                </div>
+                <button class="btn ghost" style="margin-top:4px; padding:6px 10px;">+ ADD STEP</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="notes">
+        <div><strong>What changes</strong>
+          Top stats row replaces the legacy "WORKFLOW LIBRARY" header bar — now you see total / scheduled / runs / last-fired / avg-latency at a glance. Library list gets a chip filter, schedule badge, and ON/PAUSED state pill per row. Detail pane shows schedule editor inline, step pipeline with intent badges + average latency per step.
+        </div>
+        <div><strong>What stays</strong>
+          List-on-left / detail-on-right model is preserved (it's the right model). "+ NEW" button. Step list as the core editing surface. The data shown is the same data — just laid out denser and with hierarchy.
+        </div>
+        <div><strong>Motion budget</strong>
+          Active-row left-border slides in on selection change (120ms). Step rows fade in 200ms when a workflow is loaded. Run-now button pulses cyan while a workflow is executing. Stats values tween on threshold cross (not every poll).
+        </div>
+      </footer>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- HISTORY VIEW                                                          -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <section class="view" id="history">
+      <header class="title-row">
+        <h2>History · session log + analytics</h2>
+        <span class="scope">Top stat tiles · filter chips · divide-y log rows with intent + outcome + duration · sparkline strip</span>
+      </header>
+
+      <div class="hud" style="grid-template-rows: auto auto auto 1fr;">
+        <!-- Top stat tiles -->
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:0; border:1px solid var(--cyan-faint);">
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Total commands</span>
+            <span style="font-size:32px; font-weight:700; line-height:1;">1,247</span>
+            <span style="font-size:10px; color:var(--ink-dim);">all-time · 87 today</span>
+          </div>
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Success rate</span>
+            <span style="font-size:32px; font-weight:700; line-height:1; color:var(--green);">94%</span>
+            <span style="font-size:10px; color:var(--ink-dim);">76 of 81 last 24h</span>
+          </div>
+          <div style="padding:14px 18px; border-right:1px solid var(--cyan-faint); display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Median latency</span>
+            <span style="font-size:32px; font-weight:700; line-height:1;">0.84<span style="font-size:12px; color:var(--ink-faint)">s</span></span>
+            <span style="font-size:10px; color:var(--ink-dim);">p95 · 3.1s · p99 · 8.2s</span>
+          </div>
+          <div style="padding:14px 18px; display:flex; flex-direction:column; gap:2px;">
+            <span style="font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--cyan); opacity:0.78;">Most used intent</span>
+            <span style="font-size:16px; font-weight:700; line-height:1.2; color:var(--cyan);">browser_automation</span>
+            <span style="font-size:10px; color:var(--ink-dim);">312 calls · 25% of all</span>
+          </div>
+        </div>
+
+        <!-- Sparkline strip -->
+        <div class="panel" style="padding:10px 14px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+            <span class="label">Activity · last 24h</span>
+            <span style="font-size:10px; color:var(--ink-dim);">87 commands · peaks at 09:00 / 14:30 / 22:00</span>
+          </div>
+          <svg viewBox="0 0 400 50" preserveAspectRatio="none" style="width:100%; height:50px;">
+            <polyline fill="none" stroke="var(--cyan)" stroke-width="1.2"
+              points="0,38 16,32 32,40 48,28 64,22 80,18 96,12 112,16 128,24 144,30 160,28 176,18 192,8 208,14 224,22 240,18 256,12 272,20 288,28 304,24 320,16 336,10 352,18 368,22 384,30 400,34" />
+            <polyline fill="rgba(0,229,255,0.08)" stroke="none"
+              points="0,50 0,38 16,32 32,40 48,28 64,22 80,18 96,12 112,16 128,24 144,30 160,28 176,18 192,8 208,14 224,22 240,18 256,12 272,20 288,28 304,24 320,16 336,10 352,18 368,22 384,30 400,34 400,50" />
+          </svg>
+        </div>
+
+        <!-- Filter chip row -->
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          <span class="chip active">All · 87</span>
+          <span class="chip">browser · 22</span>
+          <span class="chip">file · 18</span>
+          <span class="chip">vision · 14</span>
+          <span class="chip">meta · 12</span>
+          <span class="chip">system · 11</span>
+          <span class="chip">workflow · 6</span>
+          <span class="chip">failures · 5</span>
+          <span style="margin-left:auto; display:flex; align-items:center; gap:8px; font-size:10px; color:var(--ink-dim);">
+            <span>📅 today</span><span class="chip ghost">↓ export</span>
+          </span>
+        </div>
+
+        <!-- Log list -->
+        <div class="panel" style="overflow:hidden;">
+          <div class="label" style="margin-bottom:8px;">Sessions · today</div>
+
+          <div class="divrow">
+            <span class="time">03:35:12</span>
+            <span class="badge b-meta">meta</span>
+            <span class="you">"tell me a joke"</span>
+            <span class="arrow">→</span>
+            <span class="resp">Why do programmers prefer dark mode? Because light attracts bugs.</span>
+            <span class="dur">0.9s</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:34:01</span>
+            <span class="badge b-fail">fail</span>
+            <span class="you">"open spotify"</span>
+            <span class="arrow">→</span>
+            <span class="resp" style="color:var(--red);">Couldn't open Spotify — file not found.</span>
+            <span class="dur">0.6s</span>
+            <span class="fail">✗</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:33:48</span>
+            <span class="badge b-vision">vision</span>
+            <span class="you">"what's on my screen"</span>
+            <span class="arrow">→</span>
+            <span class="resp">JARVIS HUD with the reactor and right-side metrics, log buffer showing recent commands…</span>
+            <span class="dur">3.8s</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:32:22</span>
+            <span class="badge b-browser">browser</span>
+            <span class="you">"switch to the youtube tab"</span>
+            <span class="arrow">→</span>
+            <span class="resp">Switching to YouTube.</span>
+            <span class="dur">0.21s</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:31:05</span>
+            <span class="badge b-file">file</span>
+            <span class="you">"create a file called notes.txt"</span>
+            <span class="arrow">→</span>
+            <span class="resp">Created notes.txt in Downloads — confirmed.</span>
+            <span class="dur">0.18s</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:28:39</span>
+            <span class="badge b-auto">auto</span>
+            <span class="you">[scheduled] morning_routine</span>
+            <span class="arrow">→</span>
+            <span class="resp">4 steps complete — gmail · screenshot · vision read · status report.</span>
+            <span class="dur">5.2s</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:24:18</span>
+            <span class="badge b-system">system</span>
+            <span class="you">"volume up to 60"</span>
+            <span class="arrow">→</span>
+            <span class="resp">Volume at 60%.</span>
+            <span class="dur">0.05s</span>
+            <span class="ok">✓</span>
+          </div>
+          <div class="divrow">
+            <span class="time">03:18:02</span>
+            <span class="badge b-code">code</span>
+            <span class="you">"run git status in jarvis-project"</span>
+            <span class="arrow">→</span>
+            <span class="resp">On branch main · Your branch is up to date with 'origin/main'</span>
+            <span class="dur">0.31s</span>
+            <span class="ok">✓</span>
+          </div>
+        </div>
+      </div>
+
+      <footer class="notes">
+        <div><strong>What changes</strong>
+          Four hero stats above the fold (Total, Success rate, Median latency, Most used intent) — replaces the legacy small-cards row. Sparkline strip below shows activity rhythm. Filter chips replace the legacy filter dropdowns. Log rows include intent badge + user text + JARVIS response inline + duration + outcome — five times the data density per row vs the current layout.
+        </div>
+        <div><strong>What stays</strong>
+          History is still a list of past commands. The same data lives here as in the current view. Time, user query, response, intent — all visible. Now also: pass/fail outcome at-a-glance, intent type via colored badge, command duration.
+        </div>
+        <div><strong>Motion budget</strong>
+          Stat tiles tween only on threshold cross. Sparkline redraws smoothly on hourly tick (300ms easeInOut). Filter chip switch fades log rows 200ms. Hovering a row tints it (no transform — performant). All gated on prefers-reduced-motion.
+        </div>
+      </footer>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- SETTINGS VIEW                                                         -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <section class="view" id="settings">
+      <header class="title-row">
+        <h2>Settings · API · voice · behaviour · theme</h2>
+        <span class="scope">Three-column sectioned settings · divide-y rows · theme picker with visual swatches · top health strip</span>
+      </header>
+
+      <div class="hud" style="grid-template-rows: auto 1fr;">
+        <!-- Top health strip — replaces the cramped pill row -->
+        <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap:0; border:1px solid var(--cyan-faint);">
+          <div style="padding:10px 14px; border-right:1px solid var(--cyan-faint); display:flex; align-items:center; gap:10px;">
+            <span class="pip on"></span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:9px; letter-spacing:0.20em; text-transform:uppercase; color:var(--ink-faint);">Anthropic</span>
+              <span style="font-size:11px; color:var(--green);">connected</span>
+            </div>
+          </div>
+          <div style="padding:10px 14px; border-right:1px solid var(--cyan-faint); display:flex; align-items:center; gap:10px;">
+            <span class="pip warn"></span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:9px; letter-spacing:0.20em; text-transform:uppercase; color:var(--ink-faint);">ElevenLabs</span>
+              <span style="font-size:11px; color:var(--amber);">quota low</span>
+            </div>
+          </div>
+          <div style="padding:10px 14px; border-right:1px solid var(--cyan-faint); display:flex; align-items:center; gap:10px;">
+            <span class="pip on"></span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:9px; letter-spacing:0.20em; text-transform:uppercase; color:var(--ink-faint);">Gemini TTS</span>
+              <span style="font-size:11px; color:var(--green);">healthy</span>
+            </div>
+          </div>
+          <div style="padding:10px 14px; border-right:1px solid var(--cyan-faint); display:flex; align-items:center; gap:10px;">
+            <span class="pip on"></span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:9px; letter-spacing:0.20em; text-transform:uppercase; color:var(--ink-faint);">Mic</span>
+              <span style="font-size:11px; color:var(--green);">detected</span>
+            </div>
+          </div>
+          <div style="padding:10px 14px; border-right:1px solid var(--cyan-faint); display:flex; align-items:center; gap:10px;">
+            <span class="pip on"></span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:9px; letter-spacing:0.20em; text-transform:uppercase; color:var(--ink-faint);">Wake word</span>
+              <span style="font-size:11px; color:var(--green);">listening</span>
+            </div>
+          </div>
+          <div style="padding:10px 14px; display:flex; align-items:center; gap:10px;">
+            <span class="pip warn"></span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:9px; letter-spacing:0.20em; text-transform:uppercase; color:var(--ink-faint);">Browser</span>
+              <span style="font-size:11px; color:var(--amber);">not started</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3 columns of grouped settings -->
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px;">
+
+          <!-- COL 1 · API & connectivity -->
+          <div class="panel active">
+            <div class="label" style="margin-bottom:14px;">API & connectivity</div>
+            <div style="display:flex; flex-direction:column;">
+              <div style="display:grid; grid-template-columns:1fr auto; gap:6px 14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="font-size:11px;">Anthropic API key</div>
+                <div style="font-size:10px; color:var(--ink-dim);">sk-ant-… <code class="kbd">edit</code></div>
+                <div style="grid-column:1/-1; font-size:10px; color:var(--ink-faint);">Required. Routes every command through Claude.</div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr auto; gap:6px 14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="font-size:11px;">ElevenLabs API key</div>
+                <div style="font-size:10px; color:var(--amber);">5 credits · <code class="kbd">top up</code></div>
+                <div style="grid-column:1/-1; font-size:10px; color:var(--ink-faint);">Primary TTS provider. Falls back to Gemini when quota-locked.</div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr auto; gap:6px 14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="font-size:11px;">Gemini API key</div>
+                <div style="font-size:10px; color:var(--green);">AIza… · free tier</div>
+                <div style="grid-column:1/-1; font-size:10px; color:var(--ink-faint);">Fallback TTS. 10 calls/day on the free tier.</div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr auto; gap:6px 14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="font-size:11px;">Claude model</div>
+                <div style="font-size:10px; color:var(--cyan);">claude-sonnet-4-6</div>
+                <div style="grid-column:1/-1; font-size:10px; color:var(--ink-faint);">Sonnet 4.6 for routing. Opus 4.7 available.</div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr auto; gap:6px 14px; padding:10px 0;">
+                <div style="font-size:11px;">OpenWeather</div>
+                <div style="font-size:10px; color:var(--ink-dim);">optional · not set</div>
+                <div style="grid-column:1/-1; font-size:10px; color:var(--ink-faint);">Powers the @weather intent.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- COL 2 · Voice & audio -->
+          <div class="panel">
+            <div class="label" style="margin-bottom:14px;">Voice & audio</div>
+            <div style="display:flex; flex-direction:column;">
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <span style="font-size:11px; min-width:90px;">Voice profile</span>
+                <span style="flex:1; font-size:11px; color:var(--cyan);">Male British · George</span>
+                <span style="font-size:10px; color:var(--ink-faint);">▾</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <span style="font-size:11px; min-width:90px;">Wake word</span>
+                <span style="flex:1; font-size:11px; color:var(--cyan);">"jarvis"</span>
+                <span style="font-size:10px; color:var(--ink-faint);">edit</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <span style="font-size:11px; min-width:90px;">Mic device</span>
+                <span style="flex:1; font-size:11px; color:var(--ink);">Default · 16kHz</span>
+                <span style="font-size:10px; color:var(--ink-faint);">▾</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <span style="font-size:11px; min-width:90px;">Sensitivity</span>
+                <div class="slider-track" style="margin: 0 6px;"><div class="fill" style="width:70%;"></div><div class="knob" style="left:70%;"></div></div>
+                <span style="font-size:10px; color:var(--ink-faint); min-width:24px; text-align:right;">70</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <span style="font-size:11px; min-width:90px;">TTS speed</span>
+                <div class="slider-track" style="margin: 0 6px;"><div class="fill" style="width:50%;"></div><div class="knob" style="left:50%;"></div></div>
+                <span style="font-size:10px; color:var(--ink-faint); min-width:24px; text-align:right;">100</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <span style="font-size:11px; min-width:90px;">Noise gate</span>
+                <span style="flex:1;"></span>
+                <span class="toggle on"></span>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; padding:10px 0;">
+                <span style="font-size:11px; min-width:90px;">Wake listener</span>
+                <span style="flex:1;"></span>
+                <span class="toggle on"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- COL 3 · Behaviour & visuals (incl. theme picker) -->
+          <div class="panel">
+            <div class="label" style="margin-bottom:14px;">Behaviour & visuals</div>
+            <div style="display:flex; flex-direction:column;">
+              <div style="padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="display:flex; align-items:center; gap:14px;">
+                  <span style="font-size:11px; min-width:120px;">Auto-confirm</span>
+                  <span style="flex:1;"></span>
+                  <span class="toggle"></span>
+                </div>
+                <div style="font-size:10px; color:var(--ink-faint); margin-top:4px;">Skip confirmation prompts. Destructive actions run instantly.</div>
+              </div>
+              <div style="padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="display:flex; align-items:center; gap:14px;">
+                  <span style="font-size:11px; min-width:120px;">Dim mode</span>
+                  <span style="flex:1;"></span>
+                  <span class="toggle"></span>
+                </div>
+                <div style="font-size:10px; color:var(--ink-faint); margin-top:4px;">Reduce brightness for low-light use.</div>
+              </div>
+              <div style="padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="display:flex; align-items:center; gap:14px;">
+                  <span style="font-size:11px; min-width:120px;">Reduce motion</span>
+                  <span style="flex:1;"></span>
+                  <span class="toggle"></span>
+                </div>
+                <div style="font-size:10px; color:var(--ink-faint); margin-top:4px;">Respect prefers-reduced-motion. Instant transitions when on.</div>
+              </div>
+              <div style="padding:10px 0; border-bottom:1px solid rgba(0,229,255,0.07);">
+                <div style="display:flex; align-items:center; gap:14px;">
+                  <span style="font-size:11px; min-width:120px;">Vision · stream</span>
+                  <span style="flex:1;"></span>
+                  <span class="toggle on"></span>
+                </div>
+                <div style="font-size:10px; color:var(--ink-faint); margin-top:4px;">Stream Claude vision response line-by-line to the terminal.</div>
+              </div>
+
+              <!-- Theme picker (visual swatches) -->
+              <div style="padding:14px 0 6px;">
+                <div style="font-size:11px; margin-bottom:8px;">HUD theme</div>
+                <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:6px;">
+                  <div class="swatch-tile active">
+                    <div class="sw-row"><span style="background:#00e5ff"></span><span style="background:#080A0A"></span></div>
+                    <span class="sw-name">Stark</span>
+                  </div>
+                  <div class="swatch-tile">
+                    <div class="sw-row"><span style="background:#3dc7d6"></span><span style="background:#0a1010"></span></div>
+                    <span class="sw-name">Teal</span>
+                  </div>
+                  <div class="swatch-tile">
+                    <div class="sw-row"><span style="background:#ffaa00"></span><span style="background:#0d0a04"></span></div>
+                    <span class="sw-name">Amber</span>
+                  </div>
+                  <div class="swatch-tile">
+                    <div class="sw-row"><span style="background:#818cf8"></span><span style="background:#060912"></span></div>
+                    <span class="sw-name">Indigo</span>
+                  </div>
+                  <div class="swatch-tile">
+                    <div class="sw-row"><span style="background:#00ff66"></span><span style="background:#050a06"></span></div>
+                    <span class="sw-name">Matrix</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="notes">
+        <div><strong>What changes</strong>
+          Top health strip replaces the cramped pill row — six provider/device status tiles with status pip + service + state. Three-column sectioning (API · Voice · Behaviour) replaces the single-column scroll. Theme picker becomes a visual swatch grid with 5 active variants (was a text dropdown). Toggles get descriptions inline rather than separate help text. Slider tracks replace cramped numeric inputs.
+        </div>
+        <div><strong>What stays</strong>
+          All settings the current view shows are preserved. API keys, voice profile, wake word, mic device, sensitivity, TTS speed, auto-confirm, dim mode, theme. Just reorganized and given hierarchy.
+        </div>
+        <div><strong>Motion budget</strong>
+          Health pips pulse when their state flips (180ms). Toggle slides 160ms. Theme swatch borders animate on select (100ms). Slider knobs drag with no easing (instant feedback on drag — Emil's keyboard-interaction rule).
+        </div>
+      </footer>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- TERMINAL VIEW                                                         -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <section class="view" id="terminal">
+      <header class="title-row">
+        <h2>Terminal · JARVIS Shell v2</h2>
+        <span class="scope">Larger header · scrollback fade · prompt with intent autocomplete hint · sidebar with quick actions</span>
+      </header>
+
+      <div class="hud" style="grid-template-columns: 1fr 220px; grid-template-rows: auto 1fr auto;">
+        <!-- Top breadcrumb (spans both cols) -->
+        <div style="grid-column: 1 / -1; display:flex; align-items:center; justify-content:space-between; padding-bottom:8px; border-bottom:1px solid var(--cyan-faint);">
+          <div style="display:flex; align-items:center; gap:14px;">
+            <span style="color:var(--cyan); font-size:14px; font-weight:700; letter-spacing:0.18em;">JARVIS SHELL · V2</span>
+            <span style="color:var(--ink-dim); font-size:10px; letter-spacing:0.12em;">session · 03:31 · 87 commands</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="chip active">@all</span>
+            <span class="chip">@code</span>
+            <span class="chip">@files</span>
+            <span class="chip">@browser</span>
+            <button class="btn ghost" style="padding:3px 8px;">⌫ clear</button>
+            <button class="btn ghost" style="padding:3px 8px;">↓ save</button>
+          </div>
+        </div>
+
+        <!-- OUTPUT (main, left) -->
+        <div class="panel active" style="overflow:hidden; position:relative;">
+          <!-- Top fade -->
+          <div style="position:absolute; left:0; right:0; top:0; height:24px;
+            background: linear-gradient(180deg, var(--bg-panel), transparent);
+            pointer-events:none; z-index:2;"></div>
+          <pre style="margin:0; padding:8px 4px; font-size:11.5px; line-height:1.7; color:var(--ink);
+              max-height:580px; overflow:hidden;">
+<span style="color:var(--ink-faint);">[03:31:05]</span> <span style="color:var(--cyan)">❯</span> <span style="color:var(--green)">create a file called notes.txt in Downloads</span>
+<span style="color:var(--ink-faint);">           </span> <span class="badge b-file" style="font-size:9px;">file</span>  Created notes.txt in Downloads.
+<span style="color:var(--ink-faint);">           </span> <span style="color:var(--ink-faint);">Path:</span> <span style="color:var(--cyan)">C:\Users\Lenovo\Downloads\notes.txt</span>
+
+<span style="color:var(--ink-faint);">[03:32:22]</span> <span style="color:var(--cyan)">❯</span> <span style="color:var(--green)">switch to the youtube tab</span>
+<span style="color:var(--ink-faint);">           </span> <span class="badge b-browser" style="font-size:9px;">browser</span>  Switching to YouTube.
+<span style="color:var(--ink-faint);">           </span> Active tab: <span style="color:var(--cyan)">YouTube · Music · Lofi Hip Hop Radio</span>
+
+<span style="color:var(--ink-faint);">[03:33:48]</span> <span style="color:var(--cyan)">❯</span> <span style="color:var(--green)">what's on my screen</span>
+<span style="color:var(--ink-faint);">           </span> <span class="badge b-vision" style="font-size:9px;">vision</span>  Taking a look.
+<span style="color:var(--ink-faint);">           </span> JARVIS HUD with the reactor and right-side metrics.
+<span style="color:var(--ink-faint);">           </span> CPU panel at 24%, MEM at 91%, UPLINK_STATUS showing TX/RX rates.
+<span style="color:var(--ink-faint);">           </span> Left log buffer shows the most recent exchanges with intent badges.
+<span style="color:var(--ink-faint);">           </span> Reactor pulses cyan; the central glow dominates the layout.
+
+<span style="color:var(--ink-faint);">[03:34:01]</span> <span style="color:var(--cyan)">❯</span> <span style="color:var(--green)">open spotify</span>
+<span style="color:var(--ink-faint);">           </span> <span class="badge b-fail" style="font-size:9px;">fail</span>  Couldn't open Spotify — file not found.
+<span style="color:var(--ink-faint);">           </span> <span style="color:var(--red)">WinError 2: The system cannot find the file specified: 'Spotify'</span>
+
+<span style="color:var(--ink-faint);">[03:35:12]</span> <span style="color:var(--cyan)">❯</span> <span style="color:var(--green)">tell me a joke</span>
+<span style="color:var(--ink-faint);">           </span> <span class="badge b-meta" style="font-size:9px;">meta</span>  Why do programmers prefer dark mode?
+<span style="color:var(--ink-faint);">           </span> Because light attracts bugs.
+          </pre>
+        </div>
+
+        <!-- SIDEBAR (right): quick actions + history -->
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div class="panel">
+            <div class="label" style="margin-bottom:10px;">Quick actions</div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              <button class="btn ghost" style="justify-content:flex-start;">git status</button>
+              <button class="btn ghost" style="justify-content:flex-start;">git log -5</button>
+              <button class="btn ghost" style="justify-content:flex-start;">npm run dev</button>
+              <button class="btn ghost" style="justify-content:flex-start;">screenshot</button>
+              <button class="btn ghost" style="justify-content:flex-start;">read screen</button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="label" style="margin-bottom:10px;">Recent · ↑↓</div>
+            <div style="display:flex; flex-direction:column; gap:4px; font-size:10.5px; color:var(--ink-dim);">
+              <span style="color:var(--cyan);">▸ tell me a joke</span>
+              <span>open spotify</span>
+              <span>what's on my screen</span>
+              <span>switch to youtube tab</span>
+              <span>create notes.txt</span>
+              <span>volume up</span>
+              <span>git status</span>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="label" style="margin-bottom:8px;">Shortcuts</div>
+            <div style="font-size:10px; color:var(--ink-dim); line-height:1.8;">
+              <code class="kbd">Ctrl+L</code> clear<br/>
+              <code class="kbd">↑/↓</code> history<br/>
+              <code class="kbd">Tab</code> @tag complete<br/>
+              <code class="kbd">Ctrl+K</code> palette<br/>
+              <code class="kbd">Ctrl+/</code> help
+            </div>
+          </div>
+        </div>
+
+        <!-- INPUT (spans both cols at the bottom) -->
+        <div style="grid-column: 1 / -1; display:flex; align-items:center; gap:12px; padding:12px 14px; border:1px solid var(--cyan-soft);">
+          <span style="color:var(--cyan); font-size:14px; font-weight:700; letter-spacing:0.10em;">❯</span>
+          <span style="flex:1; color:var(--ink-dim); font-size:12px; letter-spacing:0.10em;">
+            <span style="color:var(--amber);">@code</span>
+            <span style="color:var(--ink-faint);">  run pytest in the jarvis project</span>
+            <span style="color:var(--cyan); margin-left:6px; opacity:0.6;">│</span>
+          </span>
+          <span style="font-size:9px; color:var(--ink-faint); letter-spacing:0.12em;">Enter to send · Shift+Enter newline</span>
+        </div>
+      </div>
+
+      <footer class="notes">
+        <div><strong>What changes</strong>
+          Header gains a session breadcrumb + intent filter chips (@all, @code, @files, …) so you can scope the visible output. Output gets a top fade for scrollback affordance. Each exchange has an intent badge inline next to the response. Right sidebar holds quick-action buttons + recent-command history + keyboard shortcuts cheat-sheet.
+        </div>
+        <div><strong>What stays</strong>
+          Black background, mono font, prompt-and-input model. Commands echo with a JARVIS-style answer below. Multi-line responses render naturally. Keyboard shortcuts (Ctrl+L, ↑/↓, etc.) preserved — now also visible without memorizing them.
+        </div>
+        <div><strong>Motion budget</strong>
+          New lines fade in 120ms when output appears. Chip switch filters the visible buffer (no animation — instant). Cursor in the input blinks 1Hz (the only continuous animation). All gated on prefers-reduced-motion.
+        </div>
+      </footer>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <!-- Footer                                                                -->
+    <!-- ════════════════════════════════════════════════════════════════════ -->
+    <section style="margin-top:32px; padding-top:16px; border-top:1px solid var(--cyan-faint);">
+      <p style="color:var(--ink-dim); font-size:11px; max-width:90ch;">
+        <strong style="color:var(--cyan); letter-spacing:0.18em;">SHIP NOTES:</strong>
+        every view applies the same design grammar — top hero stats, divide-y rows
+        instead of card framing, active-vs-passive panel borders, intent badges,
+        typography hierarchy. Same look across the app. Themes (Stark Cyan default
+        + Teal · Amber · Indigo · Matrix) work via token swap on top of any view.
+        Layout choice (Bento / Polish / Centered / Minimalist on the dashboard) is
+        independent of view-level redesign — these mockups assume the Bento dashboard
+        but the chrome (border treatment, typography, badges) is identical regardless.
+      </p>
+    </section>
+  </div>
+</body>
+</html>
