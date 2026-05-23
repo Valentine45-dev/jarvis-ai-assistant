@@ -83,10 +83,14 @@ class _Block:
 # ── Row widgets ──────────────────────────────────────────────────────────────
 
 
-_TS_FONT_SIZE     = 11
-_PROMPT_FONT_SIZE = 12
-_BODY_FONT_SIZE   = 11
-_BODY_INDENT      = 24    # px of left padding under the prompt for body lines
+# Bumped from 11/12/11 to match the rest of the redesigned views (transcript,
+# history rows, automation StepBreakdown all sit at 13px body text). Qt mono
+# renders smaller per-px than browser mono so the mockup's "looks like 13px"
+# actually wants ~14px to read equivalently.
+_TS_FONT_SIZE     = 12
+_PROMPT_FONT_SIZE = 14
+_BODY_FONT_SIZE   = 13
+_BODY_INDENT      = 28    # px of left padding under the prompt for body lines
 
 
 class _SystemRow(QLabel):
@@ -128,7 +132,10 @@ class _CommandRow(QFrame):
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(3)
+        # Inner spacing between header / response / extras within ONE command
+        # block. 3 was too tight — header + response read as one mashed
+        # paragraph. 5 gives them visual separation without becoming airy.
+        outer.setSpacing(5)
 
         # ── Header row: [ts] ❯ prompt ───────────────────────────────────────
         header = QHBoxLayout()
@@ -433,8 +440,11 @@ class TerminalPanel(QWidget):
         self._output_container = QWidget()
         self._output_container.setStyleSheet("QWidget { background: transparent; }")
         self._output_lay = QVBoxLayout(self._output_container)
-        self._output_lay.setContentsMargins(16, 14, 16, 14)
-        self._output_lay.setSpacing(14)
+        # Roomier than 16/14 + 14: matches the mockup's per-command breathing
+        # room. 22px gap between blocks reads as a real visual separator
+        # instead of just "tight newline".
+        self._output_lay.setContentsMargins(20, 18, 20, 18)
+        self._output_lay.setSpacing(22)
         self._output_lay.addStretch(1)   # push rows to the top
 
         self._output_scroll.setWidget(self._output_container)
@@ -443,11 +453,15 @@ class TerminalPanel(QWidget):
 
     def _build_sidebar(self) -> QWidget:
         col = QWidget()
-        col.setFixedWidth(220)
+        # Wider sidebar (220 → 240) so the action button labels + recent
+        # command text breathe; we were clipping mid-label on longer entries.
+        col.setFixedWidth(240)
         col.setStyleSheet("background: transparent;")
         cl = QVBoxLayout(col)
         cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(10)
+        # 14 between panels (was 10) — matches the gap between command blocks
+        # in the output panel and pulls each panel down into the empty zone.
+        cl.setSpacing(14)
 
         # ── Quick actions ──────────────────────────────────────────────────
         qa = PanelCard("Quick actions")
@@ -574,6 +588,9 @@ class TerminalPanel(QWidget):
         display = f"▸ {label}" if active else label
         btn = QPushButton(display)
         btn.setCursor(Qt.PointingHandCursor)
+        # Roomier than the old 5x8 — gives the sidebar panels real height
+        # so they fill more of the right column naturally rather than
+        # leaving a giant dead zone at the bottom. Font 10 → 11 too.
         if active:
             btn.setStyleSheet(
                 "QPushButton {"
@@ -581,9 +598,9 @@ class TerminalPanel(QWidget):
                 f"color: {CYAN};"
                 "border: none;"
                 f"font-family: '{FM}';"
-                "font-size: 10px;"
+                "font-size: 11px;"
                 "font-weight: 700;"
-                "padding: 5px 8px;"
+                "padding: 7px 10px;"
                 "text-align: left;"
                 "}"
                 "QPushButton:hover { background: rgba(0,229,255,0.08); }"
@@ -595,8 +612,8 @@ class TerminalPanel(QWidget):
                 f"color: {INK_DIM};"
                 f"border: 1px solid {CYAN_FAINT};"
                 f"font-family: '{FM}';"
-                "font-size: 10px;"
-                "padding: 5px 8px;"
+                "font-size: 11px;"
+                "padding: 7px 10px;"
                 "text-align: left;"
                 "}"
                 f"QPushButton:hover {{ background: rgba(0,229,255,0.08); color: {CYAN}; }}"
@@ -983,12 +1000,15 @@ class TerminalPanel(QWidget):
 
         # Build buttons for the last N (newest first). The first entry is
         # the most recent — gets the ▸ cursor + cyan bold styling.
+        # Roomier label cap too — was 26, bumped to 32 to use the wider
+        # sidebar column (240px) without truncating common command lengths.
         recent = list(reversed(self._cmd_history))[: self._MAX_RECENT_SIDEBAR]
         for i, cmd in enumerate(recent):
-            shown = cmd if len(cmd) <= 26 else cmd[:23] + "…"
+            shown = cmd if len(cmd) <= 32 else cmd[:29] + "…"
             btn = self._sidebar_btn(shown, cmd, active=(i == 0))
-            # Tighter spacing than action buttons
-            btn.setStyleSheet(btn.styleSheet().replace("padding: 5px 8px", "padding: 3px 8px"))
+            # Tighter spacing than action buttons but still roomier than
+            # before. Recent list reads as a quiet column, not a button bar.
+            btn.setStyleSheet(btn.styleSheet().replace("padding: 7px 10px", "padding: 5px 10px"))
             body.insertWidget(body.count() - 1, btn)
             self._recent_btns.append(btn)
 
