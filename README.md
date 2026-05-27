@@ -121,7 +121,7 @@ Install Python dependencies. **`uv sync` is the primary, canonical install path:
 uv sync
 ```
 
-`pyproject.toml` is the single source of truth for dependencies. `requirements.txt` is a generated lockfile snapshot (via `uv export --no-hashes`) provided only as a fallback for callers stuck on plain pip (`pip install -r requirements.txt`); do not edit it by hand — regenerate it whenever you change pyproject.
+`pyproject.toml` is the single source of truth for dependencies. `requirements.txt` is a generated lockfile snapshot (via `uv export --no-hashes --no-dev --no-emit-project`) provided only as a fallback for callers stuck on plain pip (`pip install -r requirements.txt`); do not edit it by hand — regenerate it with that exact command whenever you change pyproject.
 
 Install the Playwright browser runtime:
 
