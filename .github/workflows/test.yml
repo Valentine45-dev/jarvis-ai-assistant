@@ -54,7 +54,12 @@ jobs:
           GEMINI_API_KEY: test-key
           ELEVENLABS_API_KEY: test-key
           OPENWEATHER_API_KEY: test-key
-        run: uv run pytest -q
+        # Deselect markers that can't run on headless CI with no API keys,
+        # mic, or browser: `qt` (needs a display), `integration` (real
+        # network/subprocess/browser), and `slow`. conftest.py also auto-skips
+        # integration unless JARVIS_RUN_INTEGRATION=1 — the marker filter here
+        # makes the contract explicit and covers qt/slow too.
+        run: uv run pytest -q -m "not integration and not qt and not slow"
 
   lint:
     name: ruff
