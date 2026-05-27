@@ -36,3 +36,7 @@ logs/
 # history. Output one-offs you want to keep go elsewhere (e.g. attach to
 # a PR or copy out to ~/Documents).
 docs/
+
+# Local working notes — kept on disk, not tracked.
+context.md
+audit.md
