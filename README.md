@@ -115,13 +115,13 @@ J.A.R.V.I.S. is a desktop voice AI assistant built with Python, PyQt5, Anthropic
 
 ## Setup
 
-Install Python dependencies (canonical):
+Install Python dependencies. **`uv sync` is the primary, canonical install path:**
 
 ```powershell
 uv sync
 ```
 
-`pyproject.toml` is the single source of truth for dependencies. `requirements.txt` is generated from the lockfile via `uv export --no-hashes --no-dev --no-emit-project` for callers stuck on plain pip (`pip install -r requirements.txt`); do not edit it by hand — regenerate it whenever you change pyproject.
+`pyproject.toml` is the single source of truth for dependencies. `requirements.txt` is a generated lockfile snapshot (via `uv export --no-hashes`) provided only as a fallback for callers stuck on plain pip (`pip install -r requirements.txt`); do not edit it by hand — regenerate it whenever you change pyproject.
 
 Install the Playwright browser runtime:
 
