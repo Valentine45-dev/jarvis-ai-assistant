@@ -81,6 +81,8 @@ Open a desktop application, URL, or system utility.
 - `open_file_manager` — Open file explorer/finder
 - `open_spotify` — Open Spotify
 - `open_url` — Open a specific URL
+- `open_calculator` — Open the platform-native calculator (Windows: `calc`, macOS: Calculator app, Linux: gnome-calculator / kcalc / xcalc). Use for *"open the calculator"*, *"launch calc"*.
+- `open_notepad` — Open the platform-native text editor (Windows: `notepad`, macOS: TextEdit, Linux: gedit / kate / gnome-text-editor / nano). Use for *"open notepad"*, *"open a text editor"*. Prefer **`create_file`** + `content` when the user is dictating actual text — `open_notepad` only launches the editor.
 - `open_app_generic` — Open any application by name
 
 **Parameters:**
@@ -218,6 +220,8 @@ Control system-level functions.
 - `sleep` — Put computer to sleep (suspend/standby — **not** power off)
 - `wifi_toggle` — Toggle WiFi on/off
 - `bluetooth_toggle` — Toggle Bluetooth
+- `set_volume` — **Canonical** for absolute volume changes. Requires `level` (0–100). Use for *"set the volume to 60"*, *"volume 100%"*, *"max volume"*. Replaces the older `volume_up`/`volume_down` + `level` pattern (which still works as a fallback). Same handler path; cleaner intent.
+- `set_brightness` — **Canonical** for absolute brightness changes. Requires `level` (0–100). Use for *"set brightness to 40"*, *"brightness to max"*. Replaces the older `brightness_up`/`brightness_down` + `level` pattern (still supported).
 
 **Power actions — do not conflate `sleep` and `shutdown`:**
 
@@ -236,7 +240,11 @@ Control system-level functions.
 
 **Volume — absolute vs step:**
 - **Step (default):** `volume_up` / `volume_down` **without** `level` → raise/lower by one step (~10%). On Windows the executor sends VK_VOLUME_UP / VK_VOLUME_DOWN so the native OSD shows automatically.
-- **Absolute master volume:** include `"level": <0–100>` with `volume_up` or `volume_down` (action name is ignored when `level` is set; executor applies the scalar directly). Use this when the user says **"100%"**, **"max"**, **"full volume"**, **"set volume to 50"** → `"level": 100` or `50`. Phrases like **"increase it to 100%"** must still set **`level`: 100**, not a bare `volume_up` with no level.
+- **Absolute master volume (canonical):** use **`set_volume`** with `"level": <0–100>`. *"set the volume to 60"* → `set_volume` `level:60`; *"max volume"* → `set_volume` `level:100`. The older pattern of `volume_up` / `volume_down` + `level` is still accepted by the executor for backwards compatibility, but new routing should prefer `set_volume`.
+
+**Brightness — absolute vs step:**
+- **Step (default):** `brightness_up` / `brightness_down` **without** `level` → raise/lower by one step (~10%).
+- **Absolute (canonical):** use **`set_brightness`** with `"level": <0–100>`. *"set brightness to 40"* → `set_brightness` `level:40`; *"brightness to max"* → `set_brightness` `level:100`. Older `brightness_up`/`brightness_down` + `level` still works.
 
 **Mute / unmute — route by intent, not by toggle semantics:**
 
@@ -493,6 +501,11 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `switch_tab` — Switch to an existing browser tab by title or URL keyword. Use whenever the user wants to **focus an already-open tab** instead of opening or closing one. Triggers: *"switch to the youtube tab"*, *"go to my wikipedia tab"*, *"make youtube active"*, *"bring the github tab to front"*, *"focus the gmail tab"*. Takes a single `target` keyword (tokenised; URL substrings beat title substrings, same scoring as `close_tab`). After the switch, subsequent `read_page` / `click_element` / `scroll` operate on the now-active tab.
 - `close_tab` — Close one tab. **Without** `match` / `url_contains` / `title_contains`, closes the **active** tab only. **When the user names a site or topic** (e.g. *“close the YouTube tab”*, *“close the Google results tab”*), you **must** set at least one filter so the correct tab is closed — not whichever tab has focus. Prefer **`url_contains`** (e.g. `youtube.com`, `google.com`) for sites; use **`title_contains`** for a phrase in the document title, or **`match`** for a short keyword phrase (tokenised; URL substrings count more than title text).
 - `scroll` — Scroll the active browser page (NOT the OS desktop). Use this — **not** `control_mouse/scroll` — whenever the user wants to scroll a web page they're viewing. Params: `direction` (`"up"` | `"down"`) and `amount` (int, default 3, clamped [1, 50]). Each amount unit ≈ 300 px (one click of a mouse wheel). See the scroll-routing disambiguation in §5 (`control_mouse`) for OS-vs-page tie-breaking.
+- `go_back` — History back, one step. Use for *"go back"*, *"previous page"*, *"back one page"*. Returns `_err` when the tab has no previous history entry. No parameters.
+- `go_forward` — History forward, one step. Use for *"go forward"*, *"next page (in history)"*. Returns `_err` when there's nothing to go forward to. No parameters.
+- `refresh` — Standard reload (cache allowed). Use for *"reload the page"*, *"refresh"*, *"reload it"*. No parameters.
+- `hard_refresh` — Reload bypassing the HTTP cache (Ctrl+Shift+R equivalent). Use for *"hard refresh"*, *"hard reload"*, *"force reload"*, *"clear cache and reload"*. No parameters.
+- `list_tabs` — List every open tab with index, host, and title; the active tab is marked with `*`. Use for *"what tabs do I have open?"*, *"list my browser tabs"*, *"show open tabs"*. No parameters.
 
 **Parameters:**
 
@@ -1630,6 +1643,134 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "confidence": 0.97,
   "response": "Switching to YouTube.",
   "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Go back"`
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "go_back",
+  "parameters": {},
+  "confidence": 0.97,
+  "response": "Back one step.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Hard refresh the page"`
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "hard_refresh",
+  "parameters": {},
+  "confidence": 0.96,
+  "response": "Force-reloading — cache bypassed.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"What tabs do I have open?"`
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "list_tabs",
+  "parameters": {},
+  "confidence": 0.96,
+  "response": "Pulling the tab list.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Set the volume to 60"`
+
+```json
+{
+  "intent": "system_control",
+  "action": "set_volume",
+  "parameters": { "level": 60 },
+  "confidence": 0.98,
+  "response": "Volume to 60.",
+  "hud_status": "SYS CONTROL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Set brightness to max"`
+
+```json
+{
+  "intent": "system_control",
+  "action": "set_brightness",
+  "parameters": { "level": 100 },
+  "confidence": 0.97,
+  "response": "Brightness maxed.",
+  "hud_status": "SYS CONTROL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Open the calculator"`
+
+```json
+{
+  "intent": "open_app",
+  "action": "open_calculator",
+  "parameters": {},
+  "confidence": 0.98,
+  "response": "Calc's up.",
+  "hud_status": "LAUNCHING APP",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Tell me a joke"`
+
+```json
+{
+  "intent": "jarvis_meta",
+  "action": "tell_joke",
+  "parameters": {},
+  "confidence": 0.98,
+  "response": "Alright, one coming up.",
+  "hud_status": "STANDBY",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Change the wake word to athena"`
+
+```json
+{
+  "intent": "jarvis_meta",
+  "action": "set_wake_word",
+  "parameters": { "wake_word": "athena" },
+  "confidence": 0.97,
+  "response": "Setting wake word to athena — restart's required.",
+  "hud_status": "STANDBY",
   "requires_confirmation": false
 }
 ```
