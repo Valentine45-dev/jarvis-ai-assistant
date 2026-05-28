@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
+import random
 from datetime import datetime
 
 from config.settings import config
 from core.handlers.shared import _ok, _err, _tlog, get_page_cache
+
+
+# Pool of programmer / dry-wit one-liners for jarvis_meta.tell_joke.
+# Per CLAUDE.md: pick fresh each time; do NOT default to the dark-mode joke.
+_JARVIS_JOKES: tuple[str, ...] = (
+    "I would tell you a UDP joke, but you might not get it.",
+    "There are 10 kinds of people in this world — those who understand binary and those who don't.",
+    "I told my computer I needed a break. It froze on me.",
+    "Why did the developer go broke? Used up all his cache.",
+    "Knock knock. … … … Race condition.",
+    "Two bytes meet. One says, 'You look ill.' The other replies, 'I have a parity error.'",
+    "A SQL query walks into a bar, walks up to two tables and asks, 'May I join you?'",
+    "I named my home Wi-Fi 'The Promised LAN'.",
+    "Floating point joke: it's only ever approximately funny.",
+    "Why did the function break up with the variable? It wasn't in scope.",
+    "Old programmers never die — they just decompile.",
+    "If you put a million monkeys at a million keyboards, you'd get Stack Overflow.",
+)
 
 
 _VOICE_FIRST_NAMES: dict[str, str] = {
@@ -200,7 +219,68 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         _tlog("✓ goodbye")
         return {"success": True, "output": "", "error": "", "quit_application": True}
 
-    return _ok(action)
+    if action == "who_are_you":
+        _tlog("❯ identity")
+        user_name = (getattr(config, "user_name", None) or "Valentine").strip() or "Valentine"
+        _tlog("✓ replied")
+        return _ok(
+            f"I am JARVIS — Just A Rather Very Intelligent System. "
+            f"At your service, {user_name}."
+        )
+
+    if action == "tell_joke":
+        _tlog("❯ tell joke")
+        joke = random.choice(_JARVIS_JOKES)
+        _tlog("✓ told")
+        return _ok(joke)
+
+    if action == "help":
+        _tlog("❯ help")
+        lines = (
+            "I'm JARVIS — here's what I can do:",
+            "  • Apps & web: open / close / search (Google, YouTube, GitHub, Wikipedia).",
+            "  • Browser: navigate, click, fill forms, scroll, screenshot, tab management.",
+            "  • Files: create / read / edit / move / rename / delete / search / grep.",
+            "  • System: volume, brightness, screenshot, lock, sleep / restart / shutdown.",
+            "  • Vision: describe screen, read text, find UI elements.",
+            "  • Reminders, weather, automation workflows.",
+            "  • Documents: Word, Excel, PowerPoint, PDF.",
+            "  • Code: run Python / shell / PowerShell / CMD; install packages.",
+            "  • Voice: switch voices, change theme, set wake word.",
+            "Use @tags to force an intent — e.g. @browser, @files, @system, @code.",
+            "Say 'help with X' for more on a specific area.",
+        )
+        _tlog("✓ shown")
+        return _ok("\n".join(lines))
+
+    if action == "set_wake_word":
+        new_word = (params.get("wake_word") or params.get("word") or "").strip()
+        _tlog(f"❯ set wake word → {new_word!r}")
+        if not new_word:
+            _tlog("✗ no wake word provided")
+            return _err("No wake word provided.")
+        # Sanity-check: short, single token, alphanumeric-ish.
+        if len(new_word.split()) > 1:
+            _tlog("✗ multi-word wake word rejected")
+            return _err("Wake word must be a single word.")
+        if not new_word.replace("-", "").replace("_", "").isalnum():
+            _tlog("✗ invalid characters")
+            return _err("Wake word must be alphanumeric (hyphens / underscores allowed).")
+        old = config.wake_word
+        config.wake_word = new_word.lower()
+        try:
+            config.save()
+        except Exception as exc:
+            config.wake_word = old
+            _tlog(f"✗ persist failed: {exc}")
+            return _err(f"Couldn't persist wake word: {exc}")
+        _tlog(f"✓ wake word → {new_word!r} (restart required)")
+        return _ok(
+            f"Wake word changed to '{new_word.lower()}'. "
+            f"Restart JARVIS for the listener to pick it up."
+        )
+
+    return _err(f"Unknown jarvis_meta action: {action!r}")
 
 
 def _handle_unknown(action: str, params: dict) -> dict:

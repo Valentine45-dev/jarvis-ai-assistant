@@ -467,6 +467,53 @@ def _find_app_windows(name: str) -> str | None:
     return None
 
 
+# ── Native-app shortcuts (calc, notepad — cross-platform) ────────────────────
+
+# Per-platform command chains. First entry that launches wins; later entries
+# are fallbacks for distros that don't ship the default.
+_NATIVE_APP_CMDS: dict[str, dict[str, list[list[str]]]] = {
+    "calculator": {
+        "windows": [["calc"]],
+        "darwin":  [["open", "-a", "Calculator"]],
+        "linux":   [["gnome-calculator"], ["kcalc"], ["xcalc"]],
+    },
+    "notepad": {
+        "windows": [["notepad"]],
+        "darwin":  [["open", "-a", "TextEdit"]],
+        "linux":   [["gedit"], ["kate"], ["gnome-text-editor"], ["nano"]],
+    },
+}
+
+
+def _launch_native_app(app_key: str) -> dict:
+    """Try a chain of platform-specific commands until one launches.
+
+    Used by ``open_calculator`` / ``open_notepad`` so the canonical native apps
+    are reachable without depending on the Windows alias map or fuzzy Start
+    Menu search.
+    """
+    chains = _NATIVE_APP_CMDS.get(app_key, {}).get(_OS, [])
+    last_err = ""
+    for cmd in chains:
+        if not cmd:
+            continue
+        exe = cmd[0]
+        # On non-Windows, gate by shutil.which so we skip missing binaries fast.
+        # On Windows, `calc` / `notepad` are system shims not always on the
+        # which-path; let Popen handle the FileNotFoundError.
+        if _OS != "windows" and not shutil.which(exe):
+            continue
+        try:
+            subprocess.Popen(cmd, creationflags=_win_subprocess_flags())
+            return _ok(f"Launched {app_key}")
+        except FileNotFoundError as exc:
+            last_err = str(exc)
+            continue
+        except Exception as exc:
+            return _err(str(exc))
+    return _err(last_err or f"No {app_key} app available on {_OS}.")
+
+
 # ── Intent handlers ───────────────────────────────────────────────────────────
 
 def _handle_open_app(action: str, params: dict) -> dict:
@@ -510,6 +557,11 @@ def _handle_open_app_inner(action: str, params: dict) -> dict:
             return _ok(f"Opened {browser_name}")
         webbrowser.open("about:blank")
         return _ok("Opened default browser")
+
+    if action in ("open_calculator", "open_notepad"):
+        app_key = action.replace("open_", "")
+        _tlog(f"❯ launch {app_key}")
+        return _launch_native_app(app_key)
 
     name = app or action.replace("open_", "").replace("_", " ")
     if not name:

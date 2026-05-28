@@ -143,6 +143,31 @@ class _TabsMixin:
             _tlog(f"✓ switched → {best_title!r}")
             return _ok(f"Switched to {best_title!r}")
 
+    def list_tabs(self) -> dict:
+        """Return every open tab with an index, host, and title. Active tab marked ``*``."""
+        _tlog("❯ list tabs")
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
+                return guard
+            rows = self._pages_with_url_title()
+            if not rows:
+                _tlog("✓ no tabs")
+                return _ok("No open tabs.")
+            lines: list[str] = []
+            for i, (p, u, t) in enumerate(rows, start=1):
+                marker = " *" if p is self._page else ""
+                host = u.split("://", 1)[-1].split("/", 1)[0][:40] if u else "?"
+                tail = (t or "(no title)")[:60]
+                lines.append(f"  {i}. {host} — {tail}{marker}")
+            n = len(rows)
+            _tlog(f"✓ {n} tab{'s' if n != 1 else ''}")
+            return _ok(
+                f"{n} tab{'s' if n != 1 else ''} open (* = active):\n"
+                + "\n".join(lines)
+            )
+
     @staticmethod
     def _safe_title(page) -> str:
         try:

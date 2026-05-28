@@ -113,4 +113,19 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
             amount=params.get("amount", 3),
         )
 
+    if action == "go_back":
+        return browser.go_back()
+
+    if action == "go_forward":
+        return browser.go_forward()
+
+    if action == "refresh":
+        return browser.refresh()
+
+    if action == "hard_refresh":
+        return browser.hard_refresh()
+
+    if action == "list_tabs":
+        return browser.list_tabs()
+
     return _err(f"Browser action not implemented: {action}")

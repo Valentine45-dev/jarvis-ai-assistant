@@ -511,6 +511,34 @@ def _handle_system_control(action: str, params: dict) -> dict:
             _tlog(f"✗ {result.get('error') or 'bluetooth toggle failed'}")
         return result
 
+    if action == "set_volume":
+        _tlog("❯ set volume")
+        level = _coerce_volume_level(params)
+        if level is None:
+            _tlog("✗ no level provided")
+            return _err("set_volume requires a 'level' between 0 and 100.")
+        # Same code path as `volume_up`/`volume_down` when called with a level —
+        # cc.set_volume routes to the OS mixer's absolute set.
+        result = cc.set_volume("volume_up", level=level)
+        if result.get("success"):
+            _tlog(f"✓ volume {level}%")
+        else:
+            _tlog(f"✗ {result.get('error') or 'set_volume failed'}")
+        return result
+
+    if action == "set_brightness":
+        _tlog("❯ set brightness")
+        level = _coerce_volume_level(params)
+        if level is None:
+            _tlog("✗ no level provided")
+            return _err("set_brightness requires a 'level' between 0 and 100.")
+        result = _handle_brightness("brightness_up", level)
+        if result.get("success"):
+            _tlog(f"✓ brightness {level}%")
+        else:
+            _tlog(f"✗ {result.get('error') or 'set_brightness failed'}")
+        return result
+
     if action in ("shutdown", "restart", "sleep"):
         _tlog(f"❯ {action}")
         _win_root = os.environ.get("SystemRoot", r"C:\Windows")
@@ -544,4 +572,4 @@ def _handle_system_control(action: str, params: dict) -> dict:
             _tlog(f"✗ {exc}")
             return _err(str(exc))
 
-    return _ok(f"System: {action}")
+    return _err(f"Unknown system_control action: {action!r}")

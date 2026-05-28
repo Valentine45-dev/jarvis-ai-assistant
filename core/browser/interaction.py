@@ -59,6 +59,118 @@ class _InteractionMixin:
                 _tlog(f"✗ {msg}")
                 return _err(msg)
 
+    def go_back(self) -> dict:
+        """Go back one entry in the active tab's history."""
+        _tlog("❯ go back")
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
+                return guard
+            try:
+                response = self._page.go_back(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                if response is None:
+                    _tlog("✗ no previous page in history")
+                    return _err("No previous page in this tab's history.")
+                title = self._page.title()
+                _tlog(f"✓ back to {title!r}")
+                return _ok(f"Back to {title}")
+            except Exception as exc:
+                msg = str(exc)
+                if "timeout" in msg.lower():
+                    _tlog(f"✗ go_back timed out: {msg}")
+                    return _err(f"go_back timed out: {msg}")
+                _tlog(f"✗ {msg}")
+                return _err(msg)
+
+    def go_forward(self) -> dict:
+        """Go forward one entry in the active tab's history."""
+        _tlog("❯ go forward")
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
+                return guard
+            try:
+                response = self._page.go_forward(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                if response is None:
+                    _tlog("✗ no forward page in history")
+                    return _err("No forward page in this tab's history.")
+                title = self._page.title()
+                _tlog(f"✓ forward to {title!r}")
+                return _ok(f"Forward to {title}")
+            except Exception as exc:
+                msg = str(exc)
+                if "timeout" in msg.lower():
+                    _tlog(f"✗ go_forward timed out: {msg}")
+                    return _err(f"go_forward timed out: {msg}")
+                _tlog(f"✗ {msg}")
+                return _err(msg)
+
+    def refresh(self) -> dict:
+        """Reload the active page (cache allowed)."""
+        _tlog("❯ refresh")
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
+                return guard
+            try:
+                self._page.reload(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                title = self._page.title()
+                _tlog(f"✓ reloaded — {title!r}")
+                return _ok(f"Reloaded — {title}")
+            except Exception as exc:
+                msg = str(exc)
+                if "timeout" in msg.lower():
+                    _tlog(f"✗ refresh timed out: {msg}")
+                    return _err(f"refresh timed out: {msg}")
+                _tlog(f"✗ {msg}")
+                return _err(msg)
+
+    def hard_refresh(self) -> dict:
+        """Reload the active page bypassing the HTTP cache (Ctrl+Shift+R equivalent).
+
+        Uses a CDP ``Page.reload`` with ``ignoreCache=true`` since Playwright's
+        ``page.reload()`` does not bypass cache by default. Falls back to a normal
+        reload if the CDP session can't be opened (non-Chromium browser, etc.).
+        """
+        _tlog("❯ hard refresh")
+        with self._lock:
+            guard = self._not_ready()
+            if guard:
+                _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
+                return guard
+            try:
+                try:
+                    cdp = self._context.new_cdp_session(self._page)
+                except Exception:
+                    # CDP unavailable — fall back to a regular reload so the
+                    # action at least does *something* useful.
+                    self._page.reload(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                    title = self._page.title()
+                    _tlog(f"✓ reloaded (fallback, cache not bypassed) — {title!r}")
+                    return _ok(f"Reloaded (cache not bypassed — CDP unavailable) — {title}")
+                try:
+                    cdp.send("Page.reload", {"ignoreCache": True})
+                finally:
+                    try:
+                        cdp.detach()
+                    except Exception:
+                        pass
+                try:
+                    self._page.wait_for_load_state("domcontentloaded", timeout=_TIMEOUT)
+                except Exception:
+                    # Don't fail the whole op just because load-state wait timed out;
+                    # the reload was issued.
+                    pass
+                title = self._page.title()
+                _tlog(f"✓ reloaded (cache bypassed) — {title!r}")
+                return _ok(f"Reloaded (cache bypassed) — {title}")
+            except Exception as exc:
+                _tlog(f"✗ {exc}")
+                return _err(str(exc))
+
     # ── Phase 2: Interaction ──────────────────────────────────────────────────
 
     @staticmethod
