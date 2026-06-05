@@ -85,8 +85,11 @@ class _OrbMic(QWidget):
     """
 
     # Orb body diameter. Widget total is bigger to leave room for the halo.
+    # WIDGET_SIZE must be generous enough that the halo gradients fully fade to
+    # transparent inside the widget's *inscribed circle* — otherwise the
+    # rectangular widget bounds clip a still-visible glow into a square box.
     ORB_DIAMETER  = 240
-    WIDGET_SIZE   = 360         # orb + outer glow halo padding
+    WIDGET_SIZE   = 400         # orb + outer glow halo padding
 
     pressed_toggled = pyqtSignal()
 
@@ -211,17 +214,30 @@ class _OrbMic(QWidget):
 
     def _paint_halo(self, p: QPainter, cx: float, cy: float, r: float,
                     color: QColor, *, radius_mult: float, peak_alpha: int) -> None:
-        """Paint one outer glow halo — large radial gradient outside the orb."""
+        """Paint one outer glow halo — large radial gradient outside the orb.
+
+        Critical: the gradient must reach alpha 0 by the widget's inscribed
+        radius (WIDGET_SIZE / 2). Beyond that fraction QRadialGradient pads the
+        last (transparent) stop, so every pixel at the rectangular widget edges
+        and corners is fully transparent — no clipped "square" of glow.
+        """
         halo_r = r * radius_mult
         grad = QRadialGradient(QPointF(cx, cy), halo_r)
         c0 = QColor(color)
         c0.setAlpha(peak_alpha)
         c1 = QColor(color)
         c1.setAlpha(0)
-        # Inside the orb body radius: a soft falloff. Outside: fade to nothing.
+        inner = min(r / halo_r * 0.7, 0.95)
+        # Fraction at which the glow must already be fully transparent: the
+        # nearest widget edge. Clamp <1 so the fade always lands inside the
+        # widget; anything past it (incl. the corners) pads to alpha 0.
+        edge_frac = min((self.WIDGET_SIZE / 2.0) / halo_r, 0.999)
+        # Inside the orb body radius: a soft plateau. Then fade to nothing by
+        # the inscribed edge.
         grad.setColorAt(0.0, c0)
-        grad.setColorAt(r / halo_r * 0.7, c0)
-        grad.setColorAt(1.0, c1)
+        if inner < edge_frac:
+            grad.setColorAt(inner, c0)
+        grad.setColorAt(edge_frac, c1)
         p.setBrush(QBrush(grad))
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(cx, cy), halo_r, halo_r)
