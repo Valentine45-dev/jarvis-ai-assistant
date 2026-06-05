@@ -2,7 +2,11 @@ JARVIS — Manual Test Guide for Round-3 Surgical Fixes
 =====================================================
 
 Covers the Round-3 fixes landed so far:
-  R3-7/R3-10/R3-11/R3-12/R3-14 (0dbd82c), R3-3 (2d94d9c), R3-1/R3-2 (cd3c270).
+  R3-7/R3-10/R3-11/R3-12/R3-14 (0dbd82c), R3-3 (2d94d9c), R3-1/R3-2 (cd3c270),
+  R3-8/R3-9 (8025da4).
+  (R3-4 is_speaking counter / R3-5 mute-probe are covered by automated tests
+   only - tests/test_tts_is_speaking_counter.py, test_mute_probe_nonblocking.py
+   - they need an audio rig / are absence-of-freeze, not practical to eyeball.)
 Written for someone running the real app (uv run python main.py), not reading code.
 For each fix: what to do, what you should see, and what the OLD (broken) behaviour was.
 
@@ -303,6 +307,63 @@ out=ah._handle_automation_task('run_workflow',wf); \
 print('in-flight during steps:', seen, '(want [True, True])'); \
 print('in-flight after return :', ah.is_workflow_in_flight(), '(want False)')"
   -> expect:  in-flight during steps: [True, True] ... after return: False
+
+
+-----------------------------------------------------------------------
+R3-8 / R3-9 - Scheduler: no double-fire on restart, and catch-up for a slot
+        missed while JARVIS was closed (or the machine was asleep)
+-----------------------------------------------------------------------
+Background: the scheduler now persists the last *scheduled instant* it fired
+per workflow to data/scheduler_state.json. That kills the restart double-fire
+(R3-8) and lets a tick after downtime catch up a missed slot (R3-9). From the
+scheduler's point of view "machine asleep" and "JARVIS closed" are the same
+thing - no tick runs - so closing the app is a faithful way to test both.
+
+Setup (used by both tests):
+  Create a per-minute workflow that leaves an obvious trace each time it fires:
+     "create a workflow called ping that takes a screenshot and saves it to
+      C:\Users\Lenovo\Documents\jarvis-project\tests, every minute"
+  Make sure it's enabled (ENABLED ON in the AUTOMATE page, or say "enable ping").
+  Each fire = one new JARVIS_<date>_<time>.png in tests\ AND a console line:
+     [scheduler] firing workflow 'ping' (schedule='* * * * *')
+  Keep the PS console visible. Clean up the screenshots when done.
+
+TEST A - R3-8: no double-fire when you restart within the same minute
+  1. Watch the console; wait for ONE "firing workflow 'ping'" line (note the
+     minute, e.g. 02:41, and that one screenshot appeared).
+  2. IMMEDIATELY - still within that same minute - close JARVIS and restart it
+     (uv run python main.py).
+  PASS (fixed): during the rest of that same minute, ping does NOT fire again -
+                no second screenshot for that minute, no second "firing" line.
+                On the next minute boundary it fires once, normally.
+  FAIL (old):   ping fired a second time for the same minute right after restart
+                (the in-memory guard was empty on a fresh start).
+  Proof on disk: open data\scheduler_state.json - it has a "ping" entry with the
+                 last-fired ISO instant; that's what survived the restart.
+
+TEST B - R3-9: catch-up for a slot missed while JARVIS was closed/asleep
+  1. Let ping fire at least once (so it has a recorded last-fired instant).
+  2. Close JARVIS. Leave it closed for 2-3 minutes (this is the "asleep over the
+     scheduled slot" condition - several per-minute slots pass with no tick).
+  3. Reopen JARVIS (uv run python main.py) and watch the console.
+  PASS (fixed): within a few seconds of startup you get exactly ONE "firing
+                workflow 'ping'" line (one catch-up screenshot) for the most
+                recent missed minute - NOT one per missed minute. Then it
+                resumes firing once per minute.
+  FAIL (old):   nothing fired to make up the missed slot (it was silently lost);
+                "every day at 9" would simply not run if asleep at 9.
+  Storm-safety note: even if you leave it closed for an hour, reopening fires
+                ONCE (the latest missed slot), never a backlog flood.
+
+  (A daily "30 9 * * *" behaves the same - it just takes a day to exercise by
+   hand, which is why the per-minute proxy above is the practical test. For the
+   exact instant logic without waiting, run the automated proof below.)
+
+Code-level proof (no waiting, no restart) - from repo root:
+  uv run pytest -q tests/test_scheduler_catchup.py
+  -> 12 passed: restart-same-minute no double-fire, catch-up after downtime,
+     per-minute advance, long-downtime collapses to one fire, persistence
+     round-trip, and frozen-clock _tick integration.
 
 
 -----------------------------------------------------------------------
