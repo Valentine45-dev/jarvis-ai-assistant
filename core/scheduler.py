@@ -17,10 +17,13 @@ Design notes:
     emitted by WorkflowLibrary when workflows.json changes), so adding /
     editing / deleting a scheduled workflow takes effect within ~2s
     without restarting the app.
-  - "Already fired this minute" guard: a workflow with ``"* * * * *"``
-    that takes 5s to execute could otherwise fire 12 times within a
-    minute. We record the last-fired minute per workflow and skip a
-    repeat until the next minute boundary.
+  - Dedupe + catch-up (R3-8/R3-9): we persist the last *scheduled instant*
+    fired per workflow to ``data/scheduler_state.json`` and, each tick, fire
+    the most-recent slot only if it's strictly newer than that mark. This
+    means a fast ``"* * * * *"`` cron fires at most once per minute, a restart
+    within the same minute does not refire, and a slot missed during
+    sleep/suspend is caught up once on the next tick (only the latest missed
+    slot — a long downtime collapses to a single fire, never a storm).
 
 Security:
   - Scheduled fires bypass ``config.auto_confirm`` so any
@@ -32,9 +35,12 @@ Security:
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from core.log import debug as _dbg, info as _info
@@ -44,9 +50,55 @@ from core.log import debug as _dbg, info as _info
 # and big enough not to burn CPU on an idle laptop.
 _LOOP_TICK_SECONDS = 5.0
 
-# Track last-fire minute per workflow id so a fast-cycle cron doesn't
-# refire within the same minute. {workflow_id: "YYYYMMDDHHMM"}
-_last_fire_minute: dict[str, str] = {}
+# R3-8/R3-9: persist the last *scheduled instant* fired per workflow so the
+# dedupe survives a restart (no double-fire within the same minute) and a tick
+# after downtime can catch up a missed slot. Sidecar file (not workflows.json)
+# so firing doesn't trip the workflow-library file-watcher / reload churn.
+_STATE_PATH = Path(__file__).parent.parent / "data" / "scheduler_state.json"
+_state_lock = threading.Lock()
+_last_fired: dict[str, datetime] = {}   # {workflow_id: last fired scheduled instant}
+_state_loaded = False
+
+
+def _load_state() -> None:
+    """Load the persisted last-fired marks once. Tolerant: a missing file or a
+    bad entry is skipped, never fatal."""
+    global _last_fired, _state_loaded
+    with _state_lock:
+        if _state_loaded:
+            return
+        _state_loaded = True
+        try:
+            if _STATE_PATH.exists():
+                raw = json.loads(_STATE_PATH.read_text(encoding="utf-8")) or {}
+                parsed: dict[str, datetime] = {}
+                for wf_id, iso in raw.items():
+                    try:
+                        parsed[wf_id] = datetime.fromisoformat(iso)
+                    except (ValueError, TypeError):
+                        continue
+                _last_fired = parsed
+        except Exception as exc:
+            _dbg("scheduler", f"could not load state: {exc!r}")
+
+
+def _persist_locked() -> None:
+    """Atomically write the state file. Caller MUST hold _state_lock."""
+    try:
+        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        data = {wf_id: dt.isoformat() for wf_id, dt in _last_fired.items()}
+        tmp = _STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, _STATE_PATH)
+    except Exception as exc:
+        _dbg("scheduler", f"could not save state: {exc!r}")
+
+
+def _record_fired(wf_id: str, instant: datetime) -> None:
+    """Record (and persist) the scheduled instant just fired for a workflow."""
+    with _state_lock:
+        _last_fired[wf_id] = instant
+        _persist_locked()
 
 
 def _croniter():
@@ -74,22 +126,32 @@ def _next_fire(cron_expr: str, base: Optional[datetime] = None) -> Optional[date
         return None
 
 
-def _should_fire(cron_expr: str, now: datetime) -> bool:
-    """True when this cron expression has a fire-time in the immediate past
-    (between the start of this minute and now). Combined with the
-    last-fire-minute guard this gives us at-most-once-per-minute semantics.
+def _due_fire(cron_expr: str, now: datetime, last: Optional[datetime]) -> Optional[datetime]:
+    """Return the scheduled instant to fire now, or None to skip.
+
+    The most-recent scheduled instant at/before ``now`` is ``croniter.get_prev``.
+      - ``last is None`` (never fired / fresh install): fire only if that instant
+        is within the current minute. This preserves the original first-fire
+        behaviour and avoids replaying a slot that passed before the workflow
+        existed (or before this process ever saw it).
+      - ``last`` set: fire iff that instant is strictly newer than ``last``
+        (R3-9 catch-up). Because we only look at the single most-recent instant,
+        a long downtime collapses to ONE fire — not one per missed slot.
+
+    R3-8: after a restart, the persisted ``last`` equals the just-fired instant,
+    so ``prev_fire <= last`` and we skip — no double-fire within the same minute.
     """
     croniter = _croniter()
     if croniter is None:
-        return False
+        return None
     try:
-        # Walk back one second from "now" so the cron's get_next gives us
-        # the most recent fire that should have already happened by now.
-        cutoff = now.replace(second=0, microsecond=0)
         prev_fire = croniter(cron_expr, now).get_prev(datetime)
-        return prev_fire >= cutoff
     except (ValueError, KeyError, TypeError):
-        return False
+        return None
+    if last is None:
+        cutoff = now.replace(second=0, microsecond=0)
+        return prev_fire if prev_fire >= cutoff else None
+    return prev_fire if prev_fire > last else None
 
 
 def _watch_loop() -> None:
@@ -103,14 +165,18 @@ def _watch_loop() -> None:
             _dbg("scheduler", f"tick error swallowed: {exc!r}")
 
 
-def _tick() -> None:
-    """One pass: load workflows, fire any whose schedule is due now."""
+def _tick(now: Optional[datetime] = None) -> None:
+    """One pass: load workflows, fire any whose schedule is due now.
+
+    ``now`` is injectable for tests (frozen clock); production passes None and
+    uses the wall clock."""
     from core.automation import workflow_library
     from core.signals import signals
 
+    _load_state()
     workflows = workflow_library.list_all()
-    now = datetime.now()
-    minute_key = now.strftime("%Y%m%d%H%M")
+    if now is None:
+        now = datetime.now()
 
     for wf in workflows:
         if not wf.get("enabled", True):
@@ -127,12 +193,15 @@ def _tick() -> None:
             _dbg("scheduler", f"invalid cron for workflow {wf_id!r}: {cron_expr!r}")
             continue
 
-        if not _should_fire(cron_expr, now):
+        with _state_lock:
+            last = _last_fired.get(wf_id)
+        fire_instant = _due_fire(cron_expr, now, last)
+        if fire_instant is None:
             continue
-        if _last_fire_minute.get(wf_id) == minute_key:
-            continue  # Already fired this minute.
 
-        _last_fire_minute[wf_id] = minute_key
+        # Persist BEFORE emitting so a crash mid-dispatch can't cause a refire
+        # of the same instant on the next start.
+        _record_fired(wf_id, fire_instant)
         _info("scheduler", f"firing workflow {wf_id!r} (schedule={cron_expr!r})")
         try:
             signals.scheduled_workflow_fire.emit(wf_id)

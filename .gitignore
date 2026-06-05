@@ -30,6 +30,9 @@ data/memory.jsonl
 # avg surfaces in the UI either way once a workflow has been run locally.
 data/workflow_metrics.json
 
+# Scheduler last-fire marks (R3-8/R3-9) — local runtime state, per machine.
+data/scheduler_state.json
+
 # Runtime logs (local only — churn on every run)
 logs/
 
