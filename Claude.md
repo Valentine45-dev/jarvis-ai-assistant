@@ -305,6 +305,8 @@ Execute a multi-step workflow or predefined routine.
 - `remove_workflow` — Delete a named workflow (destructive — always `requires_confirmation: true`)
 - `remove_all_workflows` — Delete every saved workflow. Use when the user says *"delete all workflows"*, *"clear all my workflows"*, *"remove every workflow"*, *"wipe my workflows"*. No parameters needed. Confirmed in-app — the handler counts the saved workflows and shows a confirmation card with the count. Keep `requires_confirmation` **`false`** in JSON (avoid double prompt — same pattern as `batch_delete` / `replace_in_file`).
 - `rename_workflow` — Rename an existing workflow
+- `enable_workflow` — Turn a saved workflow **on** so it can be run and its schedule can auto-fire. Use for *"enable the X workflow"*, *"turn on X"*, *"activate X"*, *"resume X"*, *"switch X back on"*. Voice equivalent of the AUTOMATE-page ON/OFF toggle. Non-destructive (steps preserved) — keep `requires_confirmation` **`false`**. Idempotent (already-on → reports it). Takes `task_name` only.
+- `disable_workflow` — Turn a saved workflow **off** (pause it) so it won't run or auto-fire. Use for *"pause the X workflow"*, *"turn off X"*, *"disable X"*, *"deactivate X"*, *"stop the X workflow"*. The workflow and its steps are kept — this only flips the enabled flag. Non-destructive — keep `requires_confirmation` **`false`**. Idempotent (already-off → reports it). Takes `task_name` only. Do **not** route *"pause"* of a workflow to any system/power action.
 
 **Parameters:**
 
@@ -313,10 +315,11 @@ Execute a multi-step workflow or predefined routine.
 { "task_name": "string", "trigger": "string — optional voice/text trigger phrase", "steps": ["string — one natural-language step per item"], "schedule": "string — optional cron expression for auto-fire (e.g. '0 9 * * 1-5' for 9 AM weekdays)" }
 { "task_name": "string", "steps": [{ "intent": "string", "action": "string", "parameters": {} }] }
 { "task_name": "string — workflow to rename", "new_name": "string — new display name" }
+{ "task_name": "string — workflow to enable/disable" }
 ```
 
 **HUD Label:** `AUTOMATION`
-**Confirmation:** `true` for `remove_workflow`. `remove_all_workflows` is confirmed in-app — keep `requires_confirmation` **`false`** in JSON.
+**Confirmation:** `true` for `remove_workflow`. `remove_all_workflows` is confirmed in-app — keep `requires_confirmation` **`false`** in JSON. `enable_workflow` / `disable_workflow` are non-destructive — `requires_confirmation` **`false`**.
 
 **Executor — steps that need a UI confirm (e.g. `create_file` / `delete_file`):** Keep the file/document confirmation card visible. After the user confirms, the workflow must resume automatically from the next step and continue sequentially until completion (or first real failure). Multiple confirmation-required steps in one workflow are supported.
 

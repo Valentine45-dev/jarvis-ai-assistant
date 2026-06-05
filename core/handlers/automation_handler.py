@@ -191,6 +191,25 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         workflow_library.rename(wf["id"], new_name)
         return _ok(f"Workflow renamed to '{new_name}'.")
 
+    if action in ("enable_workflow", "disable_workflow"):
+        # Voice equivalent of the AUTOMATE-page ON/OFF toggle. Non-destructive:
+        # the workflow and its steps are preserved; only the `enabled` flag flips.
+        # set_enabled() emits workflow_library_changed, so the UI refreshes live.
+        task_name = params.get("task_name", "")
+        if not task_name:
+            return _err("No task_name provided.")
+        wf = workflow_library.get(task_name)
+        if wf is None:
+            return _err(f"Workflow '{task_name}' not found.")
+        enable = action == "enable_workflow"
+        verb = "enabled" if enable else "paused"
+        if bool(wf.get("enabled", True)) == enable:
+            _tlog(f"• workflow {wf['name']!r} already {verb}")
+            return _ok(f"Workflow '{wf['name']}' is already {verb}.")
+        workflow_library.set_enabled(wf["id"], enable)
+        _tlog(f"✓ {verb} workflow {wf['name']!r}")
+        return _ok(f"Workflow '{wf['name']}' {verb}.")
+
     # run_workflow
     import time as _time
 
