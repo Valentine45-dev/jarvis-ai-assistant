@@ -754,6 +754,12 @@ class JarvisWindow(QMainWindow):
         "open_app", "close_app", "search_web", "type_text", "control_mouse",
         "system_control", "file_operation", "code_execution", "browser_automation",
         "read_screen", "automation_task", "reminder_task", "weather",
+        # Without this, compose_execution_response() skips the ResponseAssembler
+        # for vision and only speaks the brain's "Scanning…" acknowledgement —
+        # the actual analysis (the OUTPUT_IS_RESPONSE pools, already built) is
+        # dropped. Routing vision through the assembler makes JARVIS speak the
+        # real answer ("Found it — the close button is top-right …").
+        "vision_analysis",
     })
     _FACTUAL_ACTIONS: frozenset = frozenset({
         "tell_time", "tell_date", "status_report", "list_voices",
