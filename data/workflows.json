@@ -1,76 +1,87 @@
 {
   "workflows": [
     {
-      "id": "night_routine",
-      "name": "Night Routine",
-      "trigger": "run night routine",
-      "steps": [
-        "open chrome",
-        "search youtube",
-        "search NBA on Youtube"
-      ],
-      "enabled": true,
-      "last_run": "2026-05-19T12:58:41Z"
-    },
-    {
       "id": "morning_routine",
       "name": "morning_routine",
       "trigger": "run morning routine",
-      "enabled": true,
-      "last_run": "",
-      "steps": [
-        "Open Chrome browser",
-        "Search Google for Facebook",
-        "Create a Python script file called matrix_rain.py with a terminal-based Matrix rain effect using curses, falling green characters in C:\\Users\\Dell Latitude Touch\\Desktop\\jarvis-project\\tests"
-      ]
-    },
-    {
-      "id": "normal_routine",
-      "name": "Normal Routine",
-      "trigger": "run normal routine",
-      "enabled": true,
-      "last_run": "",
-      "steps": [
-        "Create a new file called notes.txt in Documents/jarvis-project/tests",
-        "Create a new file called log.txt in Documents/jarvis-project/tests",
-        "Open Notepad"
-      ]
-    },
-    {
-      "id": "test16",
-      "name": "test16",
-      "trigger": "Manual",
-      "enabled": true,
-      "last_run": "",
-      "steps": [
-        "create a file Documents/jarvis-project/test16_a.py",
-        "create a file Documents/jarvis-project/test16_b.py",
-        "open notepad"
-      ]
-    },
-    {
-      "id": "new_workflow",
-      "name": "New Workflow",
-      "trigger": "run new workflow",
       "steps": [
         "open chrome",
-        "search REDMAGIC Astra",
-        "open new tab"
+        "navigate to youtube.com",
+        "search nba on youtube"
       ],
-      "enabled": true,
+      "enabled": false,
+      "last_run": null,
+      "schedule": "0 9 * * 1-5"
+    },
+    {
+      "id": "end_of_day",
+      "name": "end_of_day",
+      "trigger": "run end of day",
+      "steps": [
+        "take a screenshot",
+        "close chrome",
+        "lock screen"
+      ],
+      "enabled": false,
+      "last_run": null,
+      "schedule": "0 18 * * 1-5"
+    },
+    {
+      "id": "coffee_break",
+      "name": "coffee_break",
+      "trigger": "coffee break",
+      "steps": [
+        "open spotify",
+        "search youtube for lofi beats"
+      ],
+      "enabled": false,
       "last_run": null
     },
     {
-      "id": "audit_thread_test",
-      "name": "audit_thread_test",
-      "trigger": "run audit thread test",
-      "enabled": true,
-      "last_run": "",
+      "id": "hourly_screenshot",
+      "name": "hourly_screenshot",
+      "trigger": "hourly snapshot",
       "steps": [
-        "create a file at Documents/audit_thread.md",
-        "navigate to youtube.com and search for jazz",
-        "close the YouTube tab"
-      ]
+        "take a screenshot"
+      ],
+      "enabled": false,
+      "last_run": null,
+      "schedule": "0 * * * *"
+    },
+    {
+      "id": "git_status_check",
+      "name": "git_status_check",
+      "trigger": "check git status",
+      "steps": [
+        "run git status"
+      ],
+      "enabled": false,
+      "last_run": null
+    },
+    {
+      "id": "deploy_dev",
+      "name": "deploy_dev",
+      "trigger": "deploy to dev",
+      "steps": [
+        "open terminal",
+        "run git pull",
+        "run npm install",
+        "run npm run build",
+        "run npm run deploy"
+      ],
+      "enabled": false,
+      "last_run": null
+    },
+    {
+      "id": "scratch",
+      "name": "scratch",
+      "trigger": "scratch routine",
+      "steps": [
+        "open notepad",
+        "type hello world"
+      ],
+      "enabled": false,
+      "last_run": null
     }
   ]
 }
