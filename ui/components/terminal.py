@@ -74,6 +74,9 @@ class _Block:
                                        # — empty means no badge rendered (e.g. mid-stream real cmds)
     response: str = ""                 # one-line JARVIS reply that pairs with the badge
     response_color: str = INK          # color used for ``response`` (RED for failures)
+    awaiting_response: bool = False    # True between submit and reply for a block the
+                                       # user typed HERE — gates append_jarvis_response so
+                                       # a dashboard/mic command can't fill a stale block
     extras: list[tuple[str, str]] = field(default_factory=list)
                                        # additional lines under the response: (text, color)
     # ── system-block fields ──
@@ -677,18 +680,35 @@ class TerminalPanel(QWidget):
         self._refresh_recent_sidebar()
 
         # Echo + dispatch. If the user typed a @tag prefix themselves, pass
-        # verbatim. Otherwise default to the @code routing so the executor
-        # picks the right intent for shell-style inputs.
         # Open a fresh command block so subsequent streamed lines belong
         # to this command (and the @tag filter can hide it as a unit).
         block = self._begin_command_block(self._classify_tag(text))
         block.ts = datetime.now().strftime("%H:%M:%S")
         block.prompt = text
+        block.awaiting_response = True   # this block expects JARVIS's reply inline
         self._rebuild_block_widget(block)
-        if text.startswith("@"):
-            self.command_submitted.emit(text)
-        else:
-            self.command_submitted.emit(f"@code {text}")
+        # Route raw so the brain picks the intent exactly like the dashboard
+        # command bar ("open chrome" → open_app, "navigate youtube" → browser).
+        # An explicit @tag the user typed is preserved. Bare shell commands can
+        # still be forced with an explicit "@code <cmd>".
+        self.command_submitted.emit(text)
+
+    def begin_external_command(self, text: str) -> None:
+        """Open a command block for a command issued OUTSIDE the terminal box
+        (dashboard, mic, palette) so the terminal mirrors ALL JARVIS activity.
+
+        Unlike _on_submit this does NOT re-dispatch — main.py already routed the
+        command; the reply lands via append_jarvis_response and any streamed
+        output via _record_extra, exactly like a terminal-typed command.
+        """
+        self._cmd_count += 1
+        self._refresh_session_label()
+        block = self._begin_command_block(self._classify_tag(text))
+        block.ts = datetime.now().strftime("%H:%M:%S")
+        block.prompt = text
+        block.awaiting_response = True
+        self._rebuild_block_widget(block)
+        self._scroll_to_bottom()
 
     def _on_save(self) -> None:
         """Best-effort dump of the current buffer to logs/terminal_dump.txt."""
@@ -750,23 +770,43 @@ class TerminalPanel(QWidget):
 
     # ── Public helpers ───────────────────────────────────────────────────────
 
-    def append_jarvis_response(self, text: str, *, intent: str = "") -> None:
+    def append_jarvis_response(self, text: str, *, intent: str = "", final: bool = True) -> None:
         """Show JARVIS's spoken reply in the current command block.
 
         ``intent`` is optional but recommended — when provided, it drives
         the colored chip next to the response (FILE / BROWSER / VISION /
         etc.). Without it the response shows without a badge.
         """
-        if self._cur_block is None or self._cur_block.kind != "command":
-            # Defensive: no open command (e.g. JARVIS spoke unprompted).
-            # Drop into an extras-only system-flavoured block so the message
-            # is still visible.
-            self._append_system(text)
+        block = self._cur_block
+        # Only fill a command block that is still WAITING for its reply — i.e.
+        # one the user just typed in this terminal. A command issued from the
+        # dashboard / mic / palette leaves no awaiting block here, so its reply
+        # is ignored rather than overwriting the last terminal command's block.
+        if block is None or block.kind != "command" or not block.awaiting_response:
             return
-        self._cur_block.response = text
+        block.response = text
         if intent:
-            self._cur_block.intent = intent
-        self._rebuild_block_widget(self._cur_block)
+            block.intent = intent
+            # Refine the filter bucket from the REAL resolved intent so the
+            # @CODE/@FILES/@BROWSER chips match the badge shown on the block.
+            # Only overwrite for a concrete bucket — the final reply of a
+            # confirmed command carries intent "confirmation" (→ 'other') and
+            # must not wipe the code/browser tag set by the prompt.
+            tag = self._intent_to_tag(intent)
+            if tag != "other":
+                block.tag = tag
+        # Keep the block "awaiting" while this is only a confirmation PROMPT
+        # (final=False) so the eventual result still lands in the same block.
+        # Clear it on the real reply so a later dashboard/mic command can't
+        # overwrite this block.
+        if final:
+            block.awaiting_response = False
+            # The command that owns this block is done — drop the current-block
+            # pointer so streamed lines (terminal_line_ready) from a LATER
+            # dashboard/mic command don't leak into this finished block via
+            # _record_extra.
+            self._cur_block = None
+        self._rebuild_block_widget(block)
 
     def clear_output(self) -> None:
         # Drop every spawned widget AND the underlying block model so the
@@ -859,9 +899,23 @@ class TerminalPanel(QWidget):
             return "files"
         if t.startswith("@browser"):
             return "browser"
-        # Untagged commands default-route through @code (see _on_submit),
-        # so treat them as code for the filter too.
-        return "code"
+        # Untagged commands route naturally now (no forced @code), so the
+        # bucket isn't known at submit time — default to 'other'. The real
+        # bucket is set from the resolved intent in append_jarvis_response.
+        return "other"
+
+    @staticmethod
+    def _intent_to_tag(intent: str) -> str:
+        """Map a resolved intent to a filter bucket (code / files / browser).
+        Anything else is 'other' — visible only under @ALL."""
+        i = (intent or "").lower()
+        if "browser" in i:
+            return "browser"
+        if "file" in i:            # file_operation
+            return "files"
+        if "code" in i:            # code_execution
+            return "code"
+        return "other"
 
     def _on_tag_chip_clicked(self, key: str) -> None:
         for k, chip in self._tag_chips.items():

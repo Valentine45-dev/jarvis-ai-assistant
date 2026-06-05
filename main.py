@@ -160,7 +160,7 @@ class JarvisWindow(QMainWindow):
         self._stack.addWidget(self._settings_view)
 
         self._terminal_view = TerminalPanel()
-        self._terminal_view.command_submitted.connect(self._process_cmd)
+        self._terminal_view.command_submitted.connect(self._on_terminal_command)
         self._stack.addWidget(self._terminal_view)
 
         right_lay.addWidget(self._stack, 1)
@@ -249,6 +249,8 @@ class JarvisWindow(QMainWindow):
         self._dashboard.left.transcript.cancelled.connect(self._on_cancelled)
         self._pending_result: dict | None = None
         self._confirm_mode: str | None = None  # "claude" | "executor" | None
+        self._cmd_from_terminal = False          # set when a cmd originates in the Terminal box
+                                                 # so _process_cmd doesn't open a 2nd block for it
         self._last_result: dict | None = None   # Phase 5: last successfully dispatched intent
         self._runtime_ctx = RuntimeCommandContext()
         self._command_controller = CommandController(self._RUN_WORKFLOW_PREFIX)
@@ -638,7 +640,17 @@ class JarvisWindow(QMainWindow):
         "unknown":            "UNKNOWN",
     }
 
+    def _on_terminal_command(self, text: str) -> None:
+        """Command typed in the Terminal box. The terminal already opened its own
+        block in _on_submit, so flag it to stop _process_cmd opening a second one."""
+        self._cmd_from_terminal = True
+        self._process_cmd(text)
+
     def _process_cmd(self, cmd: str):
+        # Capture + reset immediately so an early-return guard below can't leave
+        # the flag set and mislabel the next (dashboard) command.
+        from_terminal = self._cmd_from_terminal
+        self._cmd_from_terminal = False
         direct_workflow_id, display_cmd = self._command_controller.parse_command(cmd)
         if self._state == "awaiting_confirmation":
             self._dashboard.toast.show_toast(
@@ -662,6 +674,15 @@ class JarvisWindow(QMainWindow):
         })
         self._runtime_ctx.note_user_command(display_cmd)
         self._dashboard.left.transcript.add_exchange(display_cmd, now)
+        # Global console: mirror EVERY command into the Terminal page so it shows
+        # all JARVIS activity (browser, files, system…), not only what's typed in
+        # the terminal box. Skip when the command came from the terminal itself —
+        # _on_submit already opened that block.
+        if not from_terminal:
+            try:
+                self._terminal_view.begin_external_command(display_cmd)
+            except Exception:
+                pass
         self._botbar.increment_commands()
         self._cmd_count += 1
         self._set_state("thinking")
@@ -1206,6 +1227,17 @@ class JarvisWindow(QMainWindow):
         if token != self._transcript_update_token:
             return
         self._dashboard.left.transcript.update_last_jarvis(text, j_time, intent, conf)
+        # Mirror the reply into the redesigned Terminal page so a command typed
+        # there gets JARVIS's response inline. No-op unless an awaiting terminal
+        # block exists (i.e. the command actually originated in the terminal).
+        # While a confirmation is pending this text is only the PROMPT, so keep
+        # the block awaiting (final=False) — the eventual result lands next.
+        try:
+            self._terminal_view.append_jarvis_response(
+                text, intent=intent, final=not bool(self._confirm_mode)
+            )
+        except Exception:
+            pass
 
     def _set_state_if_current(self, token: int, state: str):
         """Ignore stale state timers after a newer command/response starts."""
