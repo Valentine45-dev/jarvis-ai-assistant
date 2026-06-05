@@ -295,7 +295,11 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                 # a 2-second blip at fire-time kills the whole routine.
                 parsed = _ask_claude_step(step, step_n)
                 if parsed.get("intent") == "unknown":
-                    import time as _time
+                    # NB: do NOT `import time as _time` here — a local import
+                    # would make `_time` function-local to _run_from and shadow
+                    # the enclosing import (line ~180), making the
+                    # `_time.perf_counter()` below raise UnboundLocalError for
+                    # every structured step. Use the closed-over `_time`.
                     _tlog(f"… retrying step {step_n} after brain returned 'unknown'")
                     _time.sleep(1.2)
                     parsed = _ask_claude_step(step, step_n)
