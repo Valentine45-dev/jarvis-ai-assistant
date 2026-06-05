@@ -923,6 +923,9 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
         if pid:
             try:
+                # R3-10: never let JARVIS terminate its own process.
+                if int(pid) == os.getpid():
+                    return _err("Refusing to kill JARVIS's own process.")
                 p = psutil.Process(int(pid))
                 pname = p.name()
                 p.kill()
@@ -935,19 +938,59 @@ def _handle_code_execution(action: str, params: dict) -> dict:
                 return _err(str(exc))
 
         if name:
-            killed = []
+            # R3-10: near-exact match instead of substring. The old
+            # `name in proc_name` let "python" kill JARVIS itself and "s" kill
+            # everything. Match when the process name (or its .exe stem) equals
+            # the requested name (or stem), case-insensitively.
+            want      = name.strip().lower()
+            want_stem = want[:-4] if want.endswith(".exe") else want
+            self_pid  = os.getpid()
+
+            def _name_matches(proc_name: str) -> bool:
+                p = (proc_name or "").strip().lower()
+                p_stem = p[:-4] if p.endswith(".exe") else p
+                return p == want or p_stem == want_stem
+
+            candidates = []
             for proc in psutil.process_iter(["pid", "name"]):
                 try:
-                    if name.lower() in (proc.info["name"] or "").lower():
+                    if proc.info["pid"] == self_pid:
+                        continue  # R3-10: never kill JARVIS itself
+                    if _name_matches(proc.info["name"]):
+                        candidates.append(proc)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+            if not candidates:
+                return _err(f"No process matching {name!r}")
+
+            def _kill_candidates() -> dict:
+                killed = []
+                for proc in candidates:
+                    try:
                         proc.kill()
                         killed.append(f"{proc.info['name']} (PID {proc.info['pid']})")
                         with _bg_procs_lock:
                             _bg_procs.pop(proc.info["pid"], None)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            if killed:
-                return _ok(f"Killed: {', '.join(killed)}")
-            return _err(f"No process matching {name!r}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                if killed:
+                    return _ok(f"Killed: {', '.join(killed)}")
+                return _err(f"No process matching {name!r}")
+
+            # R3-10: a single unambiguous target was already confirmed at the
+            # executor gate — kill it directly. A broad match (several PIDs) is
+            # dangerous, so surface the exact candidate list and reconfirm.
+            if len(candidates) == 1:
+                return _kill_candidates()
+            cand_list = ", ".join(
+                f"{p.info['name']} (PID {p.info['pid']})" for p in candidates
+            )
+            prompt = (
+                f"{len(candidates)} processes match {name!r}: {cand_list}. "
+                "Kill all of them?"
+            )
+            return request_confirmation(prompt, _kill_candidates)
 
         return _err("Provide pid or process_name to kill a process")
 

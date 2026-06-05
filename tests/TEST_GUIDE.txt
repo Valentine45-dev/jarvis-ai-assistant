@@ -1,0 +1,183 @@
+JARVIS — Manual Test Guide for Round-3 Surgical Fixes
+=====================================================
+
+Covers the 5 fixes in commit "fix: R3-7/R3-10/R3-11/R3-12/R3-14 surgical fixes".
+Written for someone running the real app (uv run python main.py), not reading code.
+For each fix: what to do, what you should see, and what the OLD (broken) behaviour was.
+
+Tip: turn DEBUG on in Settings (or .env DEBUG=true) so the terminal/log shows routing
+detail. Keep AUTO_CONFIRM OFF for the confirmation tests so the cards actually appear.
+
+
+-----------------------------------------------------------------------
+R3-12 — Vision: different questions about the SAME screen now get the
+        right answer (cache no longer collides on image bytes alone)
+-----------------------------------------------------------------------
+Setup: leave your screen UNCHANGED between the two commands below (don't move
+windows, don't scroll) so the two screenshots are byte-for-byte identical —
+that's the exact case that used to break.
+
+Do this, in order, without changing the screen:
+  1. Say / type:  "what's on my screen?"
+        -> JARVIS describes the screen. Note the answer.
+  2. Immediately say / type:  "where is the close button?"
+        (a find-the-element question about the same, unchanged screen)
+
+PASS (fixed):
+  - The second reply is ABOUT the close button / a location ("top-right", etc.),
+    not a repeat of the first full-screen description.
+  - Each distinct question produces its own distinct answer.
+
+FAIL (old behaviour):
+  - The second question returned the FIRST question's answer verbatim
+    (a cache hit keyed only on the image), e.g. you ask "where is the button"
+    and get the earlier "your screen shows ..." description again.
+
+Extra check (cache still works for repeats): ask "what's on my screen?" twice in
+a row without changing the screen — the second should come back instantly
+(cache hit) with the same description. That proves we only fixed the collision,
+not disabled caching.
+
+
+-----------------------------------------------------------------------
+R3-11 — Reminders: listing reminders while one fires no longer crashes
+-----------------------------------------------------------------------
+Goal: have a reminder fire at the same moment you ask to list reminders.
+
+Do this:
+  1. Set several short reminders back to back, e.g.:
+        "remind me to stretch in 5 seconds"
+        "remind me to drink water in 6 seconds"
+        "remind me to check email in 7 seconds"
+  2. As those 5-7 seconds tick down, repeatedly say / type:
+        "list my reminders"
+     Fire it several times quickly so one "list" lands exactly as a reminder pops.
+
+PASS (fixed):
+  - "list my reminders" always returns a clean list (or "No active reminders.").
+  - Reminders fire normally on the HUD. No error toast, no broken list.
+
+FAIL (old behaviour):
+  - Occasionally the list command errored out (internally a
+    "dictionary changed size during iteration" crash) right as a reminder fired,
+    so you'd get a generic failure instead of the list.
+
+Note: this is a timing/race bug, so it was intermittent before. If you can't
+make it collide by hand, just confirm listing works reliably while reminders
+are active — the fix removes the crash window entirely.
+
+
+-----------------------------------------------------------------------
+R3-10 — kill_process: JARVIS won't kill itself, matches by exact name,
+        and shows the full list before a broad kill
+-----------------------------------------------------------------------
+JARVIS runs as python.exe, so "kill python" used to kill JARVIS itself.
+
+TEST A — self-protection (the important one):
+  Say / type:  "kill the python process"   (or "kill process named python")
+  When the confirmation card appears, confirm it (say "yes").
+
+  PASS (fixed):
+    - JARVIS stays open and running.
+    - If python.exe processes other than JARVIS exist, only those are reported;
+      JARVIS is never in the kill list.
+    - If JARVIS is the only python process, you get "No process matching 'python'"
+      (it excluded itself) — and JARVIS is still alive.
+
+  FAIL (old behaviour):
+    - JARVIS abruptly closed (it killed its own process), often mid-reply.
+
+TEST B — exact name, not substring:
+  Open Notepad (notepad.exe). Then say:  "kill the process named note"
+  PASS (fixed): "No process matching 'note'" — "note" is not the real name.
+                Now say "kill notepad" -> Notepad closes (exact name matches).
+  FAIL (old): "note" as a substring of "notepad.exe" killed Notepad.
+
+TEST C — broad-match safety list:
+  Open two or three Notepad windows (each is its own notepad.exe), then say:
+        "kill notepad"
+  PASS (fixed): you get a SECOND confirmation that names every match, e.g.
+        "3 processes match 'notepad': notepad.exe (PID ...), notepad.exe (PID ...)
+         ... Kill all of them?"
+        Confirm -> all close. (A single Notepad needs no extra prompt — it just
+        closes after the normal kill confirmation.)
+  FAIL (old): it silently killed everything matching with no list shown.
+
+  By PID: "kill PID <JARVIS's own pid>" -> refuses with
+          "Refusing to kill JARVIS's own process."  (find the pid in Task Manager).
+
+
+-----------------------------------------------------------------------
+R3-7 — Confirmation: a "no / wait / cancel" reply never triggers a
+        destructive action, even if it also contains "yes"
+-----------------------------------------------------------------------
+Use any destructive command that shows a confirmation card. A safe one to test
+with is creating then deleting a throwaway file, or just "shut down the computer"
+(then DON'T actually confirm — use a cancelling reply).
+
+Do this:
+  1. Say / type something that asks for confirmation, e.g.:
+        "delete the file test_throwaway.txt"   (create it first with
+         "create a file called test_throwaway.txt")
+     A confirmation card appears.
+  2. Reply with a HEDGED / self-correcting answer that contains a "yes" word
+     but also a negation, e.g.:
+        "yes — wait, no"
+        "sure, actually cancel"
+        "no don't"
+
+PASS (fixed):
+  - JARVIS stands down ("Understood — standing down.") and does NOT delete.
+  - The file is still there.
+
+FAIL (old behaviour):
+  - Because the reply contained "yes"/"sure", JARVIS treated it as approval and
+    DELETED the file anyway.
+
+Also verify normal flow still works:
+  - A clean "yes" / "go ahead" / "do it" still confirms and deletes.
+  - A bare "please" by itself NO LONGER counts as confirmation (it's too weak) —
+    reply just "please" to a card and JARVIS should stand down, not proceed.
+
+
+-----------------------------------------------------------------------
+R3-14 — Workflows: editing a fetched workflow no longer corrupts the
+        saved copy
+-----------------------------------------------------------------------
+This guards against the library handing out a shared reference to a workflow's
+steps. Hard to trigger by normal voice use, so test via behaviour stability:
+
+Do this:
+  1. Create a workflow with a few steps, e.g.:
+        "create a workflow called demo that opens chrome and takes a screenshot"
+  2. Run it a few times:
+        "run demo"   (repeat 3-4 times)
+  3. Open the AUTOMATE page and inspect the "demo" workflow's step list.
+        Also open data/workflows.json in an editor.
+
+PASS (fixed):
+  - The step list for "demo" is identical every time — same steps, same order,
+    same count — no matter how many times you run it or list it.
+  - data/workflows.json still shows exactly the steps you defined; no duplicated,
+    mutated, or extra steps appear over repeated runs.
+
+FAIL (old behaviour):
+  - Repeated runs / inspections could mutate the in-memory workflow (steps getting
+    normalised or appended in place), and a later save would persist the corrupted
+    version to workflows.json.
+
+Quick confidence check: "list my workflows" several times in a row — every
+listing returns the same stable data.
+
+
+-----------------------------------------------------------------------
+Regression sweep (run after all of the above)
+-----------------------------------------------------------------------
+  - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
+  - Set + cancel a reminder normally.
+  - Run a normal workflow end to end.
+  - Confirm a normal destructive action with a plain "yes" -> it executes.
+
+Automated baseline (from repo root):
+  uv run pytest -q -m "not integration and not qt and not slow"
+  -> expect all green (64 passed at time of writing).

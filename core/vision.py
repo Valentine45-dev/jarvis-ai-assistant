@@ -230,7 +230,14 @@ def analyze_image(image_bytes: bytes, question: str = "", action: str = "describ
     if not image_bytes:
         return ""
 
-    cache_key = hashlib.sha256(image_bytes).hexdigest()
+    # R3-12: fold action + question into the key so different questions about
+    # the same image (identical bytes) don't collide and return each other's
+    # answers. Pure describe/read_text (no question) still dedupe correctly.
+    cache_key = hashlib.sha256(
+        image_bytes
+        + b"\0" + (action or "").encode("utf-8")
+        + b"\0" + (question or "").encode("utf-8")
+    ).hexdigest()
     cached = _vision_cache.get(cache_key)
     if cached is not None:
         _dbg("vision", f"cache hit ({len(image_bytes):,} bytes -> {len(cached)} chars)")

@@ -18,6 +18,7 @@ an automation_task/run_workflow command with task_name but no inline steps.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import threading
@@ -164,24 +165,27 @@ class WorkflowLibrary:
     def get(self, name: str) -> dict[str, Any] | None:
         """Look up a workflow by id or display name (case-insensitive)."""
         with self._lock:
+            # R3-14: deepcopy so callers that mutate the returned workflow's
+            # nested `steps` list don't corrupt the authoritative in-memory copy
+            # (a shallow dict() shares the same steps list by reference).
             # Exact id match
             if name in self._workflows:
-                return dict(self._workflows[name])
+                return copy.deepcopy(self._workflows[name])
             # Normalised id (e.g. "Morning Routine" → "morning_routine")
             slug = name.lower().replace(" ", "_")
             if slug in self._workflows:
-                return dict(self._workflows[slug])
+                return copy.deepcopy(self._workflows[slug])
             # Display-name match
             low = name.lower()
             for wf in self._workflows.values():
                 if wf.get("name", "").lower() == low:
-                    return dict(wf)
+                    return copy.deepcopy(wf)
         return None
 
     def list_all(self) -> list[dict]:
-        """Return all workflows as a list (copy)."""
+        """Return all workflows as a list (deep copy — see R3-14)."""
         with self._lock:
-            return [dict(w) for w in self._workflows.values()]
+            return [copy.deepcopy(w) for w in self._workflows.values()]
 
     def add(self, workflow: dict) -> None:
         """Add or replace a workflow, persist, and notify the UI."""

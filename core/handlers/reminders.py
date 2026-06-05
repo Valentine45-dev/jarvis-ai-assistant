@@ -187,7 +187,9 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
         if not _reminder_meta:
             return _ok("No active reminders.")
         lines: list[str] = []
-        for rid, meta in _reminder_meta.items():
+        # R3-11: snapshot before iterating — a reminder's Timer thread may pop
+        # from _reminder_meta mid-iteration ("dict changed size" RuntimeError).
+        for rid, meta in list(_reminder_meta.items()):
             m = str(meta.get("message", ""))
             r = meta.get("run")
             if r:

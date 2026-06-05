@@ -131,9 +131,21 @@ def request_confirmation(prompt: str, fn: Any) -> dict:
     return _confirm(prompt)
 
 
+_NEGATION_TOKENS: frozenset[str] = frozenset({
+    "no", "don't", "cancel", "stop", "nope", "never", "wait", "abort",
+})
+
+
 def _is_affirmative_reply(user_response: str) -> bool:
     t = user_response.strip().lower()
     if not t:
+        return False
+    toks = set(re.findall(r"[a-z0-9']+", t))
+    # R3-7: negation guard — a reply containing any negation/abort word is NOT
+    # an affirmative even when it also contains "yes"/"sure" ("yes — wait, no",
+    # "sure, actually cancel"). Checked before any affirmative match so a hedged
+    # or self-correcting reply can't fire a destructive confirmation.
+    if toks & _NEGATION_TOKENS:
         return False
     for phrase in (
         "go ahead", "do it", "create it", "sounds good", "that's fine",
@@ -141,9 +153,9 @@ def _is_affirmative_reply(user_response: str) -> bool:
     ):
         if phrase in t:
             return True
-    if t in ("y", "yes", "yeah", "yep", "ok", "okay", "sure", "confirm", "please", "k"):
+    # R3-7: bare "please" removed — too weak a signal to execute on its own.
+    if t in ("y", "yes", "yeah", "yep", "ok", "okay", "sure", "confirm", "k"):
         return True
-    toks = set(re.findall(r"[a-z0-9']+", t))
     if toks & {"yes", "yeah", "yep", "sure", "confirm", "proceed", "absolutely", "ok"}:
         return True
     return False
