@@ -75,7 +75,7 @@ _OS = _platform.system().lower()  # "windows" | "darwin" | "linux"
 _app_audio_muted: bool = False
 _PROBE_TTL_S = 5.0
 _probe_lock = threading.Lock()
-_probe_cache: dict = {"value": None, "checked_at": 0.0}  # value: True/False/None
+_probe_cache: dict = {"value": None, "checked_at": 0.0, "in_flight": False}  # value: True/False/None
 
 _PROBE_CODE = (
     "from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume;"
@@ -114,25 +114,43 @@ def _run_mute_probe_subprocess() -> bool | None:
         return None
 
 
+def _refresh_probe_cache() -> None:
+    """Run the mute probe and update the cache. Runs on a background daemon so
+    the caller (often the Qt main thread via say()) never blocks on the ≤3 s
+    subprocess — see R3-5."""
+    result = _run_mute_probe_subprocess()
+    now = _time.monotonic()
+    with _probe_lock:
+        # Only cache definitive answers (True/False), not None failures — but
+        # always stamp checked_at so a persistently-failing probe is retried at
+        # most once per TTL instead of spawning on every say(). Clear in_flight
+        # so the next stale read can trigger a fresh refresh.
+        if result is not None:
+            _probe_cache["value"] = result
+        _probe_cache["checked_at"] = now
+        _probe_cache["in_flight"] = False
+
+
 def _probed_system_muted() -> bool:
-    """Return True if the OS reports muted (cached). False on unknown or unmuted."""
+    """Return True if the OS reports muted, from cache. Never blocks: on a stale
+    or missing cache it kicks off a background refresh and returns the last known
+    value (default False/unmuted when unknown). An external mute (taskbar/hotkey)
+    is therefore noticed one line late rather than freezing the caller — see R3-5.
+    App-level mutes go through set_app_audio_muted() and update the cache instantly."""
     if _OS != "windows":
         return False
     now = _time.monotonic()
     with _probe_lock:
         cached_value = _probe_cache["value"]
-        cached_at    = _probe_cache["checked_at"]
-        cache_fresh  = (now - cached_at) < _PROBE_TTL_S
-    if cache_fresh and cached_value is not None:
-        return bool(cached_value)
-    # Spawn a probe. This is the cache-miss path.
-    result = _run_mute_probe_subprocess()
-    with _probe_lock:
-        # Only cache definitive answers (True/False), not None failures.
-        if result is not None:
-            _probe_cache["value"] = result
-            _probe_cache["checked_at"] = now
-    return bool(result) if result is not None else False
+        cache_fresh  = (now - _probe_cache["checked_at"]) < _PROBE_TTL_S
+        # Trigger a background refresh on a stale/missing cache, deduped via
+        # in_flight so concurrent say() calls don't spawn a probe storm.
+        need_refresh = not cache_fresh and not _probe_cache["in_flight"]
+        if need_refresh:
+            _probe_cache["in_flight"] = True
+    if need_refresh:
+        threading.Thread(target=_refresh_probe_cache, daemon=True).start()
+    return bool(cached_value) if cached_value is not None else False
 
 
 def set_app_audio_muted(value: bool) -> None:
