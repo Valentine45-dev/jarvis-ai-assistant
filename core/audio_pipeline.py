@@ -403,7 +403,14 @@ class TtsEngine:
 
     def __init__(self) -> None:
         self._lock     = threading.Lock()
-        self._speaking = threading.Event()
+        # R3-4: is_speaking is a COUNTER, not a binary Event. Overlapping say()
+        # calls serialise on _lock, but each clip must keep is_speaking True for
+        # its whole duration — a bool/Event lets clip A's clear() fire while
+        # clip B is still playing, opening the mic mid-speech (feedback loop).
+        # The counter is guarded by its own tiny lock, NOT _lock (which is held
+        # for an entire clip — is_speaking would block on it).
+        self._speaking_lock  = threading.Lock()
+        self._speaking_count = 0
         self._last_provider_error: TtsProviderError | None = None
         # Session-scoped lock: once ElevenLabs returns quota_exceeded once, we
         # stop hammering it on every subsequent line. Cleared on restart (so
@@ -419,7 +426,8 @@ class TtsEngine:
 
     @property
     def is_speaking(self) -> bool:
-        return self._speaking.is_set()
+        with self._speaking_lock:
+            return self._speaking_count > 0
 
     # ── Public ───────────────────────────────────────────────────────────────
 
@@ -449,9 +457,12 @@ class TtsEngine:
                 ready_called.set()
                 self._notify(on_ready)
 
-        # Set is_speaking BEFORE the lock so the overlap guard in listen() sees
-        # True immediately, not after waiting for a previous say() to finish.
-        self._speaking.set()
+        # Increment BEFORE the lock so the overlap guard in listen() sees
+        # is_speaking immediately, not after waiting for a previous say() to
+        # finish. The counter (not a bool) keeps it True across overlapping
+        # clips until the LAST one ends — see R3-4 note in __init__.
+        with self._speaking_lock:
+            self._speaking_count += 1
         try:
             with self._lock:
                 # ── Tier 1: ElevenLabs ──────────────────────────────────────
@@ -509,8 +520,17 @@ class TtsEngine:
 
                 # ── Tier 3: pyttsx3 local fallback ──────────────────────────
                 self._say_local(text, _on_ready_once, on_done)
+        except Exception as exc:
+            # A tier raised after the earlier ones were exhausted (typically the
+            # pyttsx3 fallback). Log and fire on_done so the speaking_finished
+            # signal still lands (UI animations don't stall) and the daemon
+            # thread exits cleanly instead of dying with an unhandled exception.
+            # is_speaking is still released by the finally below.
+            _dbg("tts", f"say failed on all tiers: {exc}")
+            self._notify(on_done)
         finally:
-            self._speaking.clear()
+            with self._speaking_lock:
+                self._speaking_count -= 1
 
     def clear_elevenlabs_quota_lock(self) -> None:
         """Re-enable ElevenLabs after the user tops up credits or changes
