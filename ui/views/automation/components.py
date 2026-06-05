@@ -67,6 +67,10 @@ def humanize_cron(expr: str) -> str:
         return ""
     minute, hour, dom, mon, dow = parts
 
+    # Every minute:  * * * * *
+    if minute == "*" and hour == "*" and dom == "*" and mon == "*" and dow == "*":
+        return "Every minute"
+
     # Every-N-minutes:  */N * * * *
     if minute.startswith("*/") and hour == "*" and dom == "*" and mon == "*" and dow == "*":
         try:
