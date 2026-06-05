@@ -808,14 +808,17 @@ Schedule and manage timed reminders. The executor fires a HUD status signal when
 
 - `set_reminder` — Schedule a reminder message after a delay
 - `cancel_reminder` — Cancel an active reminder by message text
-- `list_reminders` — List all currently active reminders
+- `list_reminders` — List currently active reminders. Pass **`completed: true`** to list the in-memory **history** of reminders that already **fired or were cancelled** this session. Use `completed: true` for *"list completed reminders"*, *"what reminders fired"*, *"show my reminder history"*, *"what did I miss"*. History resets on restart (not persisted).
 
 **Parameters:**
 
 ```json
 { "message": "string — reminder text", "delay_seconds": 1800, "repeat": false }
 { "message": "string — exact message text of reminder to cancel" }
+{ "completed": "bool — list_reminders only: true → show fired/cancelled history instead of the active set" }
 ```
+
+When a plain reminder fires, JARVIS now **speaks it and shows a toast** (not just a HUD flash), and logs it to the session reminder history.
 
 **HUD Label:** `REMINDER SET`
 **Confirmation:** `false` — reminders are non-destructive
