@@ -294,6 +294,19 @@ _DANGER_PATTERNS: list[re.Pattern] = [
         r"net\s+user.+/delete",
         r"icacls.+/grant",
         r"Remove-Item.+-Recurse.+-Force",
+        # R3-3: PowerShell/CMD-native destructive cmdlets. Secondary defence —
+        # the primary gate below confirms EVERY run_powershell/run_cmd, but
+        # these also catch the cmdlets when invoked via run_shell/run_background
+        # (e.g. `powershell -Command Stop-Computer`). A denylist can never be
+        # complete for a whole shell language; this just raises the floor.
+        r"\bStop-Computer\b",
+        r"\bRestart-Computer\b",
+        r"\bFormat-Volume\b",
+        r"\bClear-Disk\b",
+        r"\bRemove-Partition\b",
+        r"\bClear-RecycleBin\b",
+        r"\bReset-ComputerMachinePassword\b",
+        r"\bDisable-NetAdapter\b",
     ]
 ]
 
@@ -807,6 +820,31 @@ def _handle_code_execution(action: str, params: dict) -> dict:
         "run_python", "run_shell", "git_command", "npm_command", "run_script",
     ):
         return _err("No code or command provided")
+
+    # ── R3-3: raw PowerShell/CMD always confirm (primary gate) ────────────────
+    # The shell-form danger regex can't enumerate an entire shell language
+    # (PS-native cmdlets, aliases like ri/rm, the call operator, -EncodedCommand),
+    # so EVERY run_powershell / run_cmd invocation requires confirmation unless
+    # the operator opted into config.allow_ai_command_autorun. Reuses the
+    # _danger_confirmed re-entry gate so a command that ALSO tripped the danger
+    # regex above is confirmed once, not twice.
+    if (
+        action in ("run_powershell", "run_cmd")
+        and not danger_confirmed
+        and not _autorun_allowed()
+    ):
+        def _run_after_shell_confirm() -> dict:
+            return _handle_code_execution(action, {**params, "_danger_confirmed": True})
+
+        shell_label = "PowerShell" if action == "run_powershell" else "CMD"
+        _snippet = str(code) if len(str(code)) <= 300 else str(code)[:300] + "…"
+        prompt = (
+            f"Run this {shell_label} command? Raw {shell_label} can do anything "
+            f"to your system, so JARVIS confirms each one.\n\n  {_snippet}"
+        )
+        result = request_confirmation(prompt, _run_after_shell_confirm)
+        result.update({"confirm_type": "raw_shell", "subject": str(code)[:300]})
+        return result
 
     # ── PowerShell ────────────────────────────────────────────────────────────
     if action == "run_powershell":
