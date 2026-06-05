@@ -10,33 +10,56 @@ detail. Keep AUTO_CONFIRM OFF for the confirmation tests so the cards actually a
 
 
 -----------------------------------------------------------------------
-R3-12 — Vision: different questions about the SAME screen now get the
+R3-12 — Vision: different questions about the SAME image now get the
         right answer (cache no longer collides on image bytes alone)
 -----------------------------------------------------------------------
-Setup: leave your screen UNCHANGED between the two commands below (don't move
-windows, don't scroll) so the two screenshots are byte-for-byte identical —
-that's the exact case that used to break.
+READ FIRST — two traps that make this look like it "doesn't work":
 
-Do this, in order, without changing the screen:
-  1. Say / type:  "what's on my screen?"
-        -> JARVIS describes the screen. Note the answer.
-  2. Immediately say / type:  "where is the close button?"
-        (a find-the-element question about the same, unchanged screen)
+  (a) The line JARVIS SPEAKS FIRST is just an acknowledgement, NOT the answer.
+      "Taking a look at your screen now." / "Scanning the screen for the close
+      button." are the pre-analysis lines. The real answer (the description /
+      where the button is) is delivered AFTER, as the spoken follow-up. To also
+      see the analysis TEXT on the Terminal page, set in Settings (or
+      config/jarvis.json):  vision_show_analysis = true   then re-run.
+
+  (b) You CANNOT trigger this bug with two screenshots of the live HUD. The bug
+      only fires when two captures are byte-for-byte IDENTICAL. A running JARVIS
+      screen is never identical (the arc reactor pulses, the clock ticks, TTS
+      animates), so two screenshots always differ, never share a cache entry,
+      and the cache path is never exercised. Screenshots prove nothing here.
+
+RELIABLE test — use the SAME IMAGE FILE twice (a file's bytes ARE identical
+every time it's loaded). Pick any image on disk, e.g. a reference PNG:
+     C:\Users\Lenovo\Documents\jarvis-project\assets\reference\jarvis_main_hud.png
+
+  1. Say / type:  "describe the image at <that full path>"
+        -> JARVIS describes the picture. Note the answer.
+  2. Say / type:  "what colours are in the image at <that same path>"
+        (a DIFFERENT question about the SAME file)
 
 PASS (fixed):
-  - The second reply is ABOUT the close button / a location ("top-right", etc.),
-    not a repeat of the first full-screen description.
-  - Each distinct question produces its own distinct answer.
+  - The second answer is about COLOURS, not a repeat of the first description.
+  - Different questions on the same file give different, on-topic answers.
 
 FAIL (old behaviour):
-  - The second question returned the FIRST question's answer verbatim
-    (a cache hit keyed only on the image), e.g. you ask "where is the button"
-    and get the earlier "your screen shows ..." description again.
+  - The second question returned the FIRST question's answer verbatim, because
+    the cache key was the image bytes only and ignored the question.
 
-Extra check (cache still works for repeats): ask "what's on my screen?" twice in
-a row without changing the screen — the second should come back instantly
-(cache hit) with the same description. That proves we only fixed the collision,
-not disabled caching.
+Cache-still-works check:
+  - Ask the SAME question about the SAME file twice -> the second returns
+    instantly (cache hit) with the same answer. Proves we fixed the collision
+    without disabling caching.
+
+Code-level proof (no API key, no network) — run from the repo root; this drives
+the real analyze_image() with byte-identical images and a fake client:
+  uv run python -c "import core.vision as v; v.clear_vision_cache(); \
+R=lambda t:type('R',(),{'content':[type('X',(),{'text':t})()]})(); \
+C=type('C',(),{'messages':type('M',(),{'create':lambda s,**k:R('A: '+k['messages'][0]['content'][1]['text'][:40])})()})(); \
+v._get_client=lambda:C; i=b'SAME-BYTES'; \
+a=v.analyze_image(i,'close button','find_ui_element'); \
+b=v.analyze_image(i,'what colour is the logo','answer_question'); \
+print('different question -> different answer:', a!=b, '| cache entries:', len(v._vision_cache))"
+  -> expect:  different question -> different answer: True | cache entries: 2
 
 
 -----------------------------------------------------------------------
