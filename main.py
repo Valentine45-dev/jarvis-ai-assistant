@@ -652,7 +652,39 @@ class JarvisWindow(QMainWindow):
         from_terminal = self._cmd_from_terminal
         self._cmd_from_terminal = False
         direct_workflow_id, display_cmd = self._command_controller.parse_command(cmd)
+
+        # An outstanding EXECUTOR confirmation (e.g. delete_file) is answered by
+        # this reply. A short yes/no/hedged answer is resolved HERE — so the R3-7
+        # negation guard runs and "yes — wait, no" stands down — instead of being
+        # rejected by the awaiting-confirmation guard below. A full new directive
+        # abandons the stale confirmation and falls through to normal routing.
+        from core.executor import (
+            abandon_pending_confirmation,
+            get_pending_confirmation,
+            resolve_confirmation,
+        )
+        if get_pending_confirmation():
+            if not self._command_controller.pending_should_yield_to_new_command(cmd):
+                # Text/voice reply answers the card — mirror the button path:
+                # hide the card + clear the mode before resolving.
+                self._hide_confirm_card()
+                self._confirm_mode = None
+                resolved = resolve_confirmation(cmd)
+                self._on_confirmation_resolved(resolved)
+                return
+            abandon_pending_confirmation()
+            self._hide_confirm_card()
+            self._confirm_mode = None
+            self._pending_result = None
+            try:
+                self._voice_view.clear_pending()
+            except Exception:
+                pass
+            if self._state == "awaiting_confirmation":
+                self._set_state("idle")
+
         if self._state == "awaiting_confirmation":
+            # Claude inline confirmation (button-driven; no executor pending).
             self._dashboard.toast.show_toast(
                 "Please respond to the pending confirmation first.", "warning")
             return
@@ -689,30 +721,6 @@ class JarvisWindow(QMainWindow):
         self._dashboard.left.hud_status.set_status("PROCESSING")
         self._dashboard.left.status_lbl.setText(f'Processing: "{display_cmd}"')
         self._dashboard.left.typing.show_typing()
-
-        # Priority: resolve pending confirmation before routing to brain — but if the
-        # user typed a new full command (not a short yes/no), drop stale pending and
-        # route the new command to the brain (avoids misfiring "standing down" on sentences).
-        from core.executor import (
-            abandon_pending_confirmation,
-            get_pending_confirmation,
-            resolve_confirmation,
-        )
-
-        if get_pending_confirmation():
-            if self._command_controller.pending_should_yield_to_new_command(cmd):
-                abandon_pending_confirmation()
-                self._hide_confirm_card()
-                self._confirm_mode = None
-                self._pending_result = None
-                try:
-                    self._voice_view.clear_pending()
-                except Exception:
-                    pass
-            else:
-                resolved = resolve_confirmation(cmd)
-                self._on_confirmation_resolved(resolved)
-                return
 
         # Phase 5: repeat-last-command shorthand — bypass Claude entirely.
         if self._command_controller.is_repeat_phrase(display_cmd) and self._last_result:
