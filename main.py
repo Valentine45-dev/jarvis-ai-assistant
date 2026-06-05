@@ -694,6 +694,15 @@ class JarvisWindow(QMainWindow):
                 "Document generation in progress — please wait.", "warning",
             )
             return
+        # R3-1/R3-2: a workflow pumps processEvents() between steps, which can
+        # re-enter here. Reject a new command while one is running (a confirmation
+        # reply already short-circuited above via the pending-confirmation block).
+        from core.handlers.automation_handler import is_workflow_in_flight
+        if is_workflow_in_flight():
+            self._dashboard.toast.show_toast(
+                "A workflow is running — please wait.", "warning",
+            )
+            return
         self._transcript_update_token += 1
         now = datetime.now().strftime("%H:%M")
         # Cap history to avoid unbounded memory growth
@@ -1473,6 +1482,21 @@ class JarvisWindow(QMainWindow):
         silently kick off a destructive workflow step.
         """
         if not workflow_id:
+            return
+        # R3-1: never re-enter dispatch from a cron tick. If JARVIS isn't idle
+        # (a command/confirmation/workflow is active) or a workflow/doc is in
+        # flight, DROP this fire — do not queue it. The next scheduled slot fires
+        # normally; a missed fire is safer than overlapping a paused workflow or
+        # replacing a confirmation card out from under the user.
+        from core.handlers.automation_handler import is_workflow_in_flight
+        from core.handlers.document_handler import is_document_generation_in_flight
+        if (self._state != "idle"
+                or is_workflow_in_flight()
+                or is_document_generation_in_flight()):
+            from core.log import debug as _dbg
+            _dbg("scheduler",
+                 f"scheduled workflow {workflow_id!r} skipped — JARVIS busy "
+                 f"(state={self._state})")
             return
         from core.automation import workflow_library
         wf = workflow_library.get(workflow_id)

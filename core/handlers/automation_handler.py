@@ -52,6 +52,21 @@ def _yield_ui() -> None:
         pass
 
 
+# R3-1/R3-2: workflow steps run on the Qt main thread and pump processEvents()
+# between steps, which can re-enter dispatch (a typed command, a cron fire, a mic
+# result). This counter marks "a workflow is actively executing" so main.py can
+# reject re-entrant commands and drop scheduled fires while busy. A COUNTER (not a
+# bool) because a confirmation pause resumes via _resume_after_confirm, which calls
+# _run_from again — nested spans must not clear the flag early. Mirrors the
+# module-level is_document_generation_in_flight() pattern (R2-15).
+_workflow_depth = 0
+
+
+def is_workflow_in_flight() -> bool:
+    """True while any _run_from / _resume_after_confirm frame is executing."""
+    return _workflow_depth > 0
+
+
 def _handle_automation_task(action: str, params: dict) -> dict:
     from core.automation import workflow_library
 
@@ -283,7 +298,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         except Exception:
             pass
 
-    def _run_from(start_idx: int) -> dict:
+    def _run_from_impl(start_idx: int) -> dict:
         for idx in range(start_idx, total):
             _yield_ui()
             step_n = idx + 1
@@ -354,7 +369,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                 original_fn = pending["fn"]
                 prompt = pending["prompt"]
 
-                def _resume_after_confirm(
+                def _resume_impl(
                     original_fn=original_fn,
                     prompt=prompt,
                     step_n=step_n,
@@ -385,6 +400,17 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     _between_step_blank()
                     return _run_from(idx + 1)
 
+                def _resume_after_confirm() -> dict:
+                    # R3-2: count the resume frame as in-flight too — its prelude
+                    # (_yield_ui + original_fn) pumps processEvents before it
+                    # recurses into _run_from.
+                    global _workflow_depth
+                    _workflow_depth += 1
+                    try:
+                        return _resume_impl()
+                    finally:
+                        _workflow_depth -= 1
+
                 # Re-register pending confirmation with a continuation closure:
                 # UI confirm executes current step, then resumes later steps.
                 return request_confirmation(prompt, _resume_after_confirm)
@@ -412,6 +438,17 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         if state["quit_application"]:
             out["quit_application"] = True
         return out
+
+    def _run_from(start_idx: int) -> dict:
+        # R3-1/R3-2: mark the workflow in-flight for the whole _run_from span so
+        # main.py rejects re-entrant commands / cron fires during the
+        # processEvents() pump. Counter handles the _resume → _run_from nesting.
+        global _workflow_depth
+        _workflow_depth += 1
+        try:
+            return _run_from_impl(start_idx)
+        finally:
+            _workflow_depth -= 1
 
     out = _run_from(0)
     if out.get("needs_confirmation"):
