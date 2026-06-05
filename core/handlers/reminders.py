@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 from core.handlers.shared import _ok, _err, _tlog
@@ -14,6 +15,33 @@ from core.handlers.automation_handler import (
 
 _active_reminders: dict[str, threading.Timer] = {}
 _reminder_meta: dict[str, dict[str, Any]] = {}
+
+# Option A reminder history: in-memory log of terminal reminder events
+# (fired / cancelled). Resets on restart — matches the ephemeral Timer model;
+# persistence (data/reminder_history.jsonl) is a deliberate later step.
+# `list_reminders` with completed=true reads this.
+_REMINDER_HISTORY_MAX = 50
+_reminder_history: list[dict[str, Any]] = []
+_history_lock = threading.Lock()
+
+
+def _record_history(
+    message: str,
+    status: str,
+    scheduled_time: str = "",
+    fired_at: str = "",
+) -> None:
+    """Append a terminal reminder event. status: 'fired' | 'cancelled'."""
+    entry = {
+        "message": str(message or "Reminder"),
+        "scheduled_time": scheduled_time,
+        "fired_at": fired_at,
+        "status": status,
+    }
+    with _history_lock:
+        _reminder_history.append(entry)
+        if len(_reminder_history) > _REMINDER_HISTORY_MAX:
+            del _reminder_history[:-_REMINDER_HISTORY_MAX]
 
 
 def _format_run_summary(run: dict[str, Any]) -> str:
@@ -113,12 +141,18 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
         sc = max(0.0, min(1.0, sc))
 
         rid = str(params.get("reminder_id") or uuid.uuid4().hex[:12])
+        scheduled_str = (datetime.now() + timedelta(seconds=delay)).strftime("%Y-%m-%d %H:%M:%S")
 
         def _fire() -> None:
             _active_reminders.pop(rid, None)
             meta = _reminder_meta.pop(rid, None) or {}
             m = meta.get("message", msg)
             r = meta.get("run")
+            _record_history(
+                m, "fired",
+                scheduled_time=meta.get("scheduled_time", ""),
+                fired_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
             try:
                 from core.signals import signals
                 if r and isinstance(r, dict):
@@ -129,7 +163,9 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
                         "schedule_confidence": float(meta.get("schedule_confidence", 0.92)),
                     })
                 else:
-                    signals.status_changed.emit(f"REMINDER: {m}")
+                    # Plain message-only reminder: hand to the main thread so it
+                    # can speak + toast + log it (Timer thread can't touch Qt/TTS).
+                    signals.reminder_fired.emit({"message": m})
             except Exception:
                 pass
 
@@ -141,6 +177,7 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
             "message": msg,
             "run": run_norm,
             "schedule_confidence": sc,
+            "scheduled_time": scheduled_str,
         }
         mins = delay // 60
         secs = delay % 60
@@ -169,10 +206,15 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
         cancelled = 0
         for rid in to_del:
             t = _active_reminders.pop(rid, None)
-            _reminder_meta.pop(rid, None)
+            meta = _reminder_meta.pop(rid, None) or {}
             if t:
                 t.cancel()
                 cancelled += 1
+                _record_history(
+                    meta.get("message", want), "cancelled",
+                    scheduled_time=meta.get("scheduled_time", ""),
+                    fired_at="",
+                )
         if cancelled:
             _tlog(f"✓ cancelled {cancelled} reminder{'s' if cancelled != 1 else ''}")
             return _ok(
@@ -184,6 +226,20 @@ def _handle_reminder_task(action: str, params: dict) -> dict:
         return _err(f"No active reminder matching: {want}")
 
     if action == "list_reminders":
+        # completed=true → show the in-memory history of fired/cancelled
+        # reminders instead of the active set ("list completed reminders").
+        if params.get("completed") or params.get("history") or params.get("fired"):
+            with _history_lock:
+                hist = list(_reminder_history)
+            if not hist:
+                return _ok("No completed or cancelled reminders this session.")
+            lines = []
+            for h in reversed(hist):  # most recent first
+                when = h.get("fired_at") or h.get("scheduled_time") or ""
+                tail = f"  ({when})" if when else ""
+                lines.append(f"- [{h.get('status', '?')}] {h.get('message', '')}{tail}")
+            return _ok("\n".join(lines))
+
         if not _reminder_meta:
             return _ok("No active reminders.")
         lines: list[str] = []

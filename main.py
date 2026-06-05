@@ -209,6 +209,7 @@ class JarvisWindow(QMainWindow):
         # Wire backend signals so reminders and errors surface in the HUD
         signals.status_changed.connect(self._on_status_signal)
         signals.reminder_action.connect(self._on_reminder_action)
+        signals.reminder_fired.connect(self._on_reminder_fired)
         signals.error_occurred.connect(self._on_error_signal)
         signals.document_generation_done.connect(
             self._on_document_generation_done, Qt.QueuedConnection,
@@ -463,6 +464,39 @@ class JarvisWindow(QMainWindow):
         """Qt main thread — backend status update (e.g., a reminder fires)."""
         self._dashboard.toast.show_toast(msg, "info")
         self._dashboard.left.status_lbl.setText(msg)
+
+    def _on_reminder_fired(self, payload: dict):
+        """Qt main thread — a plain (message-only) reminder elapsed.
+
+        Speaks it, shows a toast, and logs it to the transcript + history so a
+        fired reminder is impossible to miss (previously it only flashed the
+        HUD status line for a moment).
+        """
+        msg = str((payload or {}).get("message", "Reminder")).strip() or "Reminder"
+        spoken = f"Reminder — {msg}."
+
+        self._dashboard.toast.show_toast(f"⏰ Reminder — {msg}", "info")
+        self._dashboard.left.status_lbl.setText(f"REMINDER: {msg}")
+        self._dashboard.left.hud_status.set_status("REMINDER")
+
+        j_time = datetime.now().strftime("%H:%M")
+        entry = {
+            "time": j_time, "you": "⏱ reminder", "jarvis": spoken,
+            "jTime": j_time, "intent": "reminder_task", "conf": 1.0,
+            "status": "success",
+        }
+        self._history.append(entry)
+        history_store.save_entry(entry)
+        try:
+            self._dashboard.left.transcript.append_jarvis_scheduled(
+                spoken, j_time, "reminder_task", 1.0)
+        except Exception:
+            pass
+        try:
+            from core.voice import voice_engine
+            voice_engine.say(spoken)
+        except Exception:
+            pass
 
     def _on_error_signal(self, msg: str) -> None:
         """Qt main thread — throttled error toasts for noisy provider failures."""

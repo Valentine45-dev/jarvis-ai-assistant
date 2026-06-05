@@ -11,6 +11,9 @@ class JarvisSignals(QObject):
     status_changed = pyqtSignal(str)
     """Fires when a scheduled reminder includes an executable JARVIS action (main thread)."""
     reminder_action = pyqtSignal(dict)
+    # A plain (message-only) reminder elapsed. Main thread speaks + toasts +
+    # logs it. Emitted from the threading.Timer thread; delivered queued.
+    reminder_fired = pyqtSignal(dict)   # {"message": str}
     command_received = pyqtSignal(str)
     confidence_updated = pyqtSignal(float)
     speaking_state_changed = pyqtSignal(bool)
