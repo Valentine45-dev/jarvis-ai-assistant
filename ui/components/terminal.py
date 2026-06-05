@@ -389,13 +389,19 @@ class TerminalPanel(QWidget):
         head.addWidget(self._session_lbl)
         head.addStretch(1)
 
-        # @tag filter chips — ALL / CODE / FILES / BROWSER. Click filters
-        # the visible command blocks by their tag. ALL is the no-filter case.
+        # @tag filter chips. Click filters the visible command blocks by their
+        # tag (derived from the resolved intent). ALL is the no-filter case.
+        # Buckets without a chip (weather/reminder/doc/meta/…) show under @ALL.
         for key, label in (
             ("all",     "@ALL"),
-            ("code",    "@CODE"),
+            ("app",     "@APP"),
+            ("search",  "@SEARCH"),
             ("files",   "@FILES"),
+            ("code",    "@CODE"),
             ("browser", "@BROWSER"),
+            ("system",  "@SYSTEM"),
+            ("auto",    "@AUTO"),
+            ("vision",  "@VISION"),
         ):
             chip = ChipFilter(label, active=(key == "all"))
             chip.clicked.connect(lambda _checked, k=key: self._on_tag_chip_clicked(k))
@@ -888,34 +894,41 @@ class TerminalPanel(QWidget):
 
     # ── Tag classification + filter wiring ───────────────────────────────────
 
-    @staticmethod
-    def _classify_tag(text: str) -> str:
-        """Map a user-typed command to one of the chip buckets. Drives both
-        the per-command tag attribute and the filter predicate."""
-        t = text.strip().lower()
-        if t.startswith("@code"):
-            return "code"
-        if t.startswith("@files") or t.startswith("@file"):
-            return "files"
-        if t.startswith("@browser"):
-            return "browser"
-        # Untagged commands route naturally now (no forced @code), so the
-        # bucket isn't known at submit time — default to 'other'. The real
-        # bucket is set from the resolved intent in append_jarvis_response.
-        return "other"
+    # Resolved intent → filter-chip key. Keeps the chip filter aligned with the
+    # badge on each block. Intents not listed fall to 'other' (only @ALL shows).
+    _INTENT_FILTER: dict[str, str] = {
+        "open_app": "app", "close_app": "app",
+        "search_web": "search",
+        "file_operation": "files",
+        "code_execution": "code",
+        "browser_automation": "browser",
+        "system_control": "system",
+        "automation_task": "auto",
+        "vision_analysis": "vision", "read_screen": "vision",
+    }
+    # Typed @tag → chip key (initial guess; refined from the intent on reply).
+    _TAG_ALIAS: dict[str, str] = {
+        "code": "code", "files": "files", "file": "files",
+        "browser": "browser", "system": "system", "app": "app",
+        "search": "search", "vision": "vision", "screen": "vision",
+        "automate": "auto", "auto": "auto",
+    }
 
-    @staticmethod
-    def _intent_to_tag(intent: str) -> str:
-        """Map a resolved intent to a filter bucket (code / files / browser).
-        Anything else is 'other' — visible only under @ALL."""
-        i = (intent or "").lower()
-        if "browser" in i:
-            return "browser"
-        if "file" in i:            # file_operation
-            return "files"
-        if "code" in i:            # code_execution
-            return "code"
-        return "other"
+    @classmethod
+    def _classify_tag(cls, text: str) -> str:
+        """Initial bucket from a typed @tag (refined from the resolved intent on
+        reply — see _intent_to_tag). Plain/untagged text → 'other'."""
+        t = text.strip().lower()
+        if not t.startswith("@"):
+            return "other"
+        word = t[1:].split(maxsplit=1)[0] if len(t) > 1 else ""
+        return cls._TAG_ALIAS.get(word, "other")
+
+    @classmethod
+    def _intent_to_tag(cls, intent: str) -> str:
+        """Map a resolved intent to its filter chip key. Anything unlisted
+        (incl. 'confirmation') → 'other', so it never wipes a real tag."""
+        return cls._INTENT_FILTER.get((intent or "").lower(), "other")
 
     def _on_tag_chip_clicked(self, key: str) -> None:
         for k, chip in self._tag_chips.items():
