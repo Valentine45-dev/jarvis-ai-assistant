@@ -9,6 +9,8 @@ wheels/
 .cursor/
 .claude/
 
+assets/reference/
+
 # Virtual environments
 .venv
 
