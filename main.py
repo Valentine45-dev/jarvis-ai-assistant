@@ -1497,6 +1497,14 @@ class JarvisWindow(QMainWindow):
             _dbg("scheduler",
                  f"scheduled workflow {workflow_id!r} skipped — JARVIS busy "
                  f"(state={self._state})")
+            # Surface the skip to the user (toast), not just the console — they
+            # shouldn't have to watch the log to know a scheduled fire was dropped.
+            # Defensive: a toast failure must never break the drop path.
+            try:
+                self._dashboard.toast.show_toast(
+                    f"Scheduled '{workflow_id}' skipped — JARVIS busy.", "warning")
+            except Exception:
+                pass
             return
         from core.automation import workflow_library
         wf = workflow_library.get(workflow_id)
