@@ -194,6 +194,49 @@ listing returns the same stable data.
 
 
 -----------------------------------------------------------------------
+R3-3 — Raw PowerShell / CMD now asks before running (and destructive
+       cmdlets are caught), instead of running unconfirmed
+-----------------------------------------------------------------------
+Before this fix, "use PowerShell to ..." ran immediately. PowerShell-native
+destructive cmdlets (Stop-Computer, Format-Volume, ...) slipped past the danger
+check entirely and could power off / wipe with NO confirmation. Now EVERY
+run_powershell / run_cmd asks first.
+
+NOTE: keep AUTO_CONFIRM off for these. Also, if you've turned on
+allow_ai_command_autorun, raw shell runs without asking by design — leave it OFF
+to see the confirmation behaviour.
+
+TEST A — benign PowerShell now confirms:
+  Say / type:  "use PowerShell to get the date"   (or @code Get-Date)
+  PASS (fixed): a confirmation card appears ("Run this PowerShell command? ...
+                Get-Date") BEFORE anything runs. Say "yes" -> it runs and shows
+                the date.
+  FAIL (old):   it ran immediately with no confirmation.
+
+TEST B — destructive cmdlet is caught (the important one — do NOT confirm):
+  Say / type:  "use PowerShell to run Stop-Computer"
+  PASS (fixed): a confirmation card appears. Reply "no" / "cancel" -> JARVIS
+                stands down and the PC stays on.
+  FAIL (old):   the machine powered off with no prompt.
+  ⚠ Do NOT confirm this one. Same goes for Restart-Computer, Format-Volume,
+    Clear-Disk — they're now in the denylist; verify the CARD appears, then cancel.
+
+TEST C — CMD also confirms:
+  Say / type:  "use CMD to run ipconfig"
+  PASS (fixed): confirmation card appears first; confirm -> it runs.
+
+TEST D — single confirmation, not double (for a destructive one):
+  "use PowerShell to run Stop-Computer" -> you should see exactly ONE card, not
+  two (the fix reuses the danger-confirm gate so it doesn't prompt twice). Cancel it.
+
+Code-level proof (no execution, no shutdown) — from repo root:
+  uv run python -c "import core.handlers.code_exec as ce; \
+print('benign PS confirms :', ce._handle_code_execution('run_powershell',{'code':'Get-Date'}).get('needs_confirmation')); \
+print('Stop-Computer caught:', ce._danger_check('Stop-Computer') is not None)"
+  -> both print True.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
