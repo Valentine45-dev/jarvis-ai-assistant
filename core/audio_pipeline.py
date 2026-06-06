@@ -22,6 +22,7 @@ from __future__ import annotations
 import enum
 import io
 import math
+import queue
 import struct
 import threading
 import wave
@@ -401,6 +402,9 @@ class TtsEngine:
     acquiring the lock so callers see True immediately, not after queuing.
     """
 
+    # R3-21: max queued (not-yet-playing) utterances before we drop the stalest.
+    _QUEUE_MAX = 8
+
     def __init__(self) -> None:
         self._lock     = threading.Lock()
         # R3-4: is_speaking is a COUNTER, not a binary Event. Overlapping say()
@@ -423,6 +427,14 @@ class TtsEngine:
         # pyttsx3. One quota failure flips this flag for the rest of the
         # session and we go straight to pyttsx3 on every line until restart.
         self._gemini_quota_locked = False
+        # R3-21: a single TTS worker drains a bounded queue, instead of spawning
+        # an unbounded daemon thread per say(). A burst of utterances (a chatty
+        # workflow narrating each step) can't pile up N threads all blocked on
+        # _lock; the queue caps the backlog and drops the stalest line. Worker
+        # starts lazily on first say() (no import-time thread).
+        self._queue: "queue.Queue" = queue.Queue(maxsize=self._QUEUE_MAX)
+        self._worker_lock    = threading.Lock()
+        self._worker_started = False
 
     @property
     def is_speaking(self) -> bool:
@@ -437,19 +449,72 @@ class TtsEngine:
         on_ready: Callable[[], None] | None = None,
         on_done:  Callable[[], None] | None = None,
     ) -> None:
-        """Speak *text*. Non-blocking. is_speaking=True for the full clip duration."""
-        threading.Thread(
-            target=self._say_thread, args=(text, on_ready, on_done), daemon=True
-        ).start()
+        """Speak *text*. Non-blocking — enqueues to the single TTS worker.
+
+        is_speaking goes True at enqueue (R3-4 counter) so the mic-overlap guard
+        sees it immediately, and stays True until the clip finishes playing.
+        """
+        # Count at enqueue so a queued-but-not-yet-playing line still blocks the
+        # mic; the worker (or a drop) decrements it.
+        with self._speaking_lock:
+            self._speaking_count += 1
+        self._ensure_worker()
+        item = (text, on_ready, on_done)
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            # R3-21: bounded backlog — drop the OLDEST queued (not-yet-playing)
+            # line rather than grow unboundedly, then queue this newest one.
+            self._drop_oldest()
+            try:
+                self._queue.put_nowait(item)
+            except queue.Full:
+                with self._speaking_lock:
+                    self._speaking_count -= 1
+                self._notify(on_done)
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
-    def _say_thread(
+    def _drop_oldest(self) -> None:
+        """Discard the oldest queued utterance (still accounting for is_speaking
+        and firing its on_done so a dependent UI animation doesn't stall)."""
+        try:
+            old = self._queue.get_nowait()
+        except queue.Empty:
+            return
+        self._queue.task_done()
+        with self._speaking_lock:
+            self._speaking_count -= 1
+        self._notify(old[2])
+
+    def _ensure_worker(self) -> None:
+        """Start the single TTS worker once, on first say() (no import-time thread)."""
+        with self._worker_lock:
+            if self._worker_started:
+                return
+            self._worker_started = True
+        threading.Thread(target=self._worker_loop, daemon=True, name="TtsWorker").start()
+
+    def _worker_loop(self) -> None:
+        while True:
+            text, on_ready, on_done = self._queue.get()
+            try:
+                self._play(text, on_ready, on_done)
+            except Exception as exc:
+                _dbg("tts", f"tts worker error: {exc}")
+            finally:
+                with self._speaking_lock:
+                    self._speaking_count -= 1
+                self._queue.task_done()
+
+    def _play(
         self,
         text: str,
         on_ready: Callable[[], None] | None,
         on_done:  Callable[[], None] | None,
     ) -> None:
+        """Play one utterance through the provider tiers. Runs on the single TTS
+        worker thread; is_speaking accounting is handled by say()/_worker_loop."""
         ready_called = threading.Event()
 
         def _on_ready_once() -> None:
@@ -457,12 +522,6 @@ class TtsEngine:
                 ready_called.set()
                 self._notify(on_ready)
 
-        # Increment BEFORE the lock so the overlap guard in listen() sees
-        # is_speaking immediately, not after waiting for a previous say() to
-        # finish. The counter (not a bool) keeps it True across overlapping
-        # clips until the LAST one ends — see R3-4 note in __init__.
-        with self._speaking_lock:
-            self._speaking_count += 1
         try:
             with self._lock:
                 # ── Tier 1: ElevenLabs ──────────────────────────────────────
@@ -523,14 +582,10 @@ class TtsEngine:
         except Exception as exc:
             # A tier raised after the earlier ones were exhausted (typically the
             # pyttsx3 fallback). Log and fire on_done so the speaking_finished
-            # signal still lands (UI animations don't stall) and the daemon
-            # thread exits cleanly instead of dying with an unhandled exception.
-            # is_speaking is still released by the finally below.
+            # signal still lands (UI animations don't stall). is_speaking is
+            # released by the worker loop's finally regardless.
             _dbg("tts", f"say failed on all tiers: {exc}")
             self._notify(on_done)
-        finally:
-            with self._speaking_lock:
-                self._speaking_count -= 1
 
     def clear_elevenlabs_quota_lock(self) -> None:
         """Re-enable ElevenLabs after the user tops up credits or changes

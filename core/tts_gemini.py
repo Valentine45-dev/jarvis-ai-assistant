@@ -124,9 +124,9 @@ def _play_wav_via_mci(
 
     Same pattern as core/tts_elevenlabs.play_mp3_bytes but for WAV. We
     open the file, fire on_ready immediately, ``play wait`` (blocks
-    this thread until playback ends), then fire on_done. The thread
-    is the worker spawned by TtsEngine._say_thread so blocking here
-    is fine — the calling thread is dedicated to a single utterance.
+    this thread until playback ends), then fire on_done. It runs on
+    TtsEngine's single TTS worker thread, so blocking here is fine —
+    the worker processes one utterance at a time.
     """
     import ctypes
     import os as _os
@@ -180,7 +180,7 @@ def say_gemini(
     """Synthesize *text* with Gemini Flash TTS and play it.
 
     Blocks the calling thread until playback ends, so callers should
-    invoke this from a dedicated TTS worker (TtsEngine._say_thread does).
+    invoke this from a dedicated TTS worker (TtsEngine's worker loop does).
 
     Raises on SDK errors, transport errors, empty audio, or MCI failure —
     the caller is responsible for falling back to the next TTS tier.

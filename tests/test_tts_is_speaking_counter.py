@@ -22,7 +22,7 @@ import core.audio_pipeline as ap
 @pytest.fixture
 def engine(monkeypatch: pytest.MonkeyPatch) -> ap.TtsEngine:
     eng = ap.TtsEngine()
-    # No cloud keys → _say_thread falls straight through to _say_local (tier 3).
+    # No cloud keys → _play falls straight through to _say_local (tier 3).
     monkeypatch.setattr(ap.config, "elevenlabs_api_key", "", raising=False)
     monkeypatch.setattr(ap.config, "gemini_api_key", "", raising=False)
     return eng
