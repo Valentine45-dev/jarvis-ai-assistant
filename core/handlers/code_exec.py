@@ -403,6 +403,34 @@ def _run_python_first_use_gate(code: str, cwd: str | None) -> dict | None:
 
 # ── Streaming execution ───────────────────────────────────────────────────────
 
+def _kill_process_tree(proc: "subprocess.Popen") -> None:
+    """R3-20: kill *proc* AND its child tree. On timeout proc.kill() reaps only the
+    direct child, orphaning grandchildren (a shell that launched a server, npm →
+    node). Windows: ``taskkill /F /T`` (walks the PID tree). POSIX: ``killpg`` the
+    session started via start_new_session. Always backstops with proc.kill()."""
+    pid = proc.pid
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, timeout=5,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+        else:
+            import os as _os
+            import signal as _signal
+            try:
+                _os.killpg(_os.getpgid(pid), _signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except Exception:
+        pass
+    try:
+        proc.kill()  # backstop the direct child regardless
+    except Exception:
+        pass
+
+
 def _stream_execute(
     args: list[str],
     cwd: str | None,
@@ -421,6 +449,14 @@ def _stream_execute(
     output_lines: list[str] = []
     t_start = time.monotonic()
 
+    # R3-20: launch in its own process group/session so a timeout can kill the
+    # whole tree, not just the direct child.
+    _grp_kwargs: dict = {}
+    if sys.platform == "win32":
+        _grp_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        _grp_kwargs["start_new_session"] = True
+
     try:
         proc = subprocess.Popen(
             args,
@@ -431,6 +467,7 @@ def _stream_execute(
             shell=False,
             encoding="utf-8",
             errors="replace",
+            **_grp_kwargs,
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t_start) * 1000)
@@ -457,7 +494,7 @@ def _stream_execute(
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        proc.kill()
+        _kill_process_tree(proc)   # R3-20: reap the whole tree, not just the child
 
     reader.join(timeout=3)
 
