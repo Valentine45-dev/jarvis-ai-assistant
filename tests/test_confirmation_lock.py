@@ -26,6 +26,7 @@ import pytest
 from core.handlers.shared import (
     abandon_pending_confirmation,
     get_pending_confirmation,
+    replace_confirmation,
     request_confirmation,
     resolve_confirmation,
 )
@@ -148,6 +149,32 @@ def test_request_succeeds_again_after_abandon() -> None:
     r = request_confirmation("b", lambda: {"success": True, "output": "b", "error": ""})
     assert r.get("needs_confirmation") is True
     assert get_pending_confirmation()["prompt"] == "b"
+
+
+def test_replace_confirmation_wraps_without_refusing() -> None:
+    """R3-6 wrap path: replace_confirmation overwrites the current slot on purpose
+    (the workflow runner wrapping a leaf step) — it is NOT subject to the guard."""
+    request_confirmation("leaf", lambda: {"success": True, "output": "leaf", "error": ""})
+    r = replace_confirmation("leaf", lambda: {"success": True, "output": "wrapped", "error": ""})
+    assert r.get("needs_confirmation") is True            # not refused
+    assert r.get("error") in (None, "")
+    out = resolve_confirmation("yes")
+    assert out.get("output") == "wrapped"                 # the wrap is what runs
+
+
+def test_replace_confirmation_preserves_id() -> None:
+    request_confirmation("p", lambda: {"success": True, "output": "a", "error": ""})
+    cid1 = get_pending_confirmation()["confirm_id"]
+    replace_confirmation("p", lambda: {"success": True, "output": "b", "error": ""})
+    cid2 = get_pending_confirmation()["confirm_id"]
+    assert cid1 == cid2                                    # same logical confirmation
+
+
+def test_replace_confirmation_on_empty_registers() -> None:
+    abandon_pending_confirmation()
+    r = replace_confirmation("p", lambda: {"success": True, "output": "x", "error": ""})
+    assert r.get("needs_confirmation") is True
+    assert get_pending_confirmation() is not None
 
 
 def test_resolve_with_no_pending_returns_error() -> None:

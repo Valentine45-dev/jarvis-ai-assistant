@@ -140,6 +140,24 @@ def request_confirmation(prompt: str, fn: Any) -> dict:
     return _confirm(prompt)
 
 
+def replace_confirmation(prompt: str, fn: Any) -> dict:
+    """Swap the callback on the CURRENT pending confirmation (keeping its id), or
+    register a new one if none exists.
+
+    This is the WRAP path: the workflow runner uses it to replace a leaf step's
+    just-registered confirmation with a continuation that runs the leaf callback
+    *and then* resumes the remaining steps — the original callback is preserved
+    inside `fn`, so nothing is lost. It deliberately overwrites, unlike
+    request_confirmation() whose R3-6 guard refuses an overwrite (which protects
+    against an UNRELATED second confirmation silently discarding the first).
+    """
+    global _pending_confirmation
+    with _pending_lock:
+        cid = _pending_confirmation.confirm_id if _pending_confirmation else str(uuid.uuid4())
+        _pending_confirmation = _PendingConfirmation(cid, fn, prompt)
+    return _confirm(prompt)
+
+
 _NEGATION_TOKENS: frozenset[str] = frozenset({
     "no", "don't", "cancel", "stop", "nope", "never", "wait", "abort",
 })

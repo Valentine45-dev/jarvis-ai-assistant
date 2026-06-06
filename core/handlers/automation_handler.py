@@ -214,7 +214,7 @@ def _handle_automation_task(action: str, params: dict) -> dict:
     import time as _time
 
     from core.executor import dispatch  # late import — executor is fully loaded by runtime
-    from core.handlers.shared import get_pending_confirmation, request_confirmation
+    from core.handlers.shared import get_pending_confirmation, replace_confirmation
     from core.workflow_metrics import workflow_metrics
 
     steps     = params.get("steps", [])
@@ -432,7 +432,10 @@ def _handle_automation_task(action: str, params: dict) -> dict:
 
                 # Re-register pending confirmation with a continuation closure:
                 # UI confirm executes current step, then resumes later steps.
-                return request_confirmation(prompt, _resume_after_confirm)
+                # replace_confirmation (not request_confirmation) because we're
+                # intentionally WRAPPING the leaf step's just-registered slot —
+                # the R3-6 guard on request_confirmation would refuse this.
+                return replace_confirmation(prompt, _resume_after_confirm)
 
             _append_step_result(step_n, sub)
             if sub.get("success"):
