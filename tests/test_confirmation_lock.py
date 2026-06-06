@@ -4,7 +4,9 @@ Background: `core.handlers.shared` holds a single `_pending_confirmation`
 slot guarded by `_pending_lock`. The contract is:
 
   1. Only one confirmation can be pending at a time. A second
-     `request_confirmation` replaces the slot atomically.
+     `request_confirmation` while one is outstanding is REFUSED (R3-6) —
+     it must not clobber the first callback (e.g. a workflow's resume
+     continuation).
   2. `resolve_confirmation` pops the slot under the lock BEFORE invoking
      `pc.fn()` so two callbacks can never execute concurrently.
   3. The slot is `None` between resolutions — no leak across runs.
@@ -97,8 +99,9 @@ def test_slot_does_not_leak_between_resolutions() -> None:
         )
 
 
-def test_second_request_replaces_first_atomically() -> None:
-    """A new request_confirmation must overwrite the prior unresolved slot."""
+def test_second_request_refused_preserves_first() -> None:
+    """R3-6: a second request_confirmation while one is outstanding is REFUSED,
+    and the first callback survives untouched — resolving still runs the FIRST."""
     first_fired = threading.Event()
     second_fired = threading.Event()
 
@@ -110,15 +113,41 @@ def test_second_request_replaces_first_atomically() -> None:
         second_fired.set()
         return {"success": True, "output": "second", "error": ""}
 
-    request_confirmation("first", _first)
-    request_confirmation("second", _second)
+    r1 = request_confirmation("first", _first)
+    assert r1.get("needs_confirmation") is True            # first card shown
+
+    r2 = request_confirmation("second", _second)
+    assert r2.get("success") is False                      # refused
+    assert "resolve the current confirmation" in (r2.get("error") or "").lower()
+    assert r2.get("needs_confirmation") is None            # no phantom 2nd card
+
+    # The pending slot is still the FIRST one, intact.
+    pending = get_pending_confirmation()
+    assert pending is not None and pending["prompt"] == "first"
 
     result = resolve_confirmation("yes")
-    assert second_fired.is_set(), "the second request's callback did not run"
-    assert not first_fired.is_set(), (
-        "the first callback ran — request_confirmation isn't atomically replacing the slot."
-    )
-    assert result.get("output") == "second"
+    assert first_fired.is_set(), "the first (preserved) callback did not run"
+    assert not second_fired.is_set(), "the refused second callback must never run"
+    assert result.get("output") == "first"
+
+
+def test_request_succeeds_again_after_resolve() -> None:
+    """The workflow resume case: once the slot is cleared by resolve, a fresh
+    request_confirmation succeeds (the guard only blocks an UNANSWERED second)."""
+    request_confirmation("step1", lambda: {"success": True, "output": "one", "error": ""})
+    resolve_confirmation("yes")                            # clears the slot
+    r = request_confirmation("step2", lambda: {"success": True, "output": "two", "error": ""})
+    assert r.get("needs_confirmation") is True             # not refused
+    assert get_pending_confirmation()["prompt"] == "step2"
+
+
+def test_request_succeeds_again_after_abandon() -> None:
+    """Abandoning the pending confirmation frees the slot for a new request."""
+    request_confirmation("a", lambda: {"success": True, "output": "a", "error": ""})
+    abandon_pending_confirmation()
+    r = request_confirmation("b", lambda: {"success": True, "output": "b", "error": ""})
+    assert r.get("needs_confirmation") is True
+    assert get_pending_confirmation()["prompt"] == "b"
 
 
 def test_resolve_with_no_pending_returns_error() -> None:

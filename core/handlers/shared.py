@@ -125,8 +125,17 @@ def abandon_pending_confirmation() -> None:
 
 def request_confirmation(prompt: str, fn: Any) -> dict:
     global _pending_confirmation
-    cid = str(uuid.uuid4())
     with _pending_lock:
+        # R3-6: never overwrite an outstanding confirmation — that would silently
+        # discard the first callback (e.g. a workflow's resume continuation).
+        # Refuse instead, matching the _process_cmd "respond to the pending
+        # confirmation first" UI guard. The legitimate workflow case (a later
+        # step re-registering its own confirmation) is safe: resolve_confirmation
+        # clears the slot BEFORE invoking the resume closure, so the slot is empty
+        # at re-registration and this guard doesn't fire.
+        if _pending_confirmation is not None:
+            return _err("Please resolve the current confirmation first.")
+        cid = str(uuid.uuid4())
         _pending_confirmation = _PendingConfirmation(cid, fn, prompt)
     return _confirm(prompt)
 
