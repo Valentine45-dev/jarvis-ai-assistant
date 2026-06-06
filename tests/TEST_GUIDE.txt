@@ -588,6 +588,34 @@ Code-level proof (no real Chrome) - from repo root:
 
 
 -----------------------------------------------------------------------
+BROWSER - "screenshot of the browser" captures the PAGE, not the active window
+-----------------------------------------------------------------------
+Background: "take a screenshot of the browser" used to route to
+system_control/screenshot — an OS grab of whatever window was on top. It only
+looked right when Chrome was the active window; with JARVIS focused it captured
+JARVIS instead. Now that phrasing routes to browser_automation/screenshot, which
+captures the controlled browser PAGE via Playwright (full-page, even below the
+fold) regardless of focus, and still saves to a folder.
+(Routing-only change in CLAUDE.md — verified live, not unit-testable.)
+
+Do this:
+  1. Have JARVIS open a page: "open chrome and navigate to youtube".
+  2. Click on the JARVIS window so IT is the active/focused window (NOT Chrome).
+  3. Say/type: "take a screenshot of the browser and save it to jarvis-project/tests/"
+  PASS (fixed): the saved PNG shows the YOUTUBE PAGE (the browser content), even
+                though JARVIS was the focused window. Debug shows
+                INTENT: browser_automation / ACTION: screenshot (not
+                system_control). It also captures full-page (content below the
+                visible viewport).
+  FAIL (old):   the PNG showed the JARVIS window (system_control screen grab of
+                the active window).
+
+  Still works: a plain "take a screenshot" (no browser mentioned) → OS screen
+  grab via system_control/screenshot, as before. Only "...of the browser/page/
+  site/tab" routes to the browser capture.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

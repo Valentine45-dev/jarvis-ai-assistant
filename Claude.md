@@ -255,9 +255,19 @@ Control system-level functions.
 
 Both take **`parameters: {}`** — no `level` field. `volume_mute` toggles in the implementation (so calling it twice unmutes), but you must still route **unmute requests to `volume_unmute`** so the spoken response (*"Back on — unmuted"*) and HUD label match the user's actual intent. Never set `requires_confirmation: true` for either — neither is destructive.
 
+**SCREEN vs BROWSER screenshot — route by subject (read this first):**
+
+`system_control/screenshot` captures the **OS screen / active window** (whatever is on top). `browser_automation/screenshot` captures the **controlled browser page itself** via Playwright (full-page, even content below the fold) **regardless of which window is focused**. Route by what the user is screenshotting:
+
+- *"take a screenshot of the browser"*, *"screenshot the page / this page / the website / the tab / the youtube page"*, *"capture the browser"*, or any screenshot whose subject is the web page → **`browser_automation/screenshot`** (it accepts the same `save_path` for a destination folder).
+- *"take a screenshot"*, *"screenshot the screen / my desktop / this window"*, or no browser subject → **`system_control/screenshot`**.
+- **Tie-breaker:** if the user explicitly names the browser/page/site/tab, use `browser_automation/screenshot` even if it would otherwise look like a plain screen grab — the OS grab only happens to look right when the browser is the active window, and silently captures the wrong thing when it isn't.
+
+Both actions take `save_path`, so the folder-destination rule below applies to either.
+
 **SCREENSHOT ROUTING RULE — single action, never split into a workflow:**
 
-When the user says *"take a screenshot and save/move/put it in [folder]"*, *"screenshot to [folder]"*, *"screenshot the screen and drop it in [folder]"*, or any variant pairing the screenshot action with a destination folder — route as **one** `system_control/screenshot` with `save_path` set to the destination. The `save_path` parameter handles the destination directly; the screenshot is written to that folder on first save, so no follow-up move/copy step is needed.
+When the user says *"take a screenshot and save/move/put it in [folder]"*, *"screenshot to [folder]"*, *"screenshot the screen and drop it in [folder]"*, or any variant pairing the screenshot action with a destination folder — route as **one** `system_control/screenshot` with `save_path` set to the destination (or **`browser_automation/screenshot`** with `save_path` when the subject is the browser page — see the screen-vs-browser rule above). The `save_path` parameter handles the destination directly; the screenshot is written to that folder on first save, so no follow-up move/copy step is needed.
 
 Do **not** split a screenshot + destination request into a 2-step `automation_task` workflow (screenshot then `move_file`). Splitting causes the brain to lose track of the just-captured filename — the move step often ends up moving every screenshot it can find in the default location instead of the one just taken.
 
@@ -499,7 +509,7 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `fill_form` — Fill a field by **natural-language goal + value** (preferred) or a CSS selector / label / placeholder dictionary
 - `read_page` — **Tab + page:** document title, current URL, then visible text from the page (body text up to 4,000 chars). Succeeds even when little or no body text exists (title/URL always included).
 - `extract_text` — Extract text from a specific element by CSS selector
-- `screenshot` — Full-page screenshot or element screenshot
+- `screenshot` — **Capture the controlled browser page** (full-page via Playwright, even content below the fold), or a single element with `selector`. Saves to `save_path` when given. **Route here — not `system_control/screenshot`** — whenever the user wants a shot of *the browser / the page / this site / the tab*, since this captures the page content regardless of which OS window is focused (see the screen-vs-browser rule in §6 `system_control`).
 - `new_tab` — Open a new tab and optionally navigate to a URL
 - `switch_tab` — Switch to an existing browser tab by title or URL keyword. Use whenever the user wants to **focus an already-open tab** instead of opening or closing one. Triggers: *"switch to the youtube tab"*, *"go to my wikipedia tab"*, *"make youtube active"*, *"bring the github tab to front"*, *"focus the gmail tab"*. Takes a single `target` keyword (tokenised; URL substrings beat title substrings, same scoring as `close_tab`). After the switch, subsequent `read_page` / `click_element` / `scroll` operate on the now-active tab.
 - `close_tab` — Close one tab. **Without** `match` / `url_contains` / `title_contains`, closes the **active** tab only. **When the user names a site or topic** (e.g. *“close the YouTube tab”*, *“close the Google results tab”*), you **must** set at least one filter so the correct tab is closed — not whichever tab has focus. Prefer **`url_contains`** (e.g. `youtube.com`, `google.com`) for sites; use **`title_contains`** for a phrase in the document title, or **`match`** for a short keyword phrase (tokenised; URL substrings count more than title text).
