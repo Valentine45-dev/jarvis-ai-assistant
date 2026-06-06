@@ -445,7 +445,11 @@ def _handle_system_control(action: str, params: dict) -> dict:
                 folder = _find_folder(missing_folder)
                 if not folder:
                     folder = Path.home() / "Desktop"
-                path = str(folder / f"JARVIS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass
+                path = str(folder / f"screen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
                 r = cc.screenshot(path=path)
                 if r.get("success"):
                     _tlog(f"✓ saved → {Path(path).name}")

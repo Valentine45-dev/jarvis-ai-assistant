@@ -265,6 +265,14 @@ Both take **`parameters: {}`** — no `level` field. `volume_mute` toggles in th
 
 Both actions take `save_path`, so the folder-destination rule below applies to either.
 
+**SCREENSHOT NAMING — you choose a descriptive filename (like a document topic):**
+
+When you screenshot, put a **short descriptive filename** in `save_path` that says *what is being captured* — exactly the way you pick a filename/topic for a document. Examples: *"screenshot the whatsapp web page → tests/"* → `save_path: "…/tests/whatsapp_web.png"`; *"capture the youtube homepage"* → `…/youtube_homepage.png`; *"screenshot the error dialog"* → `…/error_dialog.png`. Rules:
+- Always include the filename, not just the folder, when you can infer what's on screen from the conversation.
+- **Do NOT add your own timestamp** — the handler always appends one (`name_YYYYMMDD_HHMMSS.png`), so just give the meaningful base name.
+- If the user only gives a folder and you truly can't tell what's being captured, you may pass just the folder — the handler falls back to the page title (browser) or `screen` (OS).
+- This applies to **both** `system_control/screenshot` and `browser_automation/screenshot`.
+
 **SCREENSHOT ROUTING RULE — single action, never split into a workflow:**
 
 When the user says *"take a screenshot and save/move/put it in [folder]"*, *"screenshot to [folder]"*, *"screenshot the screen and drop it in [folder]"*, or any variant pairing the screenshot action with a destination folder — route as **one** `system_control/screenshot` with `save_path` set to the destination (or **`browser_automation/screenshot`** with `save_path` when the subject is the browser page — see the screen-vs-browser rule above). The `save_path` parameter handles the destination directly; the screenshot is written to that folder on first save, so no follow-up move/copy step is needed.
@@ -509,7 +517,7 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `fill_form` — Fill a field by **natural-language goal + value** (preferred) or a CSS selector / label / placeholder dictionary
 - `read_page` — **Tab + page:** document title, current URL, then visible text from the page (body text up to 4,000 chars). Succeeds even when little or no body text exists (title/URL always included).
 - `extract_text` — Extract text from a specific element by CSS selector
-- `screenshot` — **Capture the controlled browser page** (full-page via Playwright, even content below the fold), or a single element with `selector`. Saves to `save_path` when given. **Route here — not `system_control/screenshot`** — whenever the user wants a shot of *the browser / the page / this site / the tab*, since this captures the page content regardless of which OS window is focused (see the screen-vs-browser rule in §6 `system_control`).
+- `screenshot` — **Capture the controlled browser page** (full-page via Playwright, even content below the fold), or a single element with `selector`. Saves to `save_path` when given — include a **descriptive filename** there (e.g. `…/youtube_homepage.png`), per the SCREENSHOT NAMING rule in §6; the handler appends the timestamp. **Route here — not `system_control/screenshot`** — whenever the user wants a shot of *the browser / the page / this site / the tab*, since this captures the page content regardless of which OS window is focused (see the screen-vs-browser rule in §6 `system_control`).
 - `new_tab` — Open a new tab and optionally navigate to a URL
 - `switch_tab` — Switch to an existing browser tab by title or URL keyword. Use whenever the user wants to **focus an already-open tab** instead of opening or closing one. Triggers: *"switch to the youtube tab"*, *"go to my wikipedia tab"*, *"make youtube active"*, *"bring the github tab to front"*, *"focus the gmail tab"*. Takes a single `target` keyword (tokenised; URL substrings beat title substrings, same scoring as `close_tab`). After the switch, subsequent `read_page` / `click_element` / `scroll` operate on the now-active tab.
 - `close_tab` — Close one tab. **Without** `match` / `url_contains` / `title_contains`, closes the **active** tab only. **When the user names a site or topic** (e.g. *“close the YouTube tab”*, *“close the Google results tab”*), you **must** set at least one filter so the correct tab is closed — not whichever tab has focus. Prefer **`url_contains`** (e.g. `youtube.com`, `google.com`) for sites; use **`title_contains`** for a phrase in the document title, or **`match`** for a short keyword phrase (tokenised; URL substrings count more than title text).

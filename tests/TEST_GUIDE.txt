@@ -609,13 +609,16 @@ Do this:
                 INTENT: browser_automation / ACTION: screenshot (not
                 system_control). It also captures full-page (content below the
                 visible viewport).
-  Naming: the saved file is now DESCRIPTIVE + timestamped, derived from the page
-                title — e.g. "jarvis-project-youtube_20260606_223000.png" — so it
-                tells you what it is and never overwrites a previous one. (The old
-                browser default was a single fixed "jarvis_browser_screenshot.png"
-                that clobbered every time.) Give an exact "...save it as foo.png"
-                to override. OS screenshots keep the generic JARVIS_<timestamp>.png
-                (a full-screen grab has no single subject).
+  Naming: brain-driven, like a document topic. JARVIS picks a meaningful filename
+                from context (e.g. "screenshot the whatsapp web page" → save_path
+                ".../whatsapp_web.png") and the handler ALWAYS appends a timestamp,
+                so you get "whatsapp_web_20260606_223000.png" — descriptive AND
+                never overwriting. Uses the SAME slugify as docs (no bespoke regex).
+                Fallback when the brain gives only a folder: page title (browser)
+                or "screen" (OS). Applies to BOTH screenshot types. (The old browser
+                default was one fixed "jarvis_browser_screenshot.png" that clobbered.)
+                Try: "screenshot the youtube page to tests/" → expect a file like
+                "youtube_<timestamp>.png" (a name relating to the content).
   FAIL (old):   the PNG showed the JARVIS window (system_control screen grab of
                 the active window).
 

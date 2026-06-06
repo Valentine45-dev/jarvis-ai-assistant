@@ -4,8 +4,19 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 from datetime import datetime
 from pathlib import Path
+
+
+def _slugify_for_filename(s: str, max_len: int = 40) -> str:
+    """Sanitize a brain/user-supplied name (a doc topic, a screenshot label) into
+    a safe filename stem. Shared by document_creation and screenshots so naming
+    works the same way everywhere. Path-traversal defense: strips slashes, dots,
+    control chars. Returns '' when nothing usable remains."""
+    s = re.sub(r"[^A-Za-z0-9_\- ]", "", s or "")
+    s = re.sub(r"\s+", "_", s.strip())
+    return s[:max_len].strip("_")
 
 
 _USER_FOLDERS = frozenset({
@@ -234,32 +245,54 @@ def _resolve_file_operation_path(raw: str) -> Path:
     return _default_create_parent() / Path(*p.parts)
 
 
-def _resolve_screenshot_path(save_param: str | None) -> tuple[str, str | None]:
+def _resolve_screenshot_path(
+    save_param: str | None, fallback_base: str = "screen"
+) -> tuple[str, str | None]:
+    """Resolve a screenshot's output path.
+
+    The *name* is brain-driven: when ``save_param`` ends in a filename
+    (e.g. ``.../tests/whatsapp_web.png``) that stem is the base; otherwise
+    ``fallback_base`` is used (OS → "screen"; browser passes the page title).
+    A timestamp is ALWAYS appended so names are descriptive AND never clobber:
+    ``<slug(base)>_<YYYYMMDD_HHMMSS>.png``. Folder resolution is unchanged.
+    Returns ("", save_param) when a relative folder can't be resolved (caller
+    confirms creating it).
+    """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"JARVIS_{ts}.png"
+
+    def _name(base: str) -> str:
+        slug = _slugify_for_filename(base) or _slugify_for_filename(fallback_base) or "screenshot"
+        return f"{slug}_{ts}.png"
 
     if not save_param:
-        return str(Path.home() / "Desktop" / fname), None
+        return str(Path.home() / "Desktop" / _name(fallback_base)), None
 
     raw = _expand_path_string(str(save_param))
     p = Path(raw.replace("\\", "/"))
 
     if p.suffix.lower() in (".png", ".jpg", ".jpeg"):
-        return str(p), None
+        folder = p.parent
+        if str(folder) in ("", "."):
+            folder = Path.home() / "Desktop"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return str(folder / _name(p.stem)), None
 
     if p.is_absolute():
         try:
             p.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        return str(p / fname), None
+        return str(p / _name(fallback_base)), None
 
     if p.is_dir():
-        return str(p.resolve() / fname), None
+        return str(p.resolve() / _name(fallback_base)), None
 
     parts = p.parts
     if not parts:
-        return str(Path.home() / "Desktop" / fname), None
+        return str(Path.home() / "Desktop" / _name(fallback_base)), None
 
     first, *rest = parts
     found = _find_folder(first)
@@ -269,7 +302,7 @@ def _resolve_screenshot_path(save_param: str | None) -> tuple[str, str | None]:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        return str(folder / fname), None
+        return str(folder / _name(fallback_base)), None
 
     if rest:
         folder = _default_create_parent() / Path(*parts)
@@ -277,6 +310,6 @@ def _resolve_screenshot_path(save_param: str | None) -> tuple[str, str | None]:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        return str(folder / fname), None
+        return str(folder / _name(fallback_base)), None
 
     return "", save_param

@@ -1,76 +1,102 @@
-"""Browser screenshots get descriptive, timestamped filenames derived from the
-page title — so they're meaningful AND never overwrite each other (the old
-default was a single fixed name, jarvis_browser_screenshot.png, that clobbered).
+"""Screenshot naming is brain-driven + always timestamped, via ONE shared
+sanitizer (core.handlers.paths._slugify_for_filename) used by docs, OS
+screenshots, and browser screenshots alike.
+
+- The brain names the file (a filename in save_path, e.g. .../tests/youtube.png)
+  → that stem is the base.
+- When the brain gives only a folder, fall back to the page title (browser) or
+  "screen" (OS).
+- A timestamp is ALWAYS appended → "<slug(base)>_<YYYYMMDD_HHMMSS>.png" — no
+  clobber. No bespoke per-call regex; just the shared slugify.
 """
 
 from __future__ import annotations
 
+import re
 import types
 from pathlib import Path
 
 import pytest
 
-from core.browser.tabs import _TabsMixin, _slugify_title
+from core.browser.tabs import _TabsMixin
+from core.handlers.paths import _resolve_screenshot_path, _slugify_for_filename
+
+_TS = re.compile(r"_\d{8}_\d{6}\.png$")
 
 
-# ── _slugify_title (pure) ───────────────────────────────────────────────────
+# ── shared slugify (one helper for docs + screenshots) ──────────────────────
 
-@pytest.mark.parametrize("title,expected", [
-    ("JARVIS PROJECT - YouTube", "jarvis-project-youtube"),
-    ("Google", "google"),
-    ("  Spaces   &   Symbols!!! ", "spaces-symbols"),
-    ("", ""),
-    ("!!!", ""),
+@pytest.mark.parametrize("raw,expected", [
+    ("whatsapp_web", "whatsapp_web"),
+    ("YouTube home", "YouTube_home"),
+    ("a/b\\c..d", "abcd"),                 # path-traversal chars stripped
+    ("   ", ""),
 ])
-def test_slugify_title(title: str, expected: str) -> None:
-    assert _slugify_title(title) == expected
+def test_shared_slugify(raw: str, expected: str) -> None:
+    assert _slugify_for_filename(raw) == expected
 
 
-# ── _resolve_shot_path ──────────────────────────────────────────────────────
+# ── OS resolver (paths._resolve_screenshot_path) ────────────────────────────
+
+def test_os_brain_filename_gets_timestamp(tmp_path: Path) -> None:
+    out, missing = _resolve_screenshot_path(str(tmp_path / "whatsapp_web.png"))
+    assert missing is None
+    assert Path(out).name.startswith("whatsapp_web_")
+    assert _TS.search(Path(out).name)           # timestamp appended (no clobber)
+
+
+def test_os_folder_only_uses_screen_fallback(tmp_path: Path) -> None:
+    out, _ = _resolve_screenshot_path(str(tmp_path))
+    assert Path(out).name.startswith("screen_")
+    assert _TS.search(Path(out).name)
+
+
+def test_os_custom_fallback_base(tmp_path: Path) -> None:
+    out, _ = _resolve_screenshot_path(str(tmp_path), fallback_base="dashboard")
+    assert Path(out).name.startswith("dashboard_")
+
+
+# ── browser resolver (tabs._resolve_shot_path) ──────────────────────────────
 
 class _FakeSession(_TabsMixin):
     def __init__(self, title: str = "", url: str = "") -> None:
         self._page = types.SimpleNamespace(title=lambda: title, url=url)
 
 
-def test_descriptive_name_from_title(tmp_path: Path) -> None:
-    s = _FakeSession(title="JARVIS PROJECT - YouTube")
-    out = s._resolve_shot_path(str(tmp_path))
-    name = Path(out).name
-    assert name.startswith("jarvis-project-youtube_")
-    assert name.endswith(".png")
-    assert Path(out).parent == tmp_path           # saved in the given folder
-
-
-def test_not_the_old_fixed_clobber_name(tmp_path: Path) -> None:
-    import re
+def test_browser_brain_filename_wins(tmp_path: Path) -> None:
     s = _FakeSession(title="YouTube")
-    name = Path(s._resolve_shot_path(str(tmp_path))).name
-    # The old fixed name that overwrote every time is gone…
-    assert "jarvis_browser_screenshot" not in name
-    # …replaced by descriptive slug + a timestamp segment.
-    assert re.search(r"^youtube_\d{8}_\d{6}\.png$", name)
+    out = s._resolve_shot_path(str(tmp_path / "my_capture.png"))
+    assert Path(out).name.startswith("my_capture_")   # brain's name, not the title
+    assert _TS.search(Path(out).name)
 
 
-def test_explicit_file_path_respected() -> None:
+def test_browser_folder_falls_back_to_page_title(tmp_path: Path) -> None:
     s = _FakeSession(title="YouTube")
-    out = s._resolve_shot_path("C:/tmp/myshot.png")
-    assert out == "C:/tmp/myshot.png"             # exact file honored, no rename
-
-
-def test_element_tag_in_name(tmp_path: Path) -> None:
-    s = _FakeSession(title="Google")
-    out = s._resolve_shot_path(str(tmp_path), tag="element")
-    assert Path(out).name.startswith("google-element_")
-
-
-def test_falls_back_to_host_when_no_title(tmp_path: Path) -> None:
-    s = _FakeSession(title="", url="https://www.youtube.com/results?q=x")
     out = s._resolve_shot_path(str(tmp_path))
-    assert Path(out).name.startswith("youtube-com_")
+    assert Path(out).name.startswith("YouTube_")
+    assert Path(out).parent == tmp_path
 
 
-def test_falls_back_to_browser_when_nothing(tmp_path: Path) -> None:
+def test_browser_falls_back_to_host_without_title(tmp_path: Path) -> None:
+    s = _FakeSession(title="", url="https://www.youtube.com/x")
+    out = s._resolve_shot_path(str(tmp_path))
+    assert Path(out).name.startswith("youtubecom_")    # dots stripped by sanitizer
+
+
+def test_browser_falls_back_to_browser_when_nothing(tmp_path: Path) -> None:
     s = _FakeSession(title="", url="")
     out = s._resolve_shot_path(str(tmp_path))
     assert Path(out).name.startswith("browser_")
+
+
+def test_browser_element_tag(tmp_path: Path) -> None:
+    s = _FakeSession(title="Google")
+    out = s._resolve_shot_path(str(tmp_path), tag="element")
+    assert Path(out).name.startswith("Google-element_")
+
+
+def test_no_old_clobber_name(tmp_path: Path) -> None:
+    s = _FakeSession(title="YouTube")
+    name = Path(s._resolve_shot_path(str(tmp_path))).name
+    assert "jarvis_browser_screenshot" not in name      # old fixed clobber name gone
+    assert _TS.search(name)

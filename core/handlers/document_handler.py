@@ -186,11 +186,10 @@ def _format_size(n: int) -> str:
 
 
 def _slugify_for_filename(s: str, max_len: int = 40) -> str:
-    """Sanitize a user-supplied topic for use as a default filename.
-    Path-traversal defense: strips slashes, dots-as-separators, control chars."""
-    s = re.sub(r"[^A-Za-z0-9_\- ]", "", s or "")
-    s = re.sub(r"\s+", "_", s.strip())
-    return s[:max_len].strip("_") or "document"
+    """Default-filename slug for a document topic. Shared sanitizer (paths.py) so
+    docs and screenshots name files the same way; docs keep a 'document' fallback."""
+    from core.handlers.paths import _slugify_for_filename as _slug
+    return _slug(s, max_len) or "document"
 
 
 def _find_libreoffice() -> Path | None:

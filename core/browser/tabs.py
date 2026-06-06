@@ -14,56 +14,49 @@ from core.browser.session import _TIMEOUT
 from core.handlers.shared import _err, _ok, _tlog
 
 
-def _slugify_title(text: str, maxlen: int = 48) -> str:
-    """Lower-case, hyphen-joined slug of a page title for a screenshot filename.
-    e.g. 'JARVIS PROJECT - YouTube' → 'jarvis-project-youtube'. '' if nothing usable."""
-    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
-    return s[:maxlen].strip("-")
-
-
 class _TabsMixin:
     # ── Screenshot path/name helpers ───────────────────────────────────────────
 
     def _page_name_slug(self) -> str:
-        """A descriptive slug for the current page: its title, else its host."""
+        """A descriptive slug for the current page (its title, else host) using the
+        SHARED filename sanitizer — no bespoke regex. The browser's fallback name
+        when the brain didn't put one in save_path."""
+        from core.handlers.paths import _slugify_for_filename
         title = ""
         try:
             title = self._page.title() or ""
         except Exception:
             pass
-        slug = _slugify_title(title)
+        slug = _slugify_for_filename(title)
         if slug:
             return slug
         try:
             from urllib.parse import urlparse
-            return _slugify_title(urlparse(self._page.url).netloc.replace("www.", ""))
+            return _slugify_for_filename(urlparse(self._page.url).netloc.replace("www.", ""))
         except Exception:
             return ""
 
     def _resolve_shot_path(self, path: str | None, tag: str = "") -> str:
-        """Build the screenshot output path.
+        """Resolve the screenshot output path via the SAME resolver docs/OS use.
 
-        - An explicit file path (…​.png/.jpg) is respected as-is.
-        - Otherwise the filename is descriptive + timestamped:
-          ``<page-title-slug>[-tag]_<YYYYMMDD_HHMMSS>.png`` so screenshots are
-          meaningful and never overwrite each other (fixes the old fixed-name
-          clobber). ``path`` (when given) is the destination FOLDER; default is
-          the Desktop.
+        The brain names it (a filename in ``path`` like ``.../tests/youtube.png``);
+        when it gives only a folder, we fall back to the page title. The shared
+        resolver always appends a timestamp → ``<slug(name)>_<ts>.png`` (no
+        clobber). ``tag`` (e.g. 'element') is folded into the fallback base.
         """
-        from datetime import datetime
-        from pathlib import Path
-        if path and Path(path).suffix.lower() in (".png", ".jpg", ".jpeg"):
-            return path
+        from core.handlers.paths import _resolve_screenshot_path
         base = self._page_name_slug() or "browser"
         if tag:
             base = f"{base}-{tag}"
+        resolved, _missing = _resolve_screenshot_path(path, fallback_base=base)
+        if resolved:
+            return resolved
+        # Rare: an unresolvable relative folder — drop onto the Desktop.
+        from datetime import datetime
+        from pathlib import Path
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        folder = Path(path) if path else (Path.home() / "Desktop")
-        try:
-            folder.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        return str(folder / f"{base}_{ts}.png")
+        return str(Path.home() / "Desktop" / f"{base}_{ts}.png")
+
     # ── Phase 2: Screenshots ──────────────────────────────────────────────────
 
     def screenshot_page(self, path: str | None = None) -> dict:
