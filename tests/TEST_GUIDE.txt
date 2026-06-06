@@ -3,7 +3,8 @@ JARVIS — Manual Test Guide for Round-3 Surgical Fixes
 
 Covers the Round-3 fixes landed so far:
   R3-7/R3-10/R3-11/R3-12/R3-14 (0dbd82c), R3-3 (2d94d9c), R3-1/R3-2 (cd3c270),
-  R3-8/R3-9 (8025da4), R3-15/R3-16/R3-17 (ecefa3f, 33771be), R3-6 (25d00b7).
+  R3-8/R3-9 (8025da4), R3-15/R3-16/R3-17 (ecefa3f, 33771be), R3-6 (25d00b7),
+  R3-13 (memory redaction).
   (R3-4 is_speaking counter / R3-5 mute-probe are covered by automated tests
    only - tests/test_tts_is_speaking_counter.py, test_mute_probe_nonblocking.py
    - they need an audio rig / are absence-of-freeze, not practical to eyeball.)
@@ -468,6 +469,44 @@ Code-level proof (no UI) - from repo root:
   -> 6 passed: refuse-preserves-first (second callback never runs, first does),
      request-succeeds-after-resolve (the resume case), succeeds-after-abandon,
      no-leak-between-resolutions, threaded no-double-fire, resolve-with-nothing.
+
+
+-----------------------------------------------------------------------
+R3-13 - Privacy: dictated secrets no longer persist to memory in plaintext
+-----------------------------------------------------------------------
+Background: conversation memory (data/memory.jsonl) stored the model's JSON
+verbatim, including the content/text/value/code parameters - i.e. dictated file
+bodies, passwords, API keys, code. Those were written in plaintext and reloaded
+into the prompt every session. Now those long param values are redacted to
+"<N chars>" before memory is stored/persisted. The user's free-form command
+text is intentionally left as-is (redacting arbitrary prose reliably isn't
+feasible without mangling normal commands).
+
+Do this:
+  1. Issue a command that puts a secret into a structured parameter, e.g.:
+        "create a file called pw.txt with the content my password is hunter2hunter2"
+     (make the content > 24 chars so it's treated as a real payload). Confirm
+     the file if asked.
+  2. Open data/memory.jsonl in an editor (it's in the project's data/ folder).
+     Look at the most recent assistant line.
+  PASS (fixed): the assistant entry shows the content as "<NN chars>" (redacted),
+                NOT your literal "my password is hunter2hunter2". The file you
+                created on disk still has the real content - only the conversation
+                MEMORY is redacted.
+  FAIL (old):   the literal secret text appears verbatim in memory.jsonl.
+
+  Legacy scrub: if memory.jsonl already had a plaintext secret from before this
+  fix, it's redacted on load and rewritten redacted on the next exchange. To
+  hard-reset everything, say "wipe your memory".
+
+  Note: cmd_text (your spoken/typed command itself) is NOT redacted by design -
+  only the structured parameter payloads are.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_memory_redaction.py
+  -> 6 passed: long secret redacted, short value preserved, persisted file
+     redacted, non-JSON stored unchanged, non-secret params kept, legacy
+     plaintext scrubbed on load.
 
 
 -----------------------------------------------------------------------

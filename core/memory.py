@@ -23,6 +23,25 @@ from core.log import debug as _dbg
 _PERSIST_PATH = Path(__file__).parent.parent / "data" / "memory.jsonl"
 
 
+def _redact_assistant_json(assistant_json: str) -> str:
+    """R3-13: redact long sensitive parameter values from the model's JSON before
+    it enters conversation memory, so dictated secrets (file bodies, passwords,
+    API keys, code) don't land in data/memory.jsonl in plaintext — nor get
+    reloaded into the prompt every session. Reuses brain._redact_params (the same
+    helper R2-13 uses for logs) so the redaction set never drifts. Fail-soft:
+    returns the input unchanged if it isn't the expected JSON shape (e.g. an
+    assistant line already carrying an inject_outcome '[Result: …]' suffix)."""
+    try:
+        from core.brain import _redact_params
+        obj = json.loads(assistant_json)
+        if isinstance(obj, dict) and "parameters" in obj:
+            obj["parameters"] = _redact_params(obj.get("parameters"))
+            return json.dumps(obj)
+    except Exception:
+        pass
+    return assistant_json
+
+
 class ConversationMemory:
     """Rolling conversation history for the Claude API messages[] parameter.
 
@@ -40,6 +59,9 @@ class ConversationMemory:
 
     def add_exchange(self, user_text: str, assistant_json: str) -> None:
         """Append a user+assistant pair then trim to stay within budget."""
+        # R3-13: scrub dictated secrets from the assistant JSON before it's stored
+        # or persisted (and thus before it re-enters any future prompt).
+        assistant_json = _redact_assistant_json(assistant_json)
         with self._lock:
             self._messages.append({"role": "user",      "content": user_text})
             self._messages.append({"role": "assistant", "content": assistant_json})
@@ -144,7 +166,13 @@ class ConversationMemory:
                     if (isinstance(obj, dict)
                             and obj.get("role") in ("user", "assistant")
                             and isinstance(obj.get("content"), str)):
-                        loaded.append({"role": obj["role"], "content": obj["content"]})
+                        content = obj["content"]
+                        # R3-13: scrub any legacy plaintext secrets so they don't
+                        # re-enter the prompt; the next _save_locked migrates the
+                        # file to the redacted form.
+                        if obj["role"] == "assistant":
+                            content = _redact_assistant_json(content)
+                        loaded.append({"role": obj["role"], "content": content})
         except OSError as exc:
             _dbg("memory", f"failed to load {_PERSIST_PATH}: {exc}")
             return
