@@ -368,9 +368,19 @@ class VoiceEngine:
         import time as _time
         _dbg("voice", "_listen_thread running")
         self._listening.set()
-        # Brief yield so the wake detector (if mid-window) can finish its chunk
-        # loop and close its RawInputStream before we open ours.
-        _time.sleep(0.2)
+        # R3-15: wait for the wake detector to confirm its mic stream is closed
+        # (real handshake) before opening ours — two RawInputStreams on one
+        # device cause PortAudio/WASAPI device-busy errors. Falls back to a short
+        # sleep if the detector isn't running or the wait times out.
+        try:
+            from core.wake_word import wake_detector
+            if wake_detector.is_running:
+                if not wake_detector.wait_closed(1.0):
+                    _dbg("voice", "wake stream-closed wait timed out; proceeding")
+            else:
+                _time.sleep(0.05)
+        except Exception:
+            _time.sleep(0.2)
         try:
             threshold = self._capture.calibrate_threshold(
                 duration=0.3,
