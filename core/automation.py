@@ -53,10 +53,11 @@ class WorkflowLibrary:
         self._workflows: dict[str, dict] = {}
         # mtime of workflows.json the last time we read or wrote it. The
         # background watcher diffs against this to detect external edits.
+        # R3-22: _save() records OUR write's exact mtime here, so the watcher
+        # skips only that precise value. A concurrent external edit produces a
+        # different mtime and is no longer mistaken for our own write (the old
+        # one-tick boolean skip could adopt an external mtime and drop the edit).
         self._last_mtime: float = 0.0
-        # Set by _save() so the very next watcher tick ignores the mtime bump
-        # that our own write produced. Cleared after one skipped tick.
-        self._jarvis_wrote: bool = False
         # R3-18: the file-watcher daemon starts LAZILY on first read (get /
         # list_all), not at import time — so merely importing core.automation
         # (e.g. in tests/CLI/headless reuse) has no background-I/O side effect.
@@ -89,10 +90,9 @@ class WorkflowLibrary:
         try:
             tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
             os.replace(tmp, _WORKFLOWS_PATH)
-            # Tell the watcher the next mtime change came from us — it must
-            # skip exactly one tick (and refresh _last_mtime) so our own
-            # save() doesn't trigger a spurious "reloaded from disk" log.
-            self._jarvis_wrote = True
+            # R3-22: record OUR write's exact mtime as the baseline. The watcher
+            # skips when the observed mtime equals this; an external edit (a
+            # different mtime) is no longer mistaken for our own write.
             try:
                 self._last_mtime = _WORKFLOWS_PATH.stat().st_mtime
             except OSError:
@@ -120,8 +120,8 @@ class WorkflowLibrary:
 
         When the file changes underneath us (manual hand-edit, git pull, …),
         reload from disk and emit workflow_library_changed so the UI refreshes.
-        Skips ticks where _jarvis_wrote was just set so our own _save() doesn't
-        cause a phantom reload.
+        Our own _save() updates _last_mtime to the written mtime, so the tick
+        that observes our write skips without a phantom reload (R3-22).
         """
         t = threading.Thread(
             target=self._watch_loop,
@@ -133,43 +133,47 @@ class WorkflowLibrary:
     def _watch_loop(self) -> None:
         while True:
             time.sleep(_WATCH_POLL_SECONDS)
-            try:
-                mtime = _WORKFLOWS_PATH.stat().st_mtime
-            except OSError:
-                # File temporarily missing (rename-in-progress, network share
-                # hiccup) — skip this tick and try again.
-                continue
+            self._watch_tick()
 
-            with self._lock:
-                if self._jarvis_wrote:
-                    # Our own save bumped the mtime; eat one tick.
-                    self._jarvis_wrote = False
-                    self._last_mtime = mtime
-                    continue
-                if mtime == self._last_mtime:
-                    continue
+    def _watch_tick(self) -> None:
+        """One watcher pass: reload workflows.json iff it changed externally.
+        Extracted from the loop so it's unit-testable without the 2 s sleep."""
+        try:
+            mtime = _WORKFLOWS_PATH.stat().st_mtime
+        except OSError:
+            # File temporarily missing (rename-in-progress, network share
+            # hiccup) — skip this tick and try again.
+            return
 
-            # File changed externally — reload. _load() takes the lock itself.
-            try:
-                raw = _WORKFLOWS_PATH.read_text(encoding="utf-8")
-            except OSError:
-                # Editor mid-write (Notepad truncates then writes). Wait for
-                # the next tick — _last_mtime stays unchanged, so we'll retry.
-                continue
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                # Editor saved a partial/invalid JSON. Don't clobber the
-                # in-memory library; just log and try again next tick.
-                _dbg("automation", f"workflows.json change ignored — invalid JSON: {exc}")
-                continue
+        with self._lock:
+            # R3-22: skip only when the observed mtime is exactly the one our
+            # own _save() recorded (or unchanged). An external edit lands on a
+            # different mtime → falls through to reload, even right after our
+            # write (the old one-tick boolean would have swallowed it).
+            if mtime == self._last_mtime:
+                return
 
-            with self._lock:
-                self._workflows = {w["id"]: w for w in data.get("workflows", [])}
-                self._last_mtime = mtime
-                count = len(self._workflows)
-            _info("automation", f"workflows.json changed on disk — reloaded {count} workflows")
-            _emit_changed()
+        # File changed externally — reload. _load() takes the lock itself.
+        try:
+            raw = _WORKFLOWS_PATH.read_text(encoding="utf-8")
+        except OSError:
+            # Editor mid-write (Notepad truncates then writes). Wait for
+            # the next tick — _last_mtime stays unchanged, so we'll retry.
+            return
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            # Editor saved a partial/invalid JSON. Don't clobber the
+            # in-memory library; just log and try again next tick.
+            _dbg("automation", f"workflows.json change ignored — invalid JSON: {exc}")
+            return
+
+        with self._lock:
+            self._workflows = {w["id"]: w for w in data.get("workflows", [])}
+            self._last_mtime = mtime
+            count = len(self._workflows)
+        _info("automation", f"workflows.json changed on disk — reloaded {count} workflows")
+        _emit_changed()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
