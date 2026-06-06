@@ -560,4 +560,4 @@ Regression sweep (run after all of the above)
 
 Automated baseline (from repo root):
   uv run pytest -q -m "not integration and not qt and not slow"
-  -> expect all green (64 passed at time of writing).
+  -> expect all green (166 passed, 2 deselected at time of writing).
