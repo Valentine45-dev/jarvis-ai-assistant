@@ -206,9 +206,11 @@ def _build_prompt(action: str, question: str) -> str:
     if action == "find_ui_element":
         target = question or "the element described by the user"
         return (
-            f"Locate this UI element in the image: {target}. Describe its "
-            "position precisely (e.g. top-left, center, approximate "
-            "coordinates)."
+            f"Find this UI element on screen: {target}. Reply in one or two short "
+            "spoken sentences saying where it is in plain words (e.g. top-right, "
+            "near the profile) with approximate x,y coordinates. If there are a "
+            "couple, mention each briefly. No markdown, headings, or bullet "
+            "lists — just say it the way you'd tell someone out loud."
         )
     if action == "answer_question":
         return question or _PROMPT_BY_ACTION["describe"]

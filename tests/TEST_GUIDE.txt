@@ -649,7 +649,11 @@ Do this:
 
   Verbatim still available: "read the EXACT text on screen" / "what does it say
   word-for-word" → read_screen OCR (or vision read_text) returns the literal
-  text. "find the X button on screen" → read_screen/find_element.
+  text.
+
+  Find an element: "find the Upgrade button on my screen" → vision_analysis/
+  find_ui_element. PASS: a short SPOKEN answer like "It's top-right near the
+  profile, around (1288, 63)" — NOT a markdown report with ## headings/bullets.
 
 Code-level proof (no model/screen) - from repo root:
   uv run pytest -q tests/test_vision.py

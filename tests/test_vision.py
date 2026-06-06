@@ -54,9 +54,11 @@ class TestDescribePrompt:
         assert "extract" in low and "all" in low      # still verbatim extraction
         assert p != vision._DESCRIBE_PROMPT
 
-    def test_find_ui_element_unchanged(self):
+    def test_find_ui_element_is_concise_spoken(self):
         p = vision._build_prompt("find_ui_element", "submit button").lower()
-        assert "submit button" in p and "locate" in p
+        assert "submit button" in p
+        assert "find" in p and "spoken" in p
+        assert "no markdown" in p          # concise/TTS-friendly, not a markdown report
 
     def test_answer_question_uses_question(self):
         assert "what color is the logo" in vision._build_prompt(

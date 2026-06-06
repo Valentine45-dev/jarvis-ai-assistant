@@ -390,16 +390,18 @@ element:
 
 Use when the user wants JARVIS to SEE, LOOK AT, DESCRIBE, READ, or ANALYZE visual content — a screen, image file, browser page, or webcam feed.
 
-Do **NOT** use for plain text reading — that's still `read_screen` (cheap OCR).
-**DO** use when the user wants understanding, not just raw OCR output (layout, colors, UI elements, "what's in this image", "where is the X button").
+**DO** use for any casual *"read my screen"* / *"what's on my screen"* — the user
+wants a humanized spoken summary, which is `describe`. Only route to raw OCR
+(`read_screen`) or `read_text` when the user explicitly wants the **exact /
+verbatim** text or to **find** a specific element. "read" alone ≠ verbatim.
 
 **Actions:**
 
 | Action | When to use |
 |---|---|
-| `describe` | *"what's on my screen"*, *"what do you see"*, *"describe my screen"* |
-| `read_text` | *"read the text in this image"*, *"what does this image say"* |
-| `find_ui_element` | *"where is the submit button"*, *"find the search bar"* |
+| `describe` | *"what's on my screen"*, *"what do you see"*, *"describe my screen"*, **"read my screen"**, **"read the screen"** — any casual "what's there?" → a brief spoken summary |
+| `read_text` | ONLY when the user wants the **exact/verbatim** text: *"read the **exact** text"*, *"what does it say word-for-word"*, *"extract/copy the text from this image"*. A plain *"read my screen"* is NOT this — it's `describe`. |
+| `find_ui_element` | *"where is the submit button"*, *"find the search bar"*, *"find the X on my screen"* |
 | `answer_question` | *"what color is the logo"*, *"how many tabs are open"* |
 | `screenshot_and_describe` | *"take a screenshot and describe it"*, *"capture and explain"* |
 
