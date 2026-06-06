@@ -564,9 +564,11 @@ Do this:
      JARVIS in between).
   PASS (improved): the reCAPTCHA appears far less often than before; the browser
                 remembers sites between runs (you stay logged into things you
-                signed into in JARVIS's browser); and the "Chrome is being
-                controlled by automated test software" banner is GONE (the
-                --enable-automation switch is dropped).
+                signed into in JARVIS's browser); and BOTH banners are GONE — the
+                "Chrome is being controlled by automated test software" one
+                (--enable-automation dropped) AND the "unsupported flag
+                --no-sandbox, security will suffer" one (--no-sandbox dropped,
+                which also re-enables Chrome's sandbox = more secure).
   Big win: in JARVIS's browser window, sign in to your Google account ONCE.
            Logged-in Google sessions get challenged dramatically less.
 
@@ -607,6 +609,13 @@ Do this:
                 INTENT: browser_automation / ACTION: screenshot (not
                 system_control). It also captures full-page (content below the
                 visible viewport).
+  Naming: the saved file is now DESCRIPTIVE + timestamped, derived from the page
+                title — e.g. "jarvis-project-youtube_20260606_223000.png" — so it
+                tells you what it is and never overwrites a previous one. (The old
+                browser default was a single fixed "jarvis_browser_screenshot.png"
+                that clobbered every time.) Give an exact "...save it as foo.png"
+                to override. OS screenshots keep the generic JARVIS_<timestamp>.png
+                (a full-screen grab has no single subject).
   FAIL (old):   the PNG showed the JARVIS window (system_control screen grab of
                 the active window).
 

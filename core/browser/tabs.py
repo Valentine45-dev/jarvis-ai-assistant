@@ -14,7 +14,56 @@ from core.browser.session import _TIMEOUT
 from core.handlers.shared import _err, _ok, _tlog
 
 
+def _slugify_title(text: str, maxlen: int = 48) -> str:
+    """Lower-case, hyphen-joined slug of a page title for a screenshot filename.
+    e.g. 'JARVIS PROJECT - YouTube' → 'jarvis-project-youtube'. '' if nothing usable."""
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:maxlen].strip("-")
+
+
 class _TabsMixin:
+    # ── Screenshot path/name helpers ───────────────────────────────────────────
+
+    def _page_name_slug(self) -> str:
+        """A descriptive slug for the current page: its title, else its host."""
+        title = ""
+        try:
+            title = self._page.title() or ""
+        except Exception:
+            pass
+        slug = _slugify_title(title)
+        if slug:
+            return slug
+        try:
+            from urllib.parse import urlparse
+            return _slugify_title(urlparse(self._page.url).netloc.replace("www.", ""))
+        except Exception:
+            return ""
+
+    def _resolve_shot_path(self, path: str | None, tag: str = "") -> str:
+        """Build the screenshot output path.
+
+        - An explicit file path (…​.png/.jpg) is respected as-is.
+        - Otherwise the filename is descriptive + timestamped:
+          ``<page-title-slug>[-tag]_<YYYYMMDD_HHMMSS>.png`` so screenshots are
+          meaningful and never overwrite each other (fixes the old fixed-name
+          clobber). ``path`` (when given) is the destination FOLDER; default is
+          the Desktop.
+        """
+        from datetime import datetime
+        from pathlib import Path
+        if path and Path(path).suffix.lower() in (".png", ".jpg", ".jpeg"):
+            return path
+        base = self._page_name_slug() or "browser"
+        if tag:
+            base = f"{base}-{tag}"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = Path(path) if path else (Path.home() / "Desktop")
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return str(folder / f"{base}_{ts}.png")
     # ── Phase 2: Screenshots ──────────────────────────────────────────────────
 
     def screenshot_page(self, path: str | None = None) -> dict:
@@ -27,7 +76,7 @@ class _TabsMixin:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
-                save_path = path or str(Path.home() / "Desktop" / "jarvis_browser_screenshot.png")
+                save_path = self._resolve_shot_path(path)
                 self._page.screenshot(path=save_path, full_page=True)
                 _tlog(f"✓ saved → {Path(save_path).name}")
                 return _ok(f"Screenshot saved: {save_path}")
@@ -48,7 +97,7 @@ class _TabsMixin:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
-                save_path = path or str(Path.home() / "Desktop" / "jarvis_element_screenshot.png")
+                save_path = self._resolve_shot_path(path, tag="element")
                 self._page.locator(selector).first.screenshot(path=save_path, timeout=_TIMEOUT)
                 _tlog(f"✓ saved → {Path(save_path).name}")
                 return _ok(f"Element screenshot saved: {save_path}")

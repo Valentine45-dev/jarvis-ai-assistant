@@ -82,9 +82,12 @@ def test_start_uses_persistent_context_with_stealth(fake_playwright: _FakeChromi
     assert call["headless"] is False
     # The anti-automation flag is present (hides navigator.webdriver).
     assert "--disable-blink-features=AutomationControlled" in call["args"]
-    # And the default --enable-automation switch is dropped (no banner, less
-    # fingerprint).
-    assert "--enable-automation" in call.get("ignore_default_args", [])
+    # And the default --enable-automation + --no-sandbox switches are dropped
+    # (no "controlled by automation" banner, no "unsupported flag" banner, and
+    # the sandbox stays on).
+    ignored = call.get("ignore_default_args", [])
+    assert "--enable-automation" in ignored
+    assert "--no-sandbox" in ignored
 
 
 def test_start_reuses_existing_persistent_page(fake_playwright: _FakeChromium) -> None:

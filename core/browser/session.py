@@ -110,10 +110,15 @@ class _SessionBase:
                         "--force-renderer-accessibility",
                         "--disable-blink-features=AutomationControlled",
                     ],
-                    # Drop Playwright's default --enable-automation switch: removes
-                    # the "Chrome is being controlled by automated test software"
-                    # infobar and one more automation signal anti-bot systems read.
-                    ignore_default_args=["--enable-automation"],
+                    # Drop two Playwright defaults:
+                    #  --enable-automation: removes the "Chrome is being controlled
+                    #    by automated test software" infobar + an automation signal.
+                    #  --no-sandbox: Playwright passes it by default; with
+                    #    --enable-automation gone, Chrome surfaces the scary
+                    #    "unsupported flag, security will suffer" banner. Dropping
+                    #    it removes the banner AND re-enables Chrome's sandbox
+                    #    (more secure) — verified to still launch on Windows.
+                    ignore_default_args=["--enable-automation", "--no-sandbox"],
                 )
                 self._browser = None
                 self._page = (
