@@ -57,8 +57,11 @@ class WorkflowLibrary:
         # Set by _save() so the very next watcher tick ignores the mtime bump
         # that our own write produced. Cleared after one skipped tick.
         self._jarvis_wrote: bool = False
+        # R3-18: the file-watcher daemon starts LAZILY on first read (get /
+        # list_all), not at import time — so merely importing core.automation
+        # (e.g. in tests/CLI/headless reuse) has no background-I/O side effect.
+        self._watcher_started: bool = False
         self._load()
-        self._start_watcher()
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -103,6 +106,14 @@ class WorkflowLibrary:
                 pass
 
     # ── External-edit watcher ─────────────────────────────────────────────────
+
+    def _ensure_watcher(self) -> None:
+        """R3-18: start the watcher once, on first read. Idempotent + thread-safe."""
+        with self._lock:
+            if self._watcher_started:
+                return
+            self._watcher_started = True
+        self._start_watcher()
 
     def _start_watcher(self) -> None:
         """Start a daemon thread that polls workflows.json's mtime.
@@ -164,6 +175,7 @@ class WorkflowLibrary:
 
     def get(self, name: str) -> dict[str, Any] | None:
         """Look up a workflow by id or display name (case-insensitive)."""
+        self._ensure_watcher()
         with self._lock:
             # R3-14: deepcopy so callers that mutate the returned workflow's
             # nested `steps` list don't corrupt the authoritative in-memory copy
@@ -184,6 +196,7 @@ class WorkflowLibrary:
 
     def list_all(self) -> list[dict]:
         """Return all workflows as a list (deep copy — see R3-14)."""
+        self._ensure_watcher()
         with self._lock:
             return [copy.deepcopy(w) for w in self._workflows.values()]
 
