@@ -39,6 +39,10 @@ data/scheduler_state.json
 # source. The app recreates it on first run when absent.
 data/workflows.json
 
+# Persistent Chrome profile for the controlled browser (cookies/history/cache).
+# Local, large, machine-specific — never commit. Recreated on first browser use.
+data/browser_profile/
+
 # Runtime logs (local only — churn on every run)
 logs/
 

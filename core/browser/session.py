@@ -9,8 +9,16 @@ so there is no circular import.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 from core.handlers.shared import _err
+
+# Persistent Chrome profile so cookies/history survive across JARVIS runs. A
+# fresh new_context() every launch looked like an anonymous throwaway browser to
+# Google → constant "unusual traffic" reCAPTCHA. A warmed persistent profile
+# (plus the anti-automation flag below) looks like a returning human and gets
+# challenged far less. Gitignored; lives under data/ with the other runtime state.
+_BROWSER_PROFILE_DIR = Path(__file__).resolve().parents[2] / "data" / "browser_profile"
 
 _TIMEOUT = 15_000   # ms — max wait per page/locator operation
 _SUBTRY    = 4_000   # ms per fallback locator attempt
@@ -87,20 +95,39 @@ class _SessionBase:
                 return
             try:
                 from playwright.sync_api import sync_playwright
-                self._pw      = sync_playwright().start()
-                self._browser = self._pw.chromium.launch(
+                self._pw = sync_playwright().start()
+                _BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                # Persistent context (not launch()+new_context()): keeps cookies
+                # /history across runs so Google sees a returning human, and the
+                # AutomationControlled flag hides navigator.webdriver — both cut
+                # the "unusual traffic" reCAPTCHA rate. It owns the browser, so
+                # there's no separate Browser handle; stop() closes the context.
+                self._context = self._pw.chromium.launch_persistent_context(
+                    str(_BROWSER_PROFILE_DIR),
                     channel="chrome",
                     headless=False,
-                    args=["--force-renderer-accessibility"],
+                    args=[
+                        "--force-renderer-accessibility",
+                        "--disable-blink-features=AutomationControlled",
+                    ],
                 )
-                self._context = self._browser.new_context()
-                self._page    = self._context.new_page()
+                self._browser = None
+                self._page = (
+                    self._context.pages[0]
+                    if self._context.pages
+                    else self._context.new_page()
+                )
                 self._ready     = True
                 self._start_err = ""
             except Exception as exc:
                 self._ready = False
                 msg = str(exc)
-                if "executable doesn't exist" in msg or "chrome" in msg.lower():
+                if "already in use" in msg.lower() or "singletonlock" in msg.lower():
+                    self._start_err = (
+                        "Browser profile is in use — close other JARVIS instances "
+                        "(or delete data/browser_profile) and try again."
+                    )
+                elif "executable doesn't exist" in msg or "chrome" in msg.lower():
                     self._start_err = (
                         "Chrome not found — install Google Chrome "
                         "from https://www.google.com/chrome"

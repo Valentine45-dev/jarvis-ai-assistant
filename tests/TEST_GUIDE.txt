@@ -551,6 +551,41 @@ Code-level proof (spawns a real parent+grandchild, no waiting on a 30 s timeout)
 
 
 -----------------------------------------------------------------------
+BROWSER - persistent Chrome profile (fewer Google "unusual traffic" CAPTCHAs)
+-----------------------------------------------------------------------
+Background: the controlled browser used a fresh, cookie-less context every JARVIS
+launch — to Google that looked like an anonymous automated browser, so searches
+often hit the "I'm not a robot" reCAPTCHA. Now it launches a PERSISTENT profile
+(data/browser_profile, gitignored) and hides the automation flag, so cookies/
+history accumulate and it looks like a returning human.
+
+Do this:
+  1. Start JARVIS, do a few web searches over a couple of sessions (restart
+     JARVIS in between).
+  PASS (improved): the reCAPTCHA appears far less often than before; the browser
+                remembers sites between runs (you stay logged into things you
+                signed into in JARVIS's browser).
+  Big win: in JARVIS's browser window, sign in to your Google account ONCE.
+           Logged-in Google sessions get challenged dramatically less.
+
+IMPORTANT - this is mitigation, not a cure:
+  The remaining CAPTCHAs are mostly your NETWORK, not the code. A mobile-hotspot
+  (carrier CGNAT) or VPN IP is shared by many users and Google rate-limits it
+  hard — it'll still challenge sometimes regardless of the browser profile. A
+  wired / home Wi-Fi connection reduces it the most. (Same IP reputation is why
+  ElevenLabs/Gemini also flagged "unusual activity" on the hotspot.)
+
+  If the browser ever fails to start with "profile is in use", close any other
+  JARVIS instance, or delete the data/browser_profile folder and relaunch.
+
+Code-level proof (no real Chrome) - from repo root:
+  uv run pytest -q tests/test_browser_persistent_profile.py
+  -> 3 passed: launch_persistent_context used (not launch()+new_context()) with
+     the data/browser_profile dir + --disable-blink-features=AutomationControlled;
+     reuses the persistent context's initial page; friendly "profile in use" error.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
