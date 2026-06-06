@@ -20,6 +20,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QKeySequence, QPainter, QTextCursor
 from PyQt5.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -115,6 +116,18 @@ class _SystemRow(QLabel):
         )
 
 
+def _block_text(block: "_Block") -> str:
+    """Full plain text of a command block (prompt + reply + extra lines) for the
+    Copy button — what the user grabs to paste elsewhere instead of screenshotting."""
+    lines: list[str] = []
+    if block.prompt:
+        lines.append(block.prompt)
+    if block.response:
+        lines.append(block.response)
+    lines.extend(text for text, _color in block.extras)
+    return "\n".join(lines)
+
+
 class _CommandRow(QFrame):
     """One command block rendered as a real widget tree.
 
@@ -173,6 +186,7 @@ class _CommandRow(QFrame):
 
         prompt_lbl = QLabel(block.prompt or "")
         prompt_lbl.setWordWrap(True)
+        prompt_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
         prompt_lbl.setStyleSheet(
             "QLabel {"
             f"color: {GREEN};"   # mockup uses lime green for the user input
@@ -183,6 +197,23 @@ class _CommandRow(QFrame):
             "}"
         )
         header.addWidget(prompt_lbl, 1)
+
+        # Copy button — grabs the whole block (prompt + reply + output) to the
+        # clipboard, so the user can paste it instead of screenshotting. (QLabels
+        # can't be selected across lines, so a per-block copy is the reliable way.)
+        copy_btn = QPushButton("⧉")
+        copy_btn.setCursor(Qt.PointingHandCursor)
+        copy_btn.setToolTip("Copy this block")
+        copy_btn.setFixedSize(22, 18)
+        copy_btn.setStyleSheet(
+            "QPushButton {"
+            f"color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 13px;"
+            "}"
+            f"QPushButton:hover {{ color: {CYAN}; }}"
+        )
+        copy_btn.clicked.connect(lambda: self._copy(block, copy_btn))
+        header.addWidget(copy_btn, 0, Qt.AlignTop)
         outer.addLayout(header)
 
         # ── Response row: [badge] response text ─────────────────────────────
@@ -197,6 +228,7 @@ class _CommandRow(QFrame):
             if block.response:
                 resp = QLabel(block.response)
                 resp.setWordWrap(True)
+                resp.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
                 resp.setStyleSheet(
                     "QLabel {"
                     f"color: {block.response_color or INK};"
@@ -215,6 +247,7 @@ class _CommandRow(QFrame):
         for text, color in block.extras:
             extra = QLabel(text)
             extra.setWordWrap(True)
+            extra.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
             extra.setStyleSheet(
                 "QLabel {"
                 f"color: {color or INK_DIM};"
@@ -226,6 +259,13 @@ class _CommandRow(QFrame):
                 "}"
             )
             outer.addWidget(extra)
+
+    @staticmethod
+    def _copy(block: "_Block", btn: QPushButton) -> None:
+        """Copy the whole block to the clipboard; flash the button as feedback."""
+        QApplication.clipboard().setText(_block_text(block))
+        btn.setText("✓")
+        QTimer.singleShot(900, lambda: btn.setText("⧉"))
 
 
 # ── Stream colour constants ──────────────────────────────────────────────────

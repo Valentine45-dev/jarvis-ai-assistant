@@ -663,6 +663,31 @@ Code-level proof (no model/screen) - from repo root:
 
 
 -----------------------------------------------------------------------
+TERMINAL - copy a command block's text to the clipboard (no more screenshots)
+-----------------------------------------------------------------------
+Background: terminal output was rendered as QLabels you couldn't select, so to
+share output you had to screenshot it. Now each command block has a small copy
+button, and the text is selectable.
+
+Do this:
+  1. Run anything in the Terminal page (e.g. "read my screen", "git status").
+  2. Hover the command block — a small "⧉" button sits at the right of the
+     prompt row. Click it (it briefly flashes "✓").
+  3. Paste anywhere (Ctrl+V).
+  PASS (fixed): the clipboard has the WHOLE block as plain text — the prompt,
+                JARVIS's reply, and every output line, newline-separated. No
+                screenshot needed.
+  Also: you can now select text in a line/label with the mouse and Ctrl+C it
+        (single labels; the ⧉ button is the reliable way to grab a whole block,
+        since selection can't span multiple lines).
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_terminal_copy.py
+  -> 4 passed: _block_text joins prompt + reply + all output lines (and handles
+     empty prompt/reply/block).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
