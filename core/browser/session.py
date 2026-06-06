@@ -110,6 +110,10 @@ class _SessionBase:
                         "--force-renderer-accessibility",
                         "--disable-blink-features=AutomationControlled",
                     ],
+                    # Drop Playwright's default --enable-automation switch: removes
+                    # the "Chrome is being controlled by automated test software"
+                    # infobar and one more automation signal anti-bot systems read.
+                    ignore_default_args=["--enable-automation"],
                 )
                 self._browser = None
                 self._page = (

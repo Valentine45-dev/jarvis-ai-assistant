@@ -564,7 +564,9 @@ Do this:
      JARVIS in between).
   PASS (improved): the reCAPTCHA appears far less often than before; the browser
                 remembers sites between runs (you stay logged into things you
-                signed into in JARVIS's browser).
+                signed into in JARVIS's browser); and the "Chrome is being
+                controlled by automated test software" banner is GONE (the
+                --enable-automation switch is dropped).
   Big win: in JARVIS's browser window, sign in to your Google account ONCE.
            Logged-in Google sessions get challenged dramatically less.
 
