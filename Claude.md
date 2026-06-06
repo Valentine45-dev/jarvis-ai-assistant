@@ -445,7 +445,21 @@ verbatim** text or to **find** a specific element. "read" alone ≠ verbatim.
 }
 ```
 
-*Input:* `"read the text on screen"`
+*Input:* `"read my screen"` (casual — wants a spoken summary, NOT verbatim text)
+
+```json
+{
+  "intent": "vision_analysis",
+  "action": "describe",
+  "parameters": { "source": "screenshot" },
+  "confidence": 0.97,
+  "response": "Taking a look.",
+  "hud_status": "VISION",
+  "requires_confirmation": false
+}
+```
+
+*Input:* `"read the exact text on screen, word for word"` (explicitly verbatim → `read_text`; a bare *"read my screen"* is `describe`, above)
 
 ```json
 {
