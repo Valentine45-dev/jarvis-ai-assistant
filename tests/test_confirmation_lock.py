@@ -26,6 +26,7 @@ import pytest
 from core.handlers.shared import (
     abandon_pending_confirmation,
     get_pending_confirmation,
+    is_decisive_confirmation_reply,
     replace_confirmation,
     request_confirmation,
     resolve_confirmation,
@@ -175,6 +176,23 @@ def test_replace_confirmation_on_empty_registers() -> None:
     r = replace_confirmation("p", lambda: {"success": True, "output": "x", "error": ""})
     assert r.get("needs_confirmation") is True
     assert get_pending_confirmation() is not None
+
+
+@pytest.mark.parametrize("reply", [
+    "yes", "yeah", "ok", "sure", "go ahead", "do it", "create it", "yes please",
+    "no", "cancel", "stop", "nope", "don't", "yes — wait, no", "sure, actually cancel",
+])
+def test_decisive_replies_are_decisive(reply: str) -> None:
+    assert is_decisive_confirmation_reply(reply) is True
+
+
+@pytest.mark.parametrize("reply", [
+    "open chrome", "what time is it", "play some music", "", "please", "hmm",
+    "search youtube for lofi",
+])
+def test_ambiguous_replies_are_not_decisive(reply: str) -> None:
+    # These keep the card up (caller re-asks) instead of standing down.
+    assert is_decisive_confirmation_reply(reply) is False
 
 
 def test_resolve_with_no_pending_returns_error() -> None:

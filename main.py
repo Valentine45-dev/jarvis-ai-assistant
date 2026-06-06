@@ -663,14 +663,22 @@ class JarvisWindow(QMainWindow):
             get_pending_confirmation,
             resolve_confirmation,
         )
+        from core.handlers.shared import is_decisive_confirmation_reply
         if get_pending_confirmation():
             if not self._command_controller.pending_should_yield_to_new_command(cmd):
-                # Text/voice reply answers the card — mirror the button path:
-                # hide the card + clear the mode before resolving.
-                self._hide_confirm_card()
-                self._confirm_mode = None
-                resolved = resolve_confirmation(cmd)
-                self._on_confirmation_resolved(resolved)
+                if is_decisive_confirmation_reply(cmd):
+                    # A clear yes/no answers the card — mirror the button path:
+                    # hide the card + clear the mode before resolving.
+                    self._hide_confirm_card()
+                    self._confirm_mode = None
+                    resolved = resolve_confirmation(cmd)
+                    self._on_confirmation_resolved(resolved)
+                    return
+                # Ambiguous input (e.g. "open chrome") — neither a clear yes/no
+                # nor a full new directive. Keep the card up and re-ask, instead
+                # of silently standing down (cancelling) on it.
+                self._dashboard.toast.show_toast(
+                    "Please answer the confirmation first — yes or no.", "warning")
                 return
             abandon_pending_confirmation()
             self._hide_confirm_card()

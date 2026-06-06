@@ -168,7 +168,9 @@ FAIL (old behaviour):
 Also verify normal flow still works:
   - A clean "yes" / "go ahead" / "do it" still confirms and deletes.
   - A bare "please" by itself NO LONGER counts as confirmation (it's too weak) —
-    reply just "please" to a card and JARVIS should stand down, not proceed.
+    reply just "please" to a card and JARVIS will NOT proceed. (As of the TEST-B
+    fix it keeps the card up and re-asks "yes or no" rather than standing down,
+    since "please" is ambiguous — but it never executes the action.)
 
 
 -----------------------------------------------------------------------
@@ -458,18 +460,27 @@ TEST A - multi-confirm workflow resumes through BOTH confirmations:
                 wrongly refused.
   Cleanup: delete r6a.txt and r6b.txt.
 
-TEST B - stacking a command on an open card is rejected, card survives:
+TEST B - an ambiguous reply on an open card is rejected, card survives:
   1. Trigger a confirmation, e.g. "delete the file r6a.txt" (a card appears).
-  2. Without answering, type another command, e.g. "open chrome".
-  PASS (fixed): you get the "respond to the pending confirmation first" toast,
-                Chrome does NOT open, and the delete card is still there to
-                answer. Nothing was lost or clobbered.
-  FAIL (old):   the second command ran and/or the original card vanished.
+  2. Without answering, type something that's neither yes/no, e.g. "open chrome".
+  PASS (fixed): you get "Please answer the confirmation first — yes or no.",
+                Chrome does NOT open, the delete does NOT happen, and the card is
+                still there to answer. (Short inputs like "open chrome" used to be
+                read as a non-yes reply and silently stand the card down.)
+  3. Now answer the card properly: "yes" deletes r6a.txt; "no"/"cancel" stands
+     down. A clear yes/no always resolves the card.
+  Note: a *long, clearly-new* directive (e.g. "create a file called x with
+  content y") instead ABANDONS the stale card and runs as a new command — that's
+  intentional (you changed your mind); only short/ambiguous input keeps the card.
+  FAIL (old):   "open chrome" silently cancelled the delete (stood down) without
+                opening Chrome, or the second command ran.
 
 Code-level proof (no UI) - from repo root:
   uv run pytest -q tests/test_confirmation_lock.py
-  -> 6 passed: refuse-preserves-first (second callback never runs, first does),
+  -> refuse-preserves-first (second callback never runs, first does),
      request-succeeds-after-resolve (the resume case), succeeds-after-abandon,
+     decisive vs ambiguous reply classification (yes/no resolve; "open chrome",
+     bare "please" keep the card),
      no-leak-between-resolutions, threaded no-double-fire, resolve-with-nothing.
 
 

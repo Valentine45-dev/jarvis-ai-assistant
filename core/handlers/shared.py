@@ -188,6 +188,17 @@ def _is_affirmative_reply(user_response: str) -> bool:
     return False
 
 
+def is_decisive_confirmation_reply(text: str) -> bool:
+    """True when *text* is a clear yes OR a clear no — i.e. an actual answer to a
+    confirmation card. Ambiguous input (a new directive like "open chrome", a
+    question, a bare "please") is neither, so the caller should keep the card up
+    and re-ask rather than silently standing down (cancelling) on it."""
+    if _is_affirmative_reply(text):
+        return True
+    toks = set(re.findall(r"[a-z0-9']+", (text or "").strip().lower()))
+    return bool(toks & _NEGATION_TOKENS)
+
+
 def resolve_confirmation(user_response: str) -> dict:
     """Pop the pending confirmation and either invoke it or stand down.
 
