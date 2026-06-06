@@ -174,19 +174,27 @@ def capture_browser_page() -> bytes:
 
 # ── Analyze ──────────────────────────────────────────────────────────────────
 
+# Spoken-style screen/image description (read aloud via TTS) — brief and
+# conversational, not a raw OCR dump or a structured markdown report.
+_DESCRIBE_PROMPT = (
+    "You are JARVIS, describing what's on the user's screen out loud. Give a "
+    "brief, natural description: lead with the gist (what app, page, or screen "
+    "it is), then the most notable or relevant things on it. Keep it concise and "
+    "conversational, the way you'd tell a friend what you're looking at — aim for "
+    "a few sentences. You may use a short bullet list when you're genuinely "
+    "listing several distinct items and it makes things clearer, but prefer "
+    "flowing prose. Don't use headings, bold, or other markdown symbols, and "
+    "don't transcribe every element or line of text — describe what matters, "
+    "don't dump everything."
+)
+
 _PROMPT_BY_ACTION: dict[str, str] = {
-    "describe": (
-        "Describe everything visible in this image in clear, natural "
-        "language. Be specific about text, UI elements, and layout."
-    ),
+    "describe": _DESCRIBE_PROMPT,
     "read_text": (
         "Extract and return ALL readable text from this image exactly "
         "as it appears. Preserve formatting where possible."
     ),
-    "screenshot_and_describe": (
-        "Describe everything visible in this image in clear, natural "
-        "language. Be specific about text, UI elements, and layout."
-    ),
+    "screenshot_and_describe": _DESCRIBE_PROMPT,
 }
 
 

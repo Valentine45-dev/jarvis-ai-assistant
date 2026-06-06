@@ -25,6 +25,44 @@ def _make_png_bytes(color: str | tuple = "red", size: tuple[int, int] = (10, 10)
     return buf.getvalue()
 
 
+# ── describe prompt (brief, TTS-friendly) ─────────────────────────────────────
+
+
+class TestDescribePrompt:
+    """`describe` must be the brief, conversational, spoken-style prompt — not the
+    old 'describe everything visible' dump (and not raw OCR)."""
+
+    def test_describe_is_the_spoken_summary_prompt(self):
+        p = vision._build_prompt("describe", "")
+        assert p == vision._DESCRIBE_PROMPT
+        low = p.lower()
+        assert "jarvis" in low
+        assert "out loud" in low
+        assert "brief" in low
+        assert "don't transcribe" in low and "don't dump everything" in low
+        # bullets allowed but only when they help; prose preferred
+        assert "bullet" in low and "prefer" in low
+        # the old verbose instruction is gone
+        assert "describe everything visible" not in low
+
+    def test_screenshot_and_describe_uses_same_prompt(self):
+        assert vision._build_prompt("screenshot_and_describe", "") == vision._DESCRIBE_PROMPT
+
+    def test_read_text_stays_verbatim(self):
+        p = vision._build_prompt("read_text", "")
+        low = p.lower()
+        assert "extract" in low and "all" in low      # still verbatim extraction
+        assert p != vision._DESCRIBE_PROMPT
+
+    def test_find_ui_element_unchanged(self):
+        p = vision._build_prompt("find_ui_element", "submit button").lower()
+        assert "submit button" in p and "locate" in p
+
+    def test_answer_question_uses_question(self):
+        assert "what color is the logo" in vision._build_prompt(
+            "answer_question", "what color is the logo")
+
+
 # ── load_image_file ──────────────────────────────────────────────────────────
 
 

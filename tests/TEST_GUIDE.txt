@@ -628,6 +628,37 @@ Do this:
 
 
 -----------------------------------------------------------------------
+SCREEN READING - humanized spoken description, not a raw OCR / markdown dump
+-----------------------------------------------------------------------
+Background: "read my screen" used to route to read_screen (raw Tesseract OCR),
+so JARVIS spoke a garbled element-by-element dump. And "what's on my screen"
+(vision describe) returned a long structured markdown report — also bad for TTS.
+Now both route to vision_analysis/describe with a brief, conversational,
+spoken-style prompt (a few sentences, no markdown headings/symbols, may use a
+short bullet list only when it genuinely helps; never transcribes everything).
+
+Do this:
+  1. Say/type: "read my screen"  (and separately: "what's on my screen").
+  PASS (fixed): JARVIS gives a short NATURAL description — leads with the gist
+                (which app/page), then a few notable things — the way it
+                describes an image. Debug shows INTENT: vision_analysis /
+                ACTION: describe (NOT read_screen / ocr_active_window). No
+                garbled OCR, no "## headings" or "**bold**" read aloud.
+  FAIL (old):   it routed to read_screen and spoke raw OCR ("my.ini GEMINLA o
+                .env php.ini ..."), or dumped a long markdown report.
+
+  Verbatim still available: "read the EXACT text on screen" / "what does it say
+  word-for-word" → read_screen OCR (or vision read_text) returns the literal
+  text. "find the X button on screen" → read_screen/find_element.
+
+Code-level proof (no model/screen) - from repo root:
+  uv run pytest -q tests/test_vision.py
+  -> describe prompt is the brief spoken-style one (JARVIS, "out loud", "don't
+     transcribe/dump everything", bullets-only-when-helpful); read_text stays
+     verbatim; find_ui_element / answer_question unchanged.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

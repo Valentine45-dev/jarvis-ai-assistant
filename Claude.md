@@ -353,13 +353,22 @@ Execute a multi-step workflow or predefined routine.
 
 ### 8. `read_screen`
 
-Read text from the screen using OCR.
+Raw-OCR text extraction from the screen (Tesseract). **Verbatim/utility only** —
+its output is unprocessed OCR, NOT a spoken summary.
+
+**Routing — when NOT to use this:** a casual *"read my screen"*, *"what's on my
+screen"*, *"what do you see"*, *"describe my screen"* wants a humanized spoken
+description → route those to **`vision_analysis` → `describe`** (§17), not here.
+Use `read_screen` only when the user wants the **exact text** or to **find** an
+element:
+- *"read the **exact** text on screen"*, *"what does it say word-for-word"*, *"OCR the screen"* → `ocr_active_window` / `ocr_full`
+- *"find the X button on screen"*, *"is 'Submit' on screen"* → `find_element`
 
 **Actions:**
 
-- `ocr_full` — OCR the entire screen
-- `ocr_region` — OCR a specific region
-- `ocr_active_window` — OCR only the active window
+- `ocr_full` — OCR the entire screen (verbatim text)
+- `ocr_region` — OCR a specific region (verbatim text)
+- `ocr_active_window` — OCR only the active window (verbatim text)
 - `find_element` — Find a UI element by text content
 
 **Parameters:**
@@ -406,8 +415,8 @@ Do **NOT** use for plain text reading — that's still `read_screen` (cheap OCR)
 
 **Routing rules:**
 
-- *"what's on my screen"* / *"describe my screen"* / *"what do you see"* → `describe`, `source=screenshot`
-- *"read the text on screen"* / *"what does this say"* → `read_text`, `source=screenshot`
+- *"what's on my screen"* / *"describe my screen"* / *"what do you see"* / **"read my screen"** / *"read the screen"* → `describe`, `source=screenshot`. (These want a **humanized spoken summary** — use `describe`, NOT `read_screen` OCR. `describe` now returns a brief conversational description, not a raw dump.)
+- *"read the **exact** text on screen"* / *"what does it say word-for-word"* / *"extract the text"* → `read_text`, `source=screenshot` (verbatim). For *"find the X button"* on screen, use `read_screen/find_element`.
 - *"look at [path]"* / *"analyze this image [path]"* → `describe`, `source=file`, `path=<path>`
 - *"where is the [element]"* / *"find the [button]"* → `find_ui_element`, `source=screenshot`, `question=<element>`
 - *"what does the browser show"* / *"describe the page"* → `describe`, `source=browser`
