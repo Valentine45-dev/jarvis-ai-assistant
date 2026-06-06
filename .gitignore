@@ -33,6 +33,12 @@ data/workflow_metrics.json
 # Scheduler last-fire marks (R3-8/R3-9) — local runtime state, per machine.
 data/scheduler_state.json
 
+# User's workflow definitions — runtime state JARVIS rewrites on every
+# create/rename/delete/enable/disable. Tracking it meant the file showed
+# perpetually unstaged; it's local user data (like the entries above), not
+# source. The app recreates it on first run when absent.
+data/workflows.json
+
 # Runtime logs (local only — churn on every run)
 logs/
 
