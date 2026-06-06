@@ -51,6 +51,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.brain import _get_client  # R3-19: reuse the cached Anthropic client
 from core.handlers.shared import _ok, _err, request_confirmation
 from core.personality import JARVIS_SHELL_RESULTS_PROMPT
 
@@ -511,7 +512,7 @@ def _nl_to_command(natural_language: str, env_ctx: dict) -> str | None:
         from config.settings import config
         if not config.anthropic_api_key:
             return None
-        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        client = _get_client()  # R3-19: cached singleton, not a per-call client
         tools = ", ".join(env_ctx.get("installed_tools", []))
         git   = (f"Git branch: {env_ctx.get('git_branch')}"
                  if env_ctx.get("git_repo") else "Not a git repo")
@@ -546,7 +547,7 @@ def _explain_output(block: CommandBlock) -> str | None:
         from config.settings import config
         if not config.anthropic_api_key:
             return None
-        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        client = _get_client()  # R3-19: cached singleton, not a per-call client
         status = "succeeded" if block.exit_code == 0 else f"failed (exit {block.exit_code})"
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -575,7 +576,7 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
         from config.settings import config
         if not config.anthropic_api_key:
             return None
-        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        client = _get_client()  # R3-19: cached singleton, not a per-call client
         msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=256,
@@ -706,7 +707,7 @@ def _plan_steps(goal: str, env_ctx: dict) -> list[str] | None:
         from config.settings import config
         if not config.anthropic_api_key:
             return None
-        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        client = _get_client()  # R3-19: cached singleton, not a per-call client
         tools = ", ".join(env_ctx.get("installed_tools", []))
         msg = client.messages.create(
             model="claude-sonnet-4-6",
