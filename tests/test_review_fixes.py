@@ -29,7 +29,8 @@ def _use_tmp_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.append(patch.object(Path, "home", classmethod(lambda cls: tmp_path)))
     monkeypatch[-1].start()
     (tmp_path / "Documents").mkdir(exist_ok=True)
-    monkeypatch.append(patch.object(file_ops, "signals", _FakeSignals()))
+    # signals now lives in the file_ops._common funnel after the R2-17b split.
+    monkeypatch.append(patch.object(file_ops._common, "signals", _FakeSignals()))
     monkeypatch[-1].start()
 
 

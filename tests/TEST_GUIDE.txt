@@ -937,6 +937,36 @@ Do this (restart JARVIS first so the brain reloads CLAUDE.md):
   (a no-op search page beats a dead DNS guess).
 
 
+REFACTOR - file_ops.py monolith → package (R2-17b, no behavior change)
+-----------------------------------------------------------------------
+Background: core/handlers/file_ops.py (1220 LOC) was split into a package:
+  file_ops/__init__.py   — public entry _handle_file_operation + _DISPATCH table
+  file_ops/_common.py    — constants, helpers, terminal-signal funnel
+  create / read_write / replace / move_rename / delete / batch / search / info .py
+Pure structural move — every action behaves exactly as before. Import path is
+unchanged (core.executor still does `from core.handlers.file_ops import
+_handle_file_operation`).
+
+Do this (sanity — all file ops still work via voice/text):
+  1. "create a file Documents/test/hello.txt with content hi" -> confirm card ->
+     confirm -> file written. (exercises the create_file confirm closure that
+     moved into create._op_create_file)
+  2. "read hello.txt", "how big is hello.txt" (file_info), "list Documents/test",
+     "find hi in Documents/test" (find_in_files), "rename hello.txt to hey.txt",
+     "append a line to hey.txt", "in hey.txt replace hi with yo" (confirm),
+     "delete hey.txt" (confirm), "delete all *.tmp in Downloads" (batch, confirm).
+  PASS: identical behaviour + same confirmation cards as before the split.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_file_ops_package.py
+  -> public entry importable; _DISPATCH covers all 14 actions; _ok/_err stay
+     shared singletons (re-exported); unknown action -> _err; each _op_* lives in
+     its module; create_file & replace_in_file confirm closures still write after
+     "yes" (proves the nested _do_* closures survived extraction into _op_*).
+  Plus the existing file-op coverage still passes unchanged:
+  uv run pytest -q tests/test_executor.py tests/test_review_fixes.py tests/test_audit_promoted.py
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
