@@ -250,19 +250,17 @@ def _resolve_screenshot_path(
 ) -> tuple[str, str | None]:
     """Resolve a screenshot's output path.
 
-    The *name* is brain-driven: when ``save_param`` ends in a filename
-    (e.g. ``.../tests/whatsapp_web.png``) that stem is the base; otherwise
-    ``fallback_base`` is used (OS → "screen"; browser passes the page title).
-    A timestamp is ALWAYS appended so names are descriptive AND never clobber:
-    ``<slug(base)>_<YYYYMMDD_HHMMSS>.png``. Folder resolution is unchanged.
-    Returns ("", save_param) when a relative folder can't be resolved (caller
-    confirms creating it).
+    The *name* is brain-driven and used AS-IS (no timestamp): when ``save_param``
+    ends in a filename (e.g. ``.../tests/whatsapp_web.png``) that stem is the
+    name; otherwise ``fallback_base`` (OS → "screen"; browser passes the page
+    title). Result: ``<slug(name)>.png`` — exactly the name the brain chose, so it
+    can reference/delete the file later (a timestamp it never sees made that
+    impossible). Re-using a name overwrites the previous shot. Folder resolution
+    unchanged. Returns ("", save_param) when a relative folder can't be resolved.
     """
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     def _name(base: str) -> str:
         slug = _slugify_for_filename(base) or _slugify_for_filename(fallback_base) or "screenshot"
-        return f"{slug}_{ts}.png"
+        return f"{slug}.png"
 
     if not save_param:
         return str(Path.home() / "Desktop" / _name(fallback_base)), None

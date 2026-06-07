@@ -609,16 +609,18 @@ Do this:
                 INTENT: browser_automation / ACTION: screenshot (not
                 system_control). It also captures full-page (content below the
                 visible viewport).
-  Naming: brain-driven, like a document topic. JARVIS picks a meaningful filename
-                from context (e.g. "screenshot the whatsapp web page" → save_path
-                ".../whatsapp_web.png") and the handler ALWAYS appends a timestamp,
-                so you get "whatsapp_web_20260606_223000.png" — descriptive AND
-                never overwriting. Uses the SAME slugify as docs (no bespoke regex).
-                Fallback when the brain gives only a folder: page title (browser)
-                or "screen" (OS). Applies to BOTH screenshot types. (The old browser
-                default was one fixed "jarvis_browser_screenshot.png" that clobbered.)
-                Try: "screenshot the youtube page to tests/" → expect a file like
-                "youtube_<timestamp>.png" (a name relating to the content).
+  Naming: brain-driven, like a document topic, and saved EXACTLY as named (NO
+                timestamp). JARVIS picks a meaningful filename from context (e.g.
+                "screenshot the whatsapp web page" → ".../whatsapp_web.png") and
+                that's the exact file on disk. Because there's no hidden timestamp,
+                JARVIS knows the name and can later "delete that screenshot" /
+                "open it" using the same filename. Re-using a name OVERWRITES the
+                previous shot (say a different name to keep both). Uses the SAME
+                slugify as docs. Fallback when the brain gives only a folder: page
+                title (browser) or "screen" (OS). Applies to BOTH screenshot types.
+                Try: "screenshot the youtube page to tests/" → a file like
+                "youtube.png" (a name relating to the content), then "delete that
+                screenshot" → JARVIS deletes the same youtube.png.
   FAIL (old):   the PNG showed the JARVIS window (system_control screen grab of
                 the active window).
 

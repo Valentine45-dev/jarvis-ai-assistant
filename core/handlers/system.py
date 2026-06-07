@@ -449,7 +449,7 @@ def _handle_system_control(action: str, params: dict) -> dict:
                     folder.mkdir(parents=True, exist_ok=True)
                 except OSError:
                     pass
-                path = str(folder / f"screen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                path = str(folder / "screen.png")
                 r = cc.screenshot(path=path)
                 if r.get("success"):
                     _tlog(f"✓ saved → {Path(path).name}")
