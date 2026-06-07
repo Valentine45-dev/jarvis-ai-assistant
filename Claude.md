@@ -543,7 +543,8 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 
 **Actions:**
 
-- `navigate` — Go to a URL in the controlled Chrome tab and wait for load
+- `navigate` — Go to a URL in the controlled Chrome tab and wait for load.
+  - **Don't fabricate domains — search when unsure.** When the user names a site **informally** (*"go to the mobbin website"*, *"open that design-gallery site"*, *"pull up acme bank"*) and you are **not highly confident** of its exact domain, do **NOT** guess `https://www.<name>.com` — a wrong guess (e.g. `mobbins.com` when the real site is `mobbin.com`) fails DNS and wastes the navigation. Instead route to **`search_web` / `google_search`** with the site name as the `query`, so the real site surfaces as the top result. Use a literal `navigate` URL only when **(a)** the user gave a full/explicit URL or domain (*"go to mobbin.com"*, *"open https://…"*), or **(b)** the domain is **unambiguous and well-known** (youtube.com, github.com, google.com, gmail.com, wikipedia.org, reddit.com, x.com / twitter.com, netflix.com, amazon.com, stackoverflow.com, linkedin.com, chatgpt.com, claude.ai, and the like). When in genuine doubt, **prefer the search over a guessed domain.** This same rule applies to `open_app` / `open_url`.
 - `click_element` — Click a web element by **natural-language goal** (preferred), CSS selector, visible text, or pixel coordinates
 - `fill_form` — Fill a field by **natural-language goal + value** (preferred) or a CSS selector / label / placeholder dictionary
 - `read_page` — **Tab + page:** document title, current URL, then visible text from the page (body text up to 4,000 chars). Succeeds even when little or no body text exists (title/URL always included).
@@ -1633,6 +1634,24 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "requires_confirmation": false
 }
 ```
+
+-----
+
+**Input:** `"Go to the mobbin website"` (informal site name, domain NOT certain → search, don't guess `mobbins.com`)
+
+```json
+{
+  "intent": "search_web",
+  "action": "google_search",
+  "parameters": { "query": "mobbin", "platform": "google" },
+  "confidence": 0.8,
+  "response": "Not certain of the exact URL — searching for Mobbin so we land on the real one.",
+  "hud_status": "WEB SEARCH",
+  "requires_confirmation": false
+}
+```
+
+*(Contrast: "go to mobbin.com" or a well-known site like "open youtube" → `navigate` with the literal URL. Only unknown/uncertain names get the search.)*
 
 -----
 

@@ -915,6 +915,28 @@ Code-level proof - from repo root:
      the tab list as primary and drops the generic brain ack.
 
 
+BROWSER - search instead of guessing unknown domains (brain prompt)
+-----------------------------------------------------------------------
+Background: the brain used to fabricate domains for informally-named sites
+(e.g. "the mobbin website" -> https://www.mobbins.com), which DNS-fails. CLAUDE.md
+now tells it: if NOT highly confident of a site's exact domain, route to
+search_web/google_search with the name instead of guessing www.<name>.com.
+(Prompt-only change — not unit-testable; verify by behaviour.)
+
+Do this (restart JARVIS first so the brain reloads CLAUDE.md):
+  1. "go to the mobbin website" (lesser-known name) -> Debug should show
+     search_web/google_search query="mobbin" (NOT navigate to a guessed
+     mobbins.com). You land on Google results with the real site on top.
+  2. "go to mobbin.com" (explicit domain) -> navigate to https://mobbin.com
+     (literal URL honoured — no search).
+  3. "open youtube" / "go to github" (well-known) -> navigate directly to the
+     known domain, NO search.
+  PASS: uncertain names search; explicit URLs + well-known sites navigate.
+
+  Note: applies to open_app/open_url too. Borderline calls lean toward search
+  (a no-op search page beats a dead DNS guess).
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
