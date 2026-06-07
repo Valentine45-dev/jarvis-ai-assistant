@@ -106,6 +106,7 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
 
     if action == "screenshot":
         selector = params.get("selector", "")
+        goal     = (params.get("goal") or "").strip()
         path     = params.get("save_path") or None
         # full_page defaults True (whole scrollable page); the brain sets it False
         # for "just the visible part / current view". Accept a couple of aliases.
@@ -115,8 +116,13 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
             full_page = True if fp_raw is None else not _as_bool(fp_raw)
         else:
             full_page = _as_bool(fp_raw)
-        return (browser.screenshot_element(selector, path) if selector
-                else browser.screenshot_page(path, full_page=full_page))
+        # Priority: explicit CSS selector → element; natural-language goal →
+        # capture-that-section via the snapshot picker; else → whole/visible page.
+        if selector:
+            return browser.screenshot_element(selector, path)
+        if goal:
+            return browser.find_and_act(goal, "screenshot", path=path)
+        return browser.screenshot_page(path, full_page=full_page)
 
     if action == "close_tab":
         return browser.close_tab(

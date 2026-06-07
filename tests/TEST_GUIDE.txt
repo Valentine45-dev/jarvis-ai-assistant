@@ -713,6 +713,33 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+BROWSER - capture a SECTION of the page by natural language (B1)
+-----------------------------------------------------------------------
+Background: you can now screenshot just a part of the page by naming it — JARVIS
+uses the same snapshot picker as click/fill to find that element and capture only
+its box (not the whole page).
+
+Do this (on a page with clear sections, e.g. YouTube or a ChatGPT chat):
+  1. "screenshot the comments section" / "screenshot the video player" /
+     "screenshot the sidebar" / "capture just the search results"
+  PASS (fixed): the saved PNG is ONLY that section, not the whole page. Debug
+                shows browser_automation/screenshot with a "goal" param, and the
+                terminal shows "❯ screenshot area '<goal>'" then "↳ picked
+                ref_N (<role> "<name>")" → "✓ area captured".
+  If not found: you get a clean "Couldn't find '<goal>' on the page to
+                screenshot — try the full page, or name the section differently."
+                (not a crash). Then fall back to a full-page or visible-area shot.
+
+  Routing reminder: name a SECTION → goal (this). "the page/browser/site" →
+  full page. "just what's visible" → viewport. (See the two entries above.)
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_browser_screenshot_area.py
+  -> goal routes to find_and_act(..., "screenshot"); plain screenshot → whole/
+     visible page; an explicit CSS selector still wins over goal.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

@@ -187,10 +187,34 @@ class _PickerMixin:
         if action == "fill":
             # fill_form emits its own ✓/✗ — no extra emission here.
             return self.fill_form({goal: value})
+        if action == "screenshot":
+            _tlog(f"✗ couldn't locate {goal!r} to screenshot")
+            return _err(
+                f"Couldn't find '{goal}' on the page to screenshot — try the full "
+                "page, or name the section differently."
+            )
         _tlog("✗ find_and_act: cannot 'find' without a snapshot")
         return _err("find_and_act: cannot 'find' without a snapshot")
 
-    def find_and_act(self, goal: str, action: str, value: str = "") -> dict:
+    def _exec_screenshot_by_role(self, role: str, name: str, goal: str, path: str | None) -> dict:
+        """Screenshot just the resolved element's box — the 'capture this section
+        of the page' path. role+name come from the snapshot picker."""
+        from pathlib import Path
+        from core.handlers.paths import _slugify_for_filename
+        save_path = self._resolve_shot_path(path, tag=_slugify_for_filename(goal) or "area")
+        if role and name:
+            for exact in (True, False):
+                try:
+                    loc = self._page.get_by_role(role, name=name, exact=exact)
+                    if loc.count() > 0:
+                        loc.first.screenshot(path=save_path, timeout=_SUBTRY)
+                        _tlog(f"✓ saved → {Path(save_path).name}")
+                        return _ok(f"Area screenshot saved: {save_path}")
+                except Exception:
+                    continue
+        return _err(f"Couldn't capture '{goal}' — that area isn't screenshot-able.")
+
+    def find_and_act(self, goal: str, action: str, value: str = "", path: str | None = None) -> dict:
         """Resolve an element by natural-language goal using the a11y snapshot + Haiku.
 
         Pipeline: snapshot the page accessibility tree → ask Haiku which ``[ref_N]``
@@ -201,7 +225,7 @@ class _PickerMixin:
         ``action`` is one of ``"click" | "fill" | "find"``. ``value`` is required for
         ``"fill"``. Returns the standard ``{success, output, error}`` envelope.
         """
-        if action not in ("click", "fill", "find"):
+        if action not in ("click", "fill", "find", "screenshot"):
             _tlog(f"✗ find_and_act: unsupported action {action!r}")
             return _err(f"find_and_act: unsupported action {action!r}")
         goal = (goal or "").strip()
@@ -213,6 +237,8 @@ class _PickerMixin:
             _tlog(f"❯ fill {goal!r} = {_redact_value(goal, value)}")
         elif action == "click":
             _tlog(f"❯ click {goal!r}")
+        elif action == "screenshot":
+            _tlog(f"❯ screenshot area {goal!r}")
         else:
             _tlog(f"❯ find {goal!r}")
 
@@ -322,6 +348,12 @@ class _PickerMixin:
             if action == "find":
                 _tlog(f"✓ found ref_{ref_num}")
                 return _ok(f"Found ref_{ref_num}: role={role!r} name={name!r}")
+            if action == "screenshot":
+                result = self._exec_screenshot_by_role(role, name, goal, path)
+                _dlog(f"screenshot result: success={result.get('success')} err={result.get('error', '')!r}")
+                _tlog("✓ area captured" if result.get("success")
+                      else f"✗ {result.get('error') or 'screenshot failed'}")
+                return result
             if action == "click":
                 result = self._exec_click_by_role(role, name, goal)
                 _dlog(f"click result: success={result.get('success')} err={result.get('error', '')!r}")
