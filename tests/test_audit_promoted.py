@@ -129,14 +129,18 @@ def test_log_debug_speaks_when_debug_mode_on(
 
 
 def test_intent_hud_has_reminder_weather_doc_entries() -> None:
-    """The HUD label map in main.py must cover every intent the brain can route.
+    """The HUD label map must cover every intent the brain can route.
     Missing entries fall back to STANDBY and the HUD shows the wrong label."""
-    # main.py imports a lot at module load; we only need the class attribute.
-    # Read it as text to avoid Qt-app side effects in headless runs.
-    main_py = Path(automation.__file__).parent.parent / "main.py"
-    text = main_py.read_text(encoding="utf-8")
+    # JarvisWindow imports a lot at module load; we only need the class attribute.
+    # Read it as text to avoid Qt-app side effects in headless runs. R2-17a moved
+    # the class out of main.py into the ui/main_window package.
+    window_py = (
+        Path(automation.__file__).parent.parent
+        / "ui" / "main_window" / "window.py"
+    )
+    text = window_py.read_text(encoding="utf-8")
     block = re.search(r"_INTENT_HUD\s*=\s*\{(.*?)\}", text, re.DOTALL)
-    assert block, "_INTENT_HUD definition not found in main.py"
+    assert block, "_INTENT_HUD definition not found in ui/main_window/window.py"
     body = block.group(1)
     for needed in ("reminder_task", "weather", "document_creation"):
         assert f'"{needed}"' in body, (
