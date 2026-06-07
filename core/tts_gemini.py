@@ -167,6 +167,43 @@ _STYLE_PREFIX = (
 )
 
 
+# Fail-fast on quota/429: build the client with a SINGLE attempt (no retry /
+# backoff) plus a hang-guard request timeout. A quota error then surfaces in ~1s
+# so TtsEngine can drop to the next tier (pyttsx3) immediately, instead of the
+# SDK eating several seconds of exponential backoff on every first-of-session 429.
+_GEMINI_TIMEOUT_MS = 15_000
+
+
+def _fast_http_options(types):
+    """HttpOptions tuned to fail fast: one attempt + a request timeout (ms).
+    Degrades gracefully if a future SDK drops either field."""
+    retry_cls = getattr(types, "HttpRetryOptions", None)
+    if retry_cls is not None:
+        try:
+            return types.HttpOptions(
+                timeout=_GEMINI_TIMEOUT_MS,
+                retry_options=retry_cls(attempts=1),
+            )
+        except Exception:
+            pass
+    try:
+        return types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS)
+    except Exception:
+        return None
+
+
+def _fast_client(genai, types, api_key: str):
+    """genai.Client wired to fail fast; falls back to a plain client if the
+    SDK rejects http_options."""
+    opts = _fast_http_options(types)
+    if opts is not None:
+        try:
+            return genai.Client(api_key=api_key, http_options=opts)
+        except Exception:
+            pass
+    return genai.Client(api_key=api_key)
+
+
 def say_gemini(
     text: str,
     on_ready: Callable[[], None] | None,
@@ -195,7 +232,7 @@ def say_gemini(
 
     _dbg("tts", f"Gemini voice={voice_name!r} model={model!r}")
 
-    client = genai.Client(api_key=api_key)
+    client = _fast_client(genai, types, api_key)
     response = client.models.generate_content(
         model=model,
         contents=_STYLE_PREFIX + text,
@@ -254,7 +291,7 @@ def probe_gemini(
     genai, types = _genai()
     if genai is None or not api_key:
         return
-    client = genai.Client(api_key=api_key)
+    client = _fast_client(genai, types, api_key)
     response = client.models.generate_content(
         model="gemini-2.5-flash-preview-tts",
         contents=text,

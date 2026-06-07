@@ -1053,6 +1053,35 @@ Code-level proof - from repo root:
      left alone; plain text untouched.
 
 
+TTS - fail fast when a cloud provider is quota-locked (no minute-long stalls)
+-----------------------------------------------------------------------
+Background: when ElevenLabs (credits) or Gemini (daily) hit their quota, the
+provider chain already disables that tier for the session after the first 429.
+But that FIRST 429 used to cost several seconds of SDK retry/backoff — and the
+locks reset every launch, so commands #1-2 of every fresh session stalled (you
+saw ~1 min). Fixed: each provider call is now built to fail fast —
+  Gemini:     genai.Client(http_options=one-attempt + 15s timeout)
+  ElevenLabs: request_options={max_retries:0, timeout_in_seconds:15}
+so a quota error surfaces in ~1s and the chain drops to the next tier (→ pyttsx3)
+immediately. The tier order + session locks are unchanged.
+
+Do this (only meaningful while a cloud provider is quota-capped):
+  1. Fresh `uv run python main.py` with TTS ON and ElevenLabs/Gemini quota spent.
+     Say "hello".
+  PASS (fixed): the first reply still falls back to pyttsx3, but the stall is ~1-2s,
+                not 30-60s. Terminal shows "...quota exceeded — disabling for this
+                session..." then pyttsx3 — quickly.
+  2. Subsequent commands are instant (session lock already skips dead tiers).
+  Note: when quota is AVAILABLE, nothing changes — providers work as before. The
+  15s timeout only guards true hangs; 429s return immediately regardless.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_tts_failfast.py
+  -> Gemini client built with retry attempts==1 + timeout; degrades gracefully if
+     the SDK lacks HttpRetryOptions; falls back to a plain client if http_options
+     is rejected. ElevenLabs say()/convert() forward max_retries=0 + timeout.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

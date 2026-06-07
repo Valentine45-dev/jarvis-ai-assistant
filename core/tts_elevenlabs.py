@@ -142,6 +142,12 @@ def play_mp3_bytes(
 
 # ── ElevenLabs TTS synthesis ──────────────────────────────────────────────────
 
+# Fail-fast on quota/429: no SDK retries + a hang-guard timeout, so a quota
+# error surfaces immediately and TtsEngine drops to the next tier instead of
+# waiting out the SDK's exponential backoff on every first-of-session 429.
+_EL_REQUEST_OPTIONS = {"max_retries": 0, "timeout_in_seconds": 15}
+
+
 def say_elevenlabs(
     text: str,
     on_ready: Callable[[], None] | None,
@@ -165,6 +171,7 @@ def say_elevenlabs(
             text=text,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
+            request_options=_EL_REQUEST_OPTIONS,
         )
         play_mp3_stream(chunks, on_ready, on_done, notify_fn)
         return
@@ -175,6 +182,7 @@ def say_elevenlabs(
             text=text,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
+            request_options=_EL_REQUEST_OPTIONS,
         )
     )
     notify_fn(on_ready)
@@ -208,6 +216,7 @@ def probe_voice(
             text=text,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
+            request_options=_EL_REQUEST_OPTIONS,
         ):
             if chunk:
                 break
