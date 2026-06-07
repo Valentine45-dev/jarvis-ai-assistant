@@ -140,3 +140,85 @@ def test_open_browser_defaults_to_chrome(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(cb, "browser", fb)
     _handle_open_app("open_browser", {})
     assert fb.calls == ["chrome"]
+
+
+# ── close_engine: close ONE engine, keep the rest (Phase 3) ──────────────────
+
+def test_close_one_engine_keeps_others(fake_pw: _FakePW) -> None:
+    s = session._SessionBase()
+    s.ensure_engine("chrome")
+    s.ensure_engine("edge")          # active = edge
+    chrome_ctx = s._sessions["chrome"].context
+    r = s.close_engine("chrome")
+    assert r["success"] is True
+    assert "chrome" not in s._sessions
+    assert chrome_ctx.closed is True
+    assert s.active_engine == "edge" and s._sessions["edge"].ready  # edge untouched
+
+
+def test_close_active_engine_repoints(fake_pw: _FakePW) -> None:
+    s = session._SessionBase()
+    s.ensure_engine("chrome")
+    s.ensure_engine("edge")          # active = edge
+    r = s.close_engine("edge")       # close the ACTIVE one
+    assert r["success"] is True
+    assert s.active_engine == "chrome"   # fell back to the remaining engine
+    assert "edge" not in s._sessions
+
+
+def test_close_no_arg_closes_active(fake_pw: _FakePW) -> None:
+    s = session._SessionBase()
+    s.ensure_engine("chrome")
+    s.ensure_engine("edge")
+    r = s.close_engine()             # no engine → close active (edge)
+    assert r["success"] is True
+    assert "edge" not in s._sessions and s.active_engine == "chrome"
+
+
+def test_close_last_engine_stops_driver(fake_pw: _FakePW) -> None:
+    s = session._SessionBase()
+    s.ensure_engine("chrome")
+    r = s.close_engine("chrome")
+    assert r["success"] is True
+    assert s._sessions == {}
+    assert s.active_engine == "" and s._pw is None   # driver released
+
+
+def test_close_engine_not_open_errors(fake_pw: _FakePW) -> None:
+    s = session._SessionBase()
+    s.ensure_engine("chrome")
+    r = s.close_engine("edge")       # edge was never opened
+    assert r["success"] is False and "isn't open" in r["error"]
+
+
+def test_close_engine_nothing_open_errors(fake_pw: _FakePW) -> None:
+    s = session._SessionBase()
+    r = s.close_engine()             # nothing open at all
+    assert r["success"] is False and "No browser is open" in r["error"]
+
+
+class _FakeBrowserClose:
+    """is_ready False so we can prove close_engine never auto-starts the browser."""
+
+    is_ready = False
+
+    def __init__(self) -> None:
+        self.closed: list[str] = []
+        self.started = 0
+
+    def start(self, engine=None) -> None:   # must NOT be called by close route
+        self.started += 1
+
+    def close_engine(self, engine: str) -> dict:
+        self.closed.append(engine)
+        return {"success": True, "output": f"Closed {engine}", "error": ""}
+
+
+def test_close_engine_route_does_not_autostart(monkeypatch: pytest.MonkeyPatch) -> None:
+    fb = _FakeBrowserClose()
+    monkeypatch.setattr(cb, "browser", fb)
+    from core.handlers.browser_handler import _handle_browser_automation
+    r = _handle_browser_automation("close_engine", {"browser": "edge"})
+    assert r["success"] is True
+    assert fb.closed == ["edge"]
+    assert fb.started == 0           # closing never launches a browser

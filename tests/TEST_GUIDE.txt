@@ -838,6 +838,47 @@ Code-level proof - from repo root:
      open_browser handler maps spoken name → engine and drives ensure_engine.
 
 
+BROWSER - Firefox engine + close one engine — PHASE 3 (live)
+-----------------------------------------------------------------------
+Background: Firefox is now a third controllable engine, and you can close ONE
+engine while the others stay alive. Firefox uses Playwright's OWN bundled build
+(NOT your system Mozilla) — a one-time `uv run playwright install firefox` was
+run; if a fresh machine lacks it, "open firefox" says so cleanly.
+
+Do this:
+  1. "open firefox" -> a controlled Firefox window opens (its own profile). Every
+     feature works (it reuses the same mixins as Chrome/Edge):
+       - "go to example.com" / "read the page"
+       - "screenshot the heading and the paragraph below it" (union-clip region
+         capture works on Firefox too — verified)
+  PASS: Firefox is driven exactly like Chrome/Edge.
+  2. With Chrome + Edge + Firefox all opened, "switch to chrome" etc. flips
+     instantly, nothing closes.
+  3. "close edge" -> closes ONLY Edge; Chrome + Firefox stay open. Debug shows
+     browser_automation/close_engine browser="edge". Terminal "✓ Closed edge —
+     now on <remaining>". If Edge was active, active falls back to a remaining
+     engine.
+  4. "close the browser" (no name) -> closes the ACTIVE engine.
+  5. Close the last open engine -> the Playwright driver is released; the next
+     "open chrome" starts fresh.
+
+  Routing checks (three distinct things — must not be confused):
+    - "close edge"            -> close_engine (whole browser engine)
+    - "close the youtube tab" -> close_tab    (one tab inside the browser)
+    - close_app/force_quit    -> only for unrelated desktop apps, NEVER a
+                                 controlled browser engine.
+
+  Not installed (fresh machine): "open firefox" -> "Firefox engine isn't
+  installed — run: playwright install firefox" (clean, no crash).
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_browser_engine_switch.py tests/test_browser_engines.py
+  -> close_engine closes one + keeps others; re-points active; closing last
+     engine stops the driver; not-open / nothing-open clean errors; close route
+     never auto-starts a browser. Firefox launch-config (type=firefox, prefs, no
+     chromium switches) + detection.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

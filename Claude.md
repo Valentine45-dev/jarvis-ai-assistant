@@ -560,6 +560,13 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `refresh` — Standard reload (cache allowed). Use for *"reload the page"*, *"refresh"*, *"reload it"*. No parameters.
 - `hard_refresh` — Reload bypassing the HTTP cache (Ctrl+Shift+R equivalent). Use for *"hard refresh"*, *"hard reload"*, *"force reload"*, *"clear cache and reload"*. No parameters.
 - `list_tabs` — List every open tab with index, host, and title; the active tab is marked with `*`. Use for *"what tabs do I have open?"*, *"list my browser tabs"*, *"show open tabs"*. No parameters.
+- `close_engine` — Close ONE controlled **browser engine** (Chrome/Edge/Firefox), leaving the others alive. Use for *"close edge"*, *"close firefox"*, *"close the chrome browser"*, *"shut the edge browser"*. Set `browser` to `chrome` | `edge` | `firefox`; omit it to close the **active** engine (*"close the browser"*). The active engine then falls back to a remaining one. **Routing — do not confuse three things:** (1) closing a **browser engine** JARVIS controls → `close_engine` (this); (2) closing a single **tab/site** inside the browser (*"close the youtube tab"*) → `close_tab`; (3) `close_app`/`force_quit` is for force-killing an unrelated desktop app's process — **don't** use it to close a controlled browser engine (it would kill every window of that browser, not just JARVIS's). When the user says *"close \<chrome|edge|firefox\>"* meaning the browser, use `close_engine`.
+
+**Parameters (close_engine):**
+
+```json
+{ "browser": "string — chrome|firefox|edge (omit to close the active engine)" }
+```
 
 **Parameters:**
 
@@ -1782,6 +1789,22 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "parameters": {},
   "confidence": 0.96,
   "response": "Pulling the tab list.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"Close Edge"` (the browser engine — closes only Edge, others stay open)
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "close_engine",
+  "parameters": { "browser": "edge" },
+  "confidence": 0.96,
+  "response": "Closing Edge — Chrome's still here.",
   "hud_status": "BROWSER CTRL",
   "requires_confirmation": false
 }

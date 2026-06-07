@@ -435,6 +435,50 @@ class _SessionBase:
                 return _ok(f"{eng} ready")
             return _err((sess.start_err if sess else "") or f"Couldn't start {eng}.")
 
+    def close_engine(self, engine: str | None = None) -> dict:
+        """Close ONE engine, leaving the others alive (concurrent model).
+
+        ``engine`` None/'' closes the currently active engine. If the closed
+        engine was active, the active pointer falls back to any other live engine
+        (or '' when none remain). When the last engine closes, the shared
+        Playwright driver is stopped too so nothing lingers. Must run on the
+        driver's thread.
+        """
+        with self._lock:
+            req = (engine or "").strip().lower()
+            if not req or req in ("auto", "default"):
+                eng = self._active
+                if not eng:
+                    return _err("No browser is open.")
+            else:
+                eng = self._resolve_engine(req)
+            sess = self._sessions.get(eng)
+            if sess is None:
+                return _err(f"{eng} isn't open.")
+            for obj in (sess.page, sess.context):
+                try:
+                    if obj is not None:
+                        obj.close()
+                except Exception:
+                    pass
+            del self._sessions[eng]
+            if self._active == eng:
+                # Re-point to any remaining ready engine (else nothing active).
+                self._active = next(
+                    (k for k, s in self._sessions.items() if s.ready), ""
+                )
+            if not self._sessions:
+                # Last engine gone — release the driver so a later open starts clean.
+                try:
+                    if self._pw is not None:
+                        self._pw.stop()
+                except Exception:
+                    pass
+                self._pw = None
+                self._active = ""
+            nxt = f" — now on {self._active}" if self._active else ""
+            return _ok(f"Closed {eng}{nxt}")
+
     def stop(self) -> None:
         """Close ALL engines and the driver. Safe to call even when not started."""
         with self._lock:
