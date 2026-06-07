@@ -773,6 +773,35 @@ Code-level proof - from repo root:
      no refs → legacy fallback; unresolvable boxes → clean error, no shot.
 
 
+BROWSER - multi-engine foundation (Edge/Firefox) — PHASE 1 (no UI change yet)
+-----------------------------------------------------------------------
+Background: groundwork for controlling Edge and Firefox (not just Chrome). The
+session now runs engines CONCURRENTLY off one Playwright driver — Chrome, Edge,
+Firefox can all be alive at once; the "active" engine is a pointer, so switching
+closes nothing. Phase 1 is foundation ONLY: behaviour is byte-identical to before
+(Chrome is still the one and only engine that opens). "open edge" does NOT yet
+switch — that's Phase 2.
+
+Do this (sanity — prove nothing regressed):
+  1. "open chrome" / "go to youtube" / "screenshot the browser" / open+search in
+     one line -> all behave EXACTLY as before. Chrome uses its same warmed
+     profile (data/browser_profile) — still logged into Google, no extra CAPTCHAs.
+  PASS: no behavioural difference vs. last session.
+
+  Note: two new profile dirs (data/browser_profile_edge, _firefox) are created
+  lazily only when those engines are first launched (Phase 2/3). They're
+  gitignored. Chrome's profile path is unchanged.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_browser_engines.py tests/test_browser_persistent_profile.py
+  -> _launch_config gives chrome(channel=chrome)/edge(channel=msedge, same flags)/
+     firefox(type=firefox, prefs, no chromium switches); per-engine profile dirs;
+     _resolve_engine (explicit/default/auto); _engine_available detection;
+     _page/_context/_ready/_ref_map route to the active engine; engines launch
+     concurrently and switching back does NOT relaunch; stop() closes all;
+     _recover() relaunches only the active engine. Chrome launch kwargs unchanged.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

@@ -81,6 +81,12 @@ class AppConfig:
     # Show the raw Haiku reasoning line behind a browser picker pick. Off by
     # default — only useful when debugging element-selection misses.
     browser_show_picker_reasoning: bool = True
+    # Default controlled-browser engine: "chrome" | "edge" | "firefox" | "auto".
+    # "auto" picks the first installed of chrome → edge → firefox. Anything that
+    # auto-opens the browser (workflows, search, navigate) uses this engine; the
+    # user can switch at runtime with "open edge" / "open firefox". Engines run
+    # concurrently — switching just re-points the active engine, closing nothing.
+    browser_engine: str = "chrome"
     # Mirror every _tlog line to logs/terminal.log (5MB rotating, 3 backups).
     terminal_log_to_file: bool = True
     # Stream the raw Claude vision response to the terminal panel line by
