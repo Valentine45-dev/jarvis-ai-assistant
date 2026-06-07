@@ -741,6 +741,38 @@ Code-level proof - from repo root:
      visible page; an explicit CSS selector still wins over goal.
 
 
+BROWSER - capture a MULTI-ELEMENT region (heading + input + items below)
+-----------------------------------------------------------------------
+Background: a "section" often isn't one DOM node — it's several (a heading, an
+input, and the items under it). The screenshot picker now asks Haiku for the
+*set* of refs that bound the region, unions their document-space boxes, and clips
+the page with page.screenshot(clip=union, full_page=True) so even below-the-fold
+spans are captured. A single element still gets a crisp element-level shot.
+
+Do this (e.g. on the ChatGPT new-chat page):
+  1. "screenshot the 'What's on the agenda today?' heading, the input field, and
+     the suggestions below it, into tests/agenda.png"
+  PASS (fixed): tests/agenda.png contains the heading AND the input box AND the
+                three suggestion rows — all in one image (previously only the
+                heading was captured). Terminal shows "❯ screenshot area '<goal>'"
+                then "↳ picked N elements: ref_a, ref_b, ..." → "✓ saved →
+                agenda.png".
+  2. Single-part still tight: "screenshot just the input box" -> terminal shows
+     "↳ picked ref_N (...)" → "✓ area captured" (element-level shot, not a clip).
+  3. Below the fold: scroll up, then "screenshot the footer links section" — the
+     clip still lands on the footer (document coords + full_page handle scroll).
+
+  Routing reminder: list several adjacent parts in ONE goal string ("X and Y and
+  the Z below") — do NOT split into multiple screenshots or a workflow. The whole
+  span goes in one goal; the picker bounds them together.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_browser_screenshot_region.py
+  -> _parse_haiku_refs handles {"refs":[...]} + degrades {"ref":N}; _union_clip
+     spans all boxes with padding; one ref → element shot; many → clip+full_page;
+     no refs → legacy fallback; unresolvable boxes → clean error, no shot.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
