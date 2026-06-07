@@ -14,14 +14,9 @@ disjoint method names, so MRO order is irrelevant to correctness —
 
 import sys
 import ctypes
-import threading
 from datetime import datetime
-import time
-
-import psutil
 
 from PyQt5.QtWidgets import (
-    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -32,20 +27,11 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
-    QPainter, QPalette, QColor, QBrush, QRadialGradient, QFont,
-    QFontMetrics, QKeySequence,
+    QKeySequence,
 )
 
 from ui.theme import (
-    PRIMARY,
-    CYAN,
-    BG,
-    RADIUS_LG,
-    _c,
-    _primary,
-    load_jarvis_fonts,
     jarvis_logo_icon,
-    tooltip_qss,
 )
 from ui.bars import TopBar, BottomBar
 from ui.sidebar import HudSidebar
@@ -58,17 +44,13 @@ from ui.components.terminal import TerminalPanel
 from ui.popovers import QuickSettingsPopover, SystemStatusPopover
 from ui.command_palette import CommandPalette
 from config.settings import config
-from core.brain import ask_claude_async, TAG_INTENT_MAP
+from core.brain import TAG_INTENT_MAP
 from core.controllers.command_controller import CommandController
 from core.controllers.confirmation_controller import ConfirmationController
-from core.executor import dispatch
 from core.history_store import history_store
 from core.controllers.runtime_context import RuntimeCommandContext
-from core.controllers.response_composer import compose_execution_response
-from core.controllers.session_flags import persist_session_flags, sync_session_flag_views
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
-from core.browser import browser
 
 from ui.main_window.voice_mixin import _VoiceMixin
 from ui.main_window.confirm_mixin import _ConfirmMixin
@@ -82,8 +64,6 @@ from ui.main_window.lifecycle_mixin import _LifecycleMixin
 # share them without importing this module (which would be an import cycle).
 from ui.main_window.constants import (  # noqa: E402
     _SETTINGS_NAV_IDX,
-    _HISTORY_MAX,
-    _TTS_MAX_CHARS,
 )
 
 class JarvisWindow(

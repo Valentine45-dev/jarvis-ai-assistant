@@ -968,6 +968,67 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+R2-17a  main.py decomposition into the ui/main_window package
+-----------------------------------------------------------------------
+Background: the 1844-LOC root main.py was split. JarvisWindow stays ONE
+QMainWindow/QObject — all 9 pyqtSignals and every connect() live on it in
+__init__ (window.py). Method groups moved verbatim into plain mixin classes
+(the core/browser pattern):
+  ui/main_window/window.py            — JarvisWindow shell: signals + __init__ + _INTENT_HUD
+  ui/main_window/app.py               — main() bootstrap
+  ui/main_window/{voice,confirm,execution,backend_signals,settings,
+                  state_hud,lifecycle}_mixin.py
+  ui/main_window/constants.py         — shared module constants (no import cycle)
+main.py is now a 20-line shim: `from ui.main_window import JarvisWindow, main`.
+Pure structural move — zero behaviour change. Launch contract unchanged.
+
+WHY a manual pass is required: pytest never instantiates JarvisWindow, so the
+suite alone cannot prove Qt signal/slot wiring or that the four virtual
+overrides (paintEvent/nativeEvent/closeEvent/resizeEvent) — now hosted on
+mixins — are still dispatched by Qt. They ARE: proven empirically (see harness).
+
+Do this (real launch + interactions):
+  1. `uv run python main.py` -> window paints fully (gradient background =
+     paintEvent firing from _StateHudMixin), maximises, no ImportError.
+  2. Click through every sidebar page (Dashboard/Voice/Automation/History/
+     Settings/Terminal) -> _nav works.
+  3. Type "what time is it" -> spoken + transcript (full execution pipeline).
+  4. Type "delete <some test file>" -> confirm card -> "yes" -> executes
+     (proves the _resume_executor_confirm main-thread hop / _ConfirmMixin).
+  5. Open YouTube then a "search for lofi and play the first result" style
+     two-step workflow -> runs without "Cannot switch to a different thread"
+     (proves dispatch()+Playwright stayed on the Qt main thread).
+  6. Win+J from another app -> window summons (nativeEvent on _LifecycleMixin).
+  7. Toggle Quick Settings (mic/tts/auto-confirm/dim) -> persists (_SettingsMixin).
+  8. Close the window -> clean shutdown, no hung thread (closeEvent ordering:
+     wake_detector.stop -> _stop_rtt_thread -> browser.stop -> history_store.close).
+  PASS: every behaviour identical to pre-split.
+
+Automated proof harness (instantiates the real window — NOT a pytest test):
+  uv run python tests/smoke_window.py
+  -> reports which class hosts each Qt virtual and that Qt fired it, e.g.:
+       paintEvent host=_StateHudMixin    fired=N
+       resizeEvent/closeEvent/nativeEvent host=_LifecycleMixin  fired=N
+     and drives _nav, _set_state, a status toast, confirm card show/hide, and a
+     real tell_time command through the full execution pipeline. RESULT: PASS.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_main_window_structure.py
+  -> public surface re-exported from main + package; JarvisWindow MRO contains
+     all 7 mixins; all 9 pyqtSignals stay class attrs of JarvisWindow (NOT on any
+     mixin); cross-cutting constants reachable.
+  uv run pytest -q -m qt tests/test_workflow_thread_hop.py
+  -> the executor confirm thread-hop (_resume_executor_confirm QueuedConnection)
+     still lands the callback on the main thread.
+
+NOTE (mixin-hosted Qt virtuals): this worked — Qt dispatches virtual overrides
+defined on a plain mixin as long as the final type is the QObject subclass.
+Proven in Slice 2 before relying on it. The documented fallback (had paintEvent
+NOT fired from the mixin) was to keep all four event handlers on JarvisWindow in
+window.py; it was not needed.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
