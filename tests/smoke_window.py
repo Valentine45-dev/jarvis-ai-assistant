@@ -90,6 +90,14 @@ def main() -> int:
         w._on_status_signal("smoke-test status")
         app.processEvents()
 
+        # Confirm-card show/hide (exercises _ConfirmMixin UI methods on the real
+        # instance, no executor/TTS side effects). The thread-hop itself is
+        # covered by tests/test_workflow_thread_hop.py.
+        w._show_confirm_card("Smoke confirm?")
+        app.processEvents()
+        w._hide_confirm_card()
+        app.processEvents()
+
         # Force a resize to dispatch resizeEvent again deterministically.
         w.resize(1300, 820)
         for _ in range(10):
