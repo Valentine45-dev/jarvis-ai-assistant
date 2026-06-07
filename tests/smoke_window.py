@@ -98,6 +98,20 @@ def main() -> int:
         w._hide_confirm_card()
         app.processEvents()
 
+        # Full execution pipeline on the real instance, no network: a local
+        # jarvis_meta/tell_time brain result drives _on_brain_result ->
+        # _execute_result -> dispatch -> _finish_execute -> compose_execution_
+        # response -> TTS lockstep + history/HUD updates.
+        w._on_brain_result({
+            "intent": "jarvis_meta", "action": "tell_time", "parameters": {},
+            "confidence": 0.99, "response": "Checking the time.",
+            "hud_status": "STANDBY", "requires_confirmation": False,
+        })
+        for _ in range(20):
+            app.processEvents()
+        if not w._history or w._history[-1].get("intent") != "jarvis_meta":
+            failures.append("execution pipeline did not record the tell_time result in history")
+
         # Force a resize to dispatch resizeEvent again deterministically.
         w.resize(1300, 820)
         for _ in range(10):
