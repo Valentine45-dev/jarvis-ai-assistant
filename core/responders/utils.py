@@ -167,8 +167,13 @@ def speech_compact(text: str) -> str:
         lambda m: compact_path_for_speech(m.group(0)),
         out,
     )
+    # (?<!\w): only match an absolute-style /a/b/c path that STARTS at a
+    # boundary (start, space, quote, paren…), never a "/tail" glued to a
+    # preceding word. Without this, a Windows path already compacted above to
+    # "tests/requirements.txt" gets its "/requirements.txt" re-matched and the
+    # slash stripped → "testsrequirements.txt".
     out = re.sub(
-        r"/(?:[^/\s]+/)*[^/\s]+",
+        r"(?<!\w)/(?:[^/\s]+/)*[^/\s]+",
         lambda m: compact_path_for_speech(m.group(0)),
         out,
     )

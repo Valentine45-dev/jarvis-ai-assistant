@@ -1028,6 +1028,31 @@ NOT fired from the mixin) was to keep all four event handlers on JarvisWindow in
 window.py; it was not needed.
 
 
+SPEECH - file paths in spoken/displayed text keep their separator
+-----------------------------------------------------------------------
+Background: speech_compact() shortens long paths for TTS (C:\a\b\c\file.txt ->
+"c/file.txt"). A double-compaction bug stripped the separator on Windows paths:
+the drive-letter pass produced "tests/requirements.txt", then the unix-path pass
+re-matched the "/requirements.txt" tail and dropped the slash -> "testsrequire-
+ments.txt". Fixed with a (?<!\w) lookbehind so the unix-path regex only matches a
+path that STARTS at a boundary, never a "/tail" glued to a preceding word.
+
+Do this:
+  1. Ask to delete a file that doesn't exist in a SUB-folder, e.g.
+     "delete requirements.txt in the jarvis-project/tests/ folder" (when it's
+     actually in root).
+  PASS (fixed): the spoken/shown error reads "...tests/requirements.txt..."
+                (separator intact), NOT "testsrequirements.txt".
+  2. Any path JARVIS speaks (screenshot saved, file created) reads as
+     "parent/name" with the slash present.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_speech_compact.py
+  -> Windows path keeps its separator (no "testsrequirements.txt"); compacts to
+     parent/name; genuine absolute unix paths still compact; a glued "/tail" is
+     left alone; plain text untouched.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
