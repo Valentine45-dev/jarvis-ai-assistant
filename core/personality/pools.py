@@ -97,6 +97,16 @@ _P: dict[tuple, dict] = {
             "Couldn't capture that. {e}",
         ],
     },
+    # list_tabs output IS the spoken answer — {o} is the speech-cleaned tab list
+    # (see render._clean_tabs_for_speech). Without this it'd fall back to the
+    # generic ack and the user would hear "pulling up tabs" but not the names.
+    ("browser_automation", "list_tabs"): {
+        "ok": ["{o}"],
+        "err": [
+            "Couldn't read the tabs — {e}",
+            "Tab list failed. {e}",
+        ],
+    },
 
     # ── SYSTEM CONTROL ───────────────────────────────────────────────
     ("system_control", "screenshot"): {

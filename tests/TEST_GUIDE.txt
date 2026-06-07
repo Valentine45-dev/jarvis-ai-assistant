@@ -887,6 +887,34 @@ LIVE parity runner (opens real Edge + Firefox windows, hits Haiku + network):
      edge 25/25, firefox 25/25 — full Chrome parity confirmed on both engines.
 
 
+BROWSER - "list my tabs" is now SPOKEN, not just shown
+-----------------------------------------------------------------------
+Background: list_tabs used to speak a generic ack ("Pulling up every open tab")
+while the actual tab names only appeared in the terminal — you had to ask "what
+are the names?" to hear them. list_tabs is now in _OUTPUT_IS_RESPONSE, and
+render._clean_tabs_for_speech turns the terminal listing into a natural spoken
+sentence.
+
+Do this:
+  1. Open a couple of tabs (e.g. youtube + github), then "list my tabs" /
+     "what tabs do I have open".
+  PASS (fixed): JARVIS SPEAKS the list — e.g. "2 tabs open: YouTube; GitHub,
+                active." (titles, with the active one called out). The terminal
+                still shows the full numbered "1. host — title *" listing.
+  2. Blank/untitled tab -> spoken as "a blank tab"; an untitled non-blank tab
+     falls back to its host.
+
+  Scope note: only list_tabs changed. Other read commands already spoke their
+  output (read_page, status_report, list_voices, list_reminders, list_workflows,
+  file reads, weather, OCR, vision) — untouched.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_list_tabs_speech.py
+  -> list_tabs is in _OUTPUT_IS_RESPONSE; _clean_tabs_for_speech formats the
+     listing (active marker, blank-tab + host fallbacks); the assembler speaks
+     the tab list as primary and drops the generic brain ack.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

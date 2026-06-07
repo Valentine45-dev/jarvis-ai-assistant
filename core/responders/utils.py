@@ -57,6 +57,7 @@ _SKIP_TTS: frozenset = frozenset({
 _OUTPUT_IS_RESPONSE: frozenset = frozenset({
     ("browser_automation", "read_page"),
     ("browser_automation", "extract_text"),
+    ("browser_automation", "list_tabs"),
     ("read_screen",        "*"),
     ("code_execution",     "*"),
     ("file_operation",     "read_file"),

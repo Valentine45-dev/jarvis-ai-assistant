@@ -92,6 +92,45 @@ def _clean_page_for_speech(raw: str, cap: int = 400) -> str:
     return text[:cap] + ("…" if len(text) > cap else "")
 
 
+def _clean_tabs_for_speech(raw: str) -> str:
+    """Turn browser.list_tabs() output into a natural spoken sentence.
+
+    The terminal form is ``N tabs open (* = active):`` + numbered
+    ``  i. host — title *`` lines — fine to read but clunky to *hear* (the
+    asterisk, the ``(* = active)`` legend, ``(no title)``). This reduces it to
+    e.g. "2 tabs open: GitHub, active; and a blank tab." so the TTS says the
+    names instead of a generic ack."""
+    import re as _re
+    lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
+    if not lines:
+        return "No open tabs."
+    head = ""
+    items: list[str] = []
+    for ln in lines:
+        m = _re.match(r"^\d+\.\s*(.+)$", ln)
+        if not m:
+            hm = _re.match(r"^(\d+)\s+tabs?\s+open", ln, _re.I)
+            if hm:
+                head = ln.split("(", 1)[0].strip().rstrip(":")
+            continue
+        body = m.group(1).strip()
+        active = body.endswith("*")
+        body = body.rstrip("*").strip()
+        host, sep, title = body.partition("—")
+        host, title = host.strip(), title.strip()
+        if title and title.lower() not in ("(no title)", "no title"):
+            label = title
+        elif "about:blank" in host or host in ("", "?"):
+            label = "a blank tab"
+        else:
+            label = host
+        items.append(f"{label}, active" if active else label)
+    if not items:
+        return "No open tabs."
+    head = head or f"{len(items)} tab{'s' if len(items) != 1 else ''} open"
+    return f"{head}: " + "; ".join(items) + "."
+
+
 def say(intent: str, action: str, status: str, output: str = "", error: str = "") -> str:
     """Return a humanized, randomised spoken response.
 
@@ -121,6 +160,8 @@ def say(intent: str, action: str, status: str, output: str = "", error: str = ""
 
     if intent == "browser_automation" and action == "read_page":
         o = _clean_page_for_speech(output)
+    elif intent == "browser_automation" and action == "list_tabs":
+        o = _clean_tabs_for_speech(output)
     elif (intent, action) in _NO_TRIM or (intent, "*") in _NO_TRIM:
         o = output      # full output — never trim listings, OCR, code results
     else:
