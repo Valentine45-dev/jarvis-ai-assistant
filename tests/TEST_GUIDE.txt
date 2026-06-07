@@ -878,6 +878,14 @@ Code-level proof - from repo root:
      never auto-starts a browser. Firefox launch-config (type=firefox, prefs, no
      chromium switches) + detection.
 
+LIVE parity runner (opens real Edge + Firefox windows, hits Haiku + network):
+  uv run python tests/_live_engine_parity.py
+  -> drives EVERY browser capability on Edge then Firefox: read/extract, click
+     (selector/text/Haiku goal), fill (fields/Haiku goal), screenshots (full/
+     viewport/element/region-union), scroll, tabs (new/list/switch/close),
+     navigate + history (back/forward/refresh/hard_refresh). Last run:
+     edge 25/25, firefox 25/25 — full Chrome parity confirmed on both engines.
+
 
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
