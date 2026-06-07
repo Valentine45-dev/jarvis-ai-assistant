@@ -13,7 +13,7 @@ import shutil
 import threading
 from pathlib import Path
 
-from core.handlers.shared import _err
+from core.handlers.shared import _err, _ok
 
 # Persistent browser profile so cookies/history survive across JARVIS runs. A
 # fresh new_context() every launch looked like an anonymous throwaway browser to
@@ -405,6 +405,35 @@ class _SessionBase:
                 sess.start_err = self._pw_err or "Playwright driver unavailable"
                 return
             self._launch_into(sess)
+
+    def ensure_engine(self, engine: str | None) -> dict:
+        """Make ``engine`` the active controlled browser, launching it if needed.
+
+        Concurrent model — switching never closes anything:
+          • already active + ready → no-op
+          • alive but not active   → flip the active pointer (instant)
+          • not alive              → launch it (other engines stay alive)
+
+        Pre-checks availability so an uninstalled engine returns a clean spoken
+        reason instead of a raw Playwright error. Returns the standard
+        {success, output, error} envelope. Must run on the driver's thread.
+        """
+        with self._lock:
+            eng = self._resolve_engine(engine)
+            existing = self._sessions.get(eng)
+            if existing and existing.ready:
+                if self._active == eng:
+                    return _ok(f"Already on {eng}")
+                self._active = eng
+                return _ok(f"Switched to {eng}")
+            ok, reason = self._engine_available(eng)
+            if not ok:
+                return _err(reason)
+            self.start(eng)
+            sess = self._sessions.get(eng)
+            if sess and sess.ready:
+                return _ok(f"{eng} ready")
+            return _err((sess.start_err if sess else "") or f"Couldn't start {eng}.")
 
     def stop(self) -> None:
         """Close ALL engines and the driver. Safe to call even when not started."""

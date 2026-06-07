@@ -70,6 +70,15 @@ _WIN_ALIASES: dict[str, str] = {
     "cursor":     "cursor",
 }
 
+# Spoken browser name → controlled-engine key for open_browser. Anything not
+# here falls back to chrome. "auto" lets the session pick the first installed.
+_BROWSER_NAME_TO_ENGINE: dict[str, str] = {
+    "chrome": "chrome", "google chrome": "chrome", "google": "chrome",
+    "edge": "edge", "microsoft edge": "edge", "msedge": "edge",
+    "firefox": "firefox", "mozilla": "firefox", "mozilla firefox": "firefox",
+    "auto": "auto", "default": "auto",
+}
+
 _WIN_APPID_PREFIX = "__WIN_APPID__:"
 _WIN_PROTO_PREFIX = "__WIN_PROTO__:"
 
@@ -544,19 +553,25 @@ def _handle_open_app_inner(action: str, params: dict) -> dict:
         return _ok(f"Opened: {target}")
 
     if action == "open_browser":
-        browser_name = params.get("browser", "chrome").lower()
-        _tlog(f"❯ launch {browser_name}")
-        if not browser.is_ready:
-            browser.start()
-        if browser.is_ready:
-            return _ok(f"Browser ready — {browser_name}")
-        browsers = {"chrome": "chrome", "firefox": "firefox", "edge": "msedge"}
-        exe = browsers.get(browser_name, "chrome")
+        browser_name = (params.get("browser") or "chrome").lower().strip()
+        engine = _BROWSER_NAME_TO_ENGINE.get(browser_name, "chrome")
+        _tlog(f"❯ {engine} browser")
+        # Drive the controlled engine: launches if cold, switches if already
+        # alive (instant pointer flip — closes nothing), no-op if already active.
+        result = browser.ensure_engine(engine)
+        if result.get("success"):
+            _tlog(f"✓ {result.get('output') or engine}")
+            return result
+        # Controlled launch failed (e.g. profile in use). If the real app exists,
+        # fall back to an uncontrolled launch so the user still gets the browser;
+        # otherwise surface the clean reason (e.g. "Edge isn't installed").
+        exe = {"chrome": "chrome", "edge": "msedge", "firefox": "firefox"}.get(engine, "chrome")
         if shutil.which(exe):
             subprocess.Popen([exe])
+            _tlog(f"✓ opened {browser_name} (uncontrolled)")
             return _ok(f"Opened {browser_name}")
-        webbrowser.open("about:blank")
-        return _ok("Opened default browser")
+        _tlog(f"✗ {result.get('error') or 'browser unavailable'}")
+        return result
 
     if action in ("open_calculator", "open_notepad"):
         app_key = action.replace("open_", "")

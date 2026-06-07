@@ -802,6 +802,42 @@ Code-level proof - from repo root:
      _recover() relaunches only the active engine. Chrome launch kwargs unchanged.
 
 
+BROWSER - control Edge / switch engines — PHASE 2 (live, no confirm)
+-----------------------------------------------------------------------
+Background: "open edge" / "switch to firefox" now actually changes which browser
+JARVIS controls. Engines run concurrently — switching is an instant pointer flip
+that closes NOTHING (no confirm). Bare commands after a switch hit the now-active
+engine. (Firefox needs its one-time build — see Phase 3; until then "open
+firefox" may report it isn't installed, which is the correct clean error.)
+
+Do this:
+  1. "open chrome" -> Chrome controlled as before. Navigate somewhere.
+  2. "open edge"   -> Debug shows open_app/open_browser browser="edge". Terminal:
+                      "❯ edge browser" → "✓ edge ready". A controlled Edge window
+                      opens (fresh Edge profile, not your logged-in one). Chrome
+                      STAYS open in the background.
+  PASS: Edge is now the active browser.
+  3. "go to youtube" / "screenshot the browser" -> these hit EDGE now.
+  4. "switch to chrome" -> instant, no new window, Chrome is active again, your
+                      Chrome tabs are exactly as you left them (nothing closed).
+  PASS: switching back is instant and lossless.
+  5. "open edge" again while Edge already active -> "Already on edge", no-op.
+
+  Engine-vs-tab routing check (must NOT confuse the two):
+    - "switch to edge"        -> open_browser (engine)   [browser app]
+    - "switch to the youtube tab" -> switch_tab (tab)    [open site/tab]
+
+  Not installed: "open firefox" with no FF build -> spoken "Firefox engine isn't
+  installed — run: playwright install firefox" (clean, no crash). Same shape for
+  Edge on a machine without Edge.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_browser_engine_switch.py
+  -> ensure_engine: cold launch (edge→channel msedge); switch = pointer flip, no
+     relaunch, nothing closed; already-active no-op; not-installed clean error.
+     open_browser handler maps spoken name → engine and drives ensure_engine.
+
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

@@ -75,7 +75,7 @@ Open a desktop application, URL, or system utility.
 
 **Actions:**
 
-- `open_browser` — Open default browser or specific browser (Chrome, Firefox, Edge)
+- `open_browser` — Open / switch the **controlled** browser engine (Chrome, Edge, or Firefox). Set `browser` to `chrome` | `edge` | `firefox` (or `auto`). JARVIS drives one active engine but can keep several alive at once; switching is instant and **closes nothing**. Use for *"open chrome"*, *"open edge"*, *"open firefox"*, **and for switching engines**: *"switch to edge"*, *"switch to firefox"*, *"use chrome"*, *"control edge instead"*, *"go to firefox"* (meaning the browser app). After this, every browser command (navigate, click, screenshot, scroll, tabs) operates on the now-active engine. **Do not** route a *browser-engine* switch to `browser_automation/switch_tab` — that is for switching **tabs inside** the current browser, not switching Chrome↔Edge↔Firefox.
 - `open_vscode` — Open VS Code
 - `open_terminal` — Open terminal/command prompt
 - `open_file_manager` — Open file explorer/finder
@@ -90,10 +90,15 @@ Open a desktop application, URL, or system utility.
 ```json
 { "app_name": "string — application name" }
 { "url": "string — full URL to open" }
-{ "browser": "string — optional: chrome|firefox|edge" }
+{ "browser": "string — optional: chrome|firefox|edge|auto" }
 ```
 
 **HUD Label:** `LAUNCHING APP`
+
+**Browser engine — `open_browser` vs `switch_tab` (read before routing any "switch to X"):**
+- *"open edge"* / *"switch to firefox"* / *"use chrome"* — X is a **browser** (Chrome/Edge/Firefox) → `open_app` / `open_browser` with `browser: "<engine>"`. This changes which browser JARVIS controls.
+- *"switch to the youtube tab"* / *"go to my gmail tab"* — X is an **open tab/site** inside the current browser → `browser_automation` / `switch_tab` with `target`.
+- Tie-breaker: if X ∈ {chrome, edge, firefox} (the browser app itself) → `open_browser`. If X is a website/topic/tab title → `switch_tab`.
 
 -----
 
@@ -1236,6 +1241,40 @@ The `response` field is the **primary spoken output** — it is read aloud exact
 ```
 
 *(On the next identical command, response might be: "On it — pulling Chrome up now." or "Launching Chrome — give it a second.")*
+
+-----
+
+**Input:** `"Open Edge"` (or `"switch to Edge"`, `"control Edge instead"`)
+
+```json
+{
+  "intent": "open_app",
+  "action": "open_browser",
+  "parameters": { "browser": "edge" },
+  "confidence": 0.97,
+  "response": "Switching over to Edge.",
+  "hud_status": "LAUNCHING APP",
+  "requires_confirmation": false
+}
+```
+
+*(Switching engines closes nothing — Chrome stays alive in the background. Bare commands after this hit Edge.)*
+
+-----
+
+**Input:** `"Switch to Firefox"`
+
+```json
+{
+  "intent": "open_app",
+  "action": "open_browser",
+  "parameters": { "browser": "firefox" },
+  "confidence": 0.96,
+  "response": "Bringing Firefox up.",
+  "hud_status": "LAUNCHING APP",
+  "requires_confirmation": false
+}
+```
 
 -----
 
