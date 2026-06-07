@@ -59,10 +59,12 @@ class _TabsMixin:
 
     # ── Phase 2: Screenshots ──────────────────────────────────────────────────
 
-    def screenshot_page(self, path: str | None = None) -> dict:
-        """Full-page screenshot. Saves to Desktop if no path given."""
+    def screenshot_page(self, path: str | None = None, full_page: bool = True) -> dict:
+        """Page screenshot. full_page=True (default) captures the entire scrollable
+        page; full_page=False captures only the visible viewport. Saves to Desktop
+        if no path given."""
         from pathlib import Path
-        _tlog("❯ browser screenshot")
+        _tlog(f"❯ browser screenshot ({'full page' if full_page else 'visible area'})")
         with self._lock:
             guard = self._not_ready()
             if guard:
@@ -70,7 +72,7 @@ class _TabsMixin:
                 return guard
             try:
                 save_path = self._resolve_shot_path(path)
-                self._page.screenshot(path=save_path, full_page=True)
+                self._page.screenshot(path=save_path, full_page=full_page)
                 _tlog(f"✓ saved → {Path(save_path).name}")
                 return _ok(f"Screenshot saved: {save_path}")
             except Exception as exc:

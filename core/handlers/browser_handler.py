@@ -5,6 +5,16 @@ from __future__ import annotations
 from core.handlers.shared import _err, _set_page_cache
 
 
+def _as_bool(v) -> bool:
+    """Coerce a brain-supplied value to bool (JSON true/false arrive as Python
+    bool; strings like 'false'/'no'/'0' are handled too)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "no", "0", "off", "")
+    return bool(v)
+
+
 def _is_vague_selector(selector: str) -> bool:
     """A selector is 'vague' when it lacks CSS sigils that mark a precise locator.
 
@@ -97,8 +107,16 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
     if action == "screenshot":
         selector = params.get("selector", "")
         path     = params.get("save_path") or None
+        # full_page defaults True (whole scrollable page); the brain sets it False
+        # for "just the visible part / current view". Accept a couple of aliases.
+        fp_raw = params.get("full_page")
+        if fp_raw is None:
+            fp_raw = params.get("viewport_only")
+            full_page = True if fp_raw is None else not _as_bool(fp_raw)
+        else:
+            full_page = _as_bool(fp_raw)
         return (browser.screenshot_element(selector, path) if selector
-                else browser.screenshot_page(path))
+                else browser.screenshot_page(path, full_page=full_page))
 
     if action == "close_tab":
         return browser.close_tab(

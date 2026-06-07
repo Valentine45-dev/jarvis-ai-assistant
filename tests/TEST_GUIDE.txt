@@ -688,6 +688,31 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+BROWSER - full page vs visible-area screenshot
+-----------------------------------------------------------------------
+Background: browser screenshots were hardcoded to full-page (entire scrollable
+page). Now you can choose: full_page defaults TRUE (whole page), and you opt into
+the visible viewport only.
+
+Do this (with a long page open, e.g. a YouTube feed):
+  1. "screenshot the browser" or "screenshot the full page" → full_page=true.
+     PASS: the PNG is the ENTIRE scrollable page (tall image, content below the
+     fold included). [default — nothing changed here.]
+  2. "screenshot just what's visible" / "the visible part" / "the current view"
+     / "what's on screen now" / "without scrolling" → full_page=false.
+     PASS: the PNG is ONLY the visible viewport (one screen height), not the
+     whole page. Debug shows the brain set "full_page": false.
+
+  (You don't need the word "viewport" — the phrases above all map to viewport-
+  only. A plain "screenshot the browser" stays full-page.)
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_browser_screenshot_fullpage.py
+  -> screenshot_page defaults full_page=True, honors full_page=False; the
+     handler's _as_bool coerces true/false/yes/no/0/1 correctly.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
