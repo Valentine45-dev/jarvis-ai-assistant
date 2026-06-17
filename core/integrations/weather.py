@@ -14,6 +14,44 @@ class WeatherClientError(Exception):
     """Raised when the weather provider cannot satisfy a request."""
 
 
+# OpenWeather returns a 2-letter ISO 3166-1 country code; spoken verbatim it
+# reads as letters ("K W"). Map the common ones to full names for TTS; unknown
+# codes fall back to the raw code (no regression, just no expansion).
+_COUNTRY_NAMES: dict[str, str] = {
+    "US": "United States", "GB": "United Kingdom", "UK": "United Kingdom",
+    "CA": "Canada", "AU": "Australia", "NZ": "New Zealand", "IE": "Ireland",
+    "FR": "France", "DE": "Germany", "ES": "Spain", "PT": "Portugal",
+    "IT": "Italy", "NL": "Netherlands", "BE": "Belgium", "CH": "Switzerland",
+    "AT": "Austria", "SE": "Sweden", "NO": "Norway", "DK": "Denmark",
+    "FI": "Finland", "IS": "Iceland", "PL": "Poland", "CZ": "Czechia",
+    "GR": "Greece", "HU": "Hungary", "RO": "Romania", "BG": "Bulgaria",
+    "UA": "Ukraine", "RU": "Russia", "TR": "Turkey", "HR": "Croatia",
+    "RS": "Serbia", "SK": "Slovakia", "SI": "Slovenia", "LT": "Lithuania",
+    "LV": "Latvia", "EE": "Estonia", "LU": "Luxembourg",
+    "CN": "China", "JP": "Japan", "KR": "South Korea", "KP": "North Korea",
+    "IN": "India", "PK": "Pakistan", "BD": "Bangladesh", "LK": "Sri Lanka",
+    "TH": "Thailand", "VN": "Vietnam", "PH": "the Philippines", "ID": "Indonesia",
+    "MY": "Malaysia", "SG": "Singapore", "HK": "Hong Kong", "TW": "Taiwan",
+    "AE": "the United Arab Emirates", "SA": "Saudi Arabia", "QA": "Qatar",
+    "KW": "Kuwait", "BH": "Bahrain", "OM": "Oman", "JO": "Jordan",
+    "LB": "Lebanon", "IL": "Israel", "IQ": "Iraq", "IR": "Iran",
+    "EG": "Egypt", "MA": "Morocco", "DZ": "Algeria", "TN": "Tunisia",
+    "LY": "Libya", "SD": "Sudan", "NG": "Nigeria", "GH": "Ghana",
+    "LR": "Liberia", "SL": "Sierra Leone", "CI": "Ivory Coast", "SN": "Senegal",
+    "KE": "Kenya", "TZ": "Tanzania", "UG": "Uganda", "ET": "Ethiopia",
+    "ZA": "South Africa", "ZW": "Zimbabwe", "ZM": "Zambia", "CM": "Cameroon",
+    "BR": "Brazil", "AR": "Argentina", "CL": "Chile", "CO": "Colombia",
+    "PE": "Peru", "VE": "Venezuela", "MX": "Mexico", "EC": "Ecuador",
+    "UY": "Uruguay", "BO": "Bolivia", "PY": "Paraguay", "CU": "Cuba",
+}
+
+
+def _country_name(code: str) -> str:
+    """Full country name for a 2-letter ISO code; the raw code if unmapped."""
+    code = (code or "").strip()
+    return _COUNTRY_NAMES.get(code.upper(), code)
+
+
 def _api_key() -> str:
     key = (config.openweather_api_key or "").strip()
     if not key:
@@ -68,7 +106,7 @@ def get_current_weather(location: str | None = None, *, timeout: int = 8) -> dic
 
 def format_current_weather(snapshot: dict) -> str:
     place = str(snapshot.get("location") or "Unknown location").strip()
-    country = str(snapshot.get("country") or "").strip()
+    country = _country_name(str(snapshot.get("country") or "").strip())
     where = f"{place}, {country}" if country else place
     condition = str(snapshot.get("description") or snapshot.get("condition") or "unknown conditions")
 

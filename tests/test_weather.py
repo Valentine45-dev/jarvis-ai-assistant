@@ -65,7 +65,25 @@ def test_handle_weather_success(monkeypatch):
 
     out = _handle_weather("get_current_weather", {"location": "Accra"})
     assert out["success"] is True
-    assert "Weather in Accra, GH" in out["output"]
+    # Country code GH is expanded to a spoken-friendly full name.
+    assert "Weather in Accra, Ghana" in out["output"]
+
+
+def test_country_code_expanded_to_full_name():
+    # Known code -> full name (so TTS doesn't spell out "K W").
+    out = weather_mod.format_current_weather(
+        {"location": "Kuwait City", "country": "KW", "description": "clear sky"}
+    )
+    assert "Weather in Kuwait City, Kuwait" in out
+    assert ", KW" not in out
+
+
+def test_unknown_country_code_falls_back_to_code():
+    # Unmapped code is kept as-is (no crash, no regression).
+    out = weather_mod.format_current_weather(
+        {"location": "Nowhere", "country": "ZZ", "description": "clear sky"}
+    )
+    assert "Weather in Nowhere, ZZ" in out
 
 
 def test_format_spells_out_units_for_tts():
