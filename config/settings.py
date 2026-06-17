@@ -73,7 +73,11 @@ class AppConfig:
     # Display name for the user — spoken when asked e.g. "what's my name" (see CLAUDE.md + brain context).
     user_name: str = "Valentine"
     tts_provider: str = "elevenlabs"
-    tts_voice: str = "male-british"
+    # Chris — natural/expressive voice that performs eleven_v3 delivery tags
+    # ([whispers]/[sarcastic]/[excited]/[curious]). The previous default
+    # (male-british / George) is a calm narration voice that can't perform
+    # those tone tags — only the sound tags ([laughs]/[sighs]) landed on it.
+    tts_voice: str = "male-casual"
     tts_speed: int = 100
     mic_sensitivity: int = 70
     noise_gate: bool = True
