@@ -1162,6 +1162,28 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Weather - spoken units are spelled out (no "41 C" / dropped degree symbol)
+-----------------------------------------------------------------------
+Background: the weather line is spoken verbatim by TTS (weather is an
+output-is-response intent). It used to read "41C, feels like 40C, humidity 19%,
+wind 9.6 m/s" - TTS said "forty-one C" and mangled %/m/s, and a "°" glyph is no
+better (ElevenLabs v3 normalization isn't guaranteed; the pyttsx3 SAPI fallback
+won't voice "°" as "degrees"). Fix: format_current_weather() now writes the
+words - "41 degrees Celsius, feels like 40 degrees, humidity 19 percent, wind
+9.6 meters per second" - deterministic on every TTS tier.
+
+Do this:
+  1. `uv run python main.py`, say "what's the weather in Kuwait City".
+  PASS: spoken as "...41 degrees Celsius, feels like 40 degrees, humidity 19
+        percent, wind 9.6 meters per second". No "41 C", no stray symbols.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_weather.py
+  -> format spells out degrees Celsius / percent / meters per second and contains
+     no raw glyphs (°, 41C, 19%, m/s).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

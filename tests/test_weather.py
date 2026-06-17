@@ -68,6 +68,27 @@ def test_handle_weather_success(monkeypatch):
     assert "Weather in Accra, GH" in out["output"]
 
 
+def test_format_spells_out_units_for_tts():
+    # The weather string is spoken verbatim — units must be words, not glyphs,
+    # so TTS doesn't say "41 C" or drop the degree symbol entirely.
+    out = weather_mod.format_current_weather({
+        "location": "Kuwait City",
+        "country": "KW",
+        "description": "clear sky",
+        "temp_c": 41,
+        "feels_like_c": 40,
+        "humidity": 19,
+        "wind_mps": 9.6,
+    })
+    assert "41 degrees Celsius" in out
+    assert "feels like 40 degrees" in out
+    assert "19 percent" in out
+    assert "9.6 meters per second" in out
+    # No raw glyphs that TTS mangles.
+    for glyph in ("°", "41C", "40C", "19%", "m/s"):
+        assert glyph not in out
+
+
 def test_handle_weather_unknown_action():
     out = _handle_weather("forecast", {})
     assert out["success"] is False

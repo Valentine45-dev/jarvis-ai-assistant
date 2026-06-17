@@ -77,13 +77,17 @@ def format_current_weather(snapshot: dict) -> str:
     humidity = snapshot.get("humidity")
     wind = snapshot.get("wind_mps")
 
+    # Spell units out — this string is spoken verbatim by TTS (weather is an
+    # output-is-response intent). A "°" / "C" / "%" / "m/s" glyph reads wrong or
+    # silent across the tiers (ElevenLabs v3 normalization isn't guaranteed, the
+    # pyttsx3 SAPI fallback won't voice "°" as "degrees"), so write the words.
     parts = [f"Weather in {where}: {condition}"]
     if temp is not None:
-        parts.append(f"{round(float(temp))}C")
+        parts.append(f"{round(float(temp))} degrees Celsius")
     if feels is not None:
-        parts.append(f"feels like {round(float(feels))}C")
+        parts.append(f"feels like {round(float(feels))} degrees")
     if humidity is not None:
-        parts.append(f"humidity {int(humidity)}%")
+        parts.append(f"humidity {int(humidity)} percent")
     if wind is not None:
-        parts.append(f"wind {float(wind):.1f} m/s")
+        parts.append(f"wind {float(wind):.1f} meters per second")
     return ", ".join(parts)
