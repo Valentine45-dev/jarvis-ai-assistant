@@ -1083,6 +1083,47 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+TTS - ElevenLabs expressiveness upgrade (eleven_v3 + voice_settings)
+-----------------------------------------------------------------------
+Background: the ElevenLabs tier was pinned to eleven_multilingual_v2, which does
+NOT perform the inline audio tags ([chuckles] / [sighs] / [whispers]) the brain
+emits - they were ignored (or risked being read literally). Now the tier uses
+eleven_v3 (the only model that performs tags) with tunable voice_settings, all
+sourced from config/jarvis.json so you can retune without code changes:
+    elevenlabs_model            "eleven_v3"
+    elevenlabs_stability        0.0   (v3 quantises to 0.0 Creative / 0.5 Natural
+                                       / 1.0 Robust - 0.0 = most expressive)
+    elevenlabs_similarity_boost 0.75
+    elevenlabs_style            0.6
+    elevenlabs_use_speaker_boost true
+If the key's tier can't reach v3, synthesis auto-falls-back to eleven_turbo_v2_5
+then eleven_flash_v2_5 (both tag-blind, so audio tags are stripped before
+synthesis on them) and caches the working model for the session. Quota/auth/
+network errors still FAIL FAST and drop to Gemini -> pyttsx3 (tier chain
+unchanged); only a model-access error walks the fallback. request_options stay
+max_retries=0 + 15s timeout.
+
+Do this (needs a funded ELEVENLABS_API_KEY in .env + TTS ON, not muted):
+  1. Fresh `uv run python main.py`, say "hello" (or "tell me a joke").
+  PASS: JARVIS speaks in the ElevenLabs voice; if the brain included a tag like
+        [chuckles], you hear an actual chuckle/breath, not the word "chuckles".
+  2. Edit config/jarvis.json -> "elevenlabs_stability": 0.5, relaunch, repeat.
+  PASS: delivery is noticeably flatter/steadier (Natural mode) - proves the
+        voice_settings are live and config-driven.
+
+Live one-shot (REAL API call + audio, no app needed) - from repo root:
+  uv run python tests/_live_elevenlabs_v3.py
+  -> prints "model served = 'eleven_v3'" when v3 is on your tier (speaks a tagged
+     line). If your tier lacks v3 it prints the fallback model it used instead.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_tts_elevenlabs_v3.py
+  -> model_id + voice_settings forwarded on stream/convert/probe; tags kept on
+     v3 and stripped on fallback models; model-unavailable walks v3->turbo->flash
+     and caches the winner; quota error fails fast WITHOUT a fallback walk.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

@@ -50,6 +50,21 @@ class AppConfig:
     # this field lets a power user override that mapping with a raw voice
     # name (Kore, Puck, Charon, Zephyr, Aoede, ...).
     gemini_voice: str = ""
+    # ── ElevenLabs expressiveness (eleven_v3 + voice_settings) ────────────────
+    # Model id sent on every ElevenLabs synth call. Default eleven_v3 — the only
+    # model that *performs* the inline audio tags ([chuckles]/[sighs]/[whispers])
+    # the brain emits. If the key's tier can't access v3, core/tts_elevenlabs
+    # falls back at runtime to eleven_turbo_v2_5 → eleven_flash_v2_5 (which can't
+    # do tags, so the tags are stripped before synthesis on those models).
+    elevenlabs_model: str = "eleven_v3"
+    # voice_settings sent with every call. NOTE: on eleven_v3 `stability` is
+    # quantised to 0.0 (Creative) / 0.5 (Natural) / 1.0 (Robust) — any other
+    # value is rounded to the nearest by the API. 0.0 = most expressive + most
+    # responsive to audio tags (the point of the v3 upgrade).
+    elevenlabs_stability: float = 0.0
+    elevenlabs_similarity_boost: float = 0.75
+    elevenlabs_style: float = 0.6
+    elevenlabs_use_speaker_boost: bool = True
     openweather_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
     wake_word: str = "jarvis"

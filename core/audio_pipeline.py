@@ -534,6 +534,11 @@ class TtsEngine:
                             text, _on_ready_once, on_done, self._notify,
                             voice_id=_EL_VOICES.get(config.tts_voice, _DEFAULT_VOICE_ID),
                             api_key=config.elevenlabs_api_key,
+                            model=config.elevenlabs_model,
+                            stability=config.elevenlabs_stability,
+                            similarity_boost=config.elevenlabs_similarity_boost,
+                            style=config.elevenlabs_style,
+                            use_speaker_boost=config.elevenlabs_use_speaker_boost,
                         )
                         return
                     except Exception as exc:
@@ -607,6 +612,11 @@ class TtsEngine:
                 el_voices=_EL_VOICES,
                 default_id=_DEFAULT_VOICE_ID,
                 text=text,
+                model=config.elevenlabs_model,
+                stability=config.elevenlabs_stability,
+                similarity_boost=config.elevenlabs_similarity_boost,
+                style=config.elevenlabs_style,
+                use_speaker_boost=config.elevenlabs_use_speaker_boost,
             )
 
     def _notify(self, cb: Callable[[], None] | None) -> None:
