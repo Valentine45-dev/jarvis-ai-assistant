@@ -1172,15 +1172,47 @@ won't voice "°" as "degrees"). Fix: format_current_weather() now writes the
 words - "41 degrees Celsius, feels like 40 degrees, humidity 19 percent, wind
 9.6 meters per second" - deterministic on every TTS tier.
 
+Also: the 2-letter country code is expanded to a full name (it used to read as
+letters, "K W"). "KW" -> "Kuwait", "GH" -> "Ghana", "GB" -> "United Kingdom",
+etc.; unmapped codes keep the raw code (no regression).
+
 Do this:
   1. `uv run python main.py`, say "what's the weather in Kuwait City".
-  PASS: spoken as "...41 degrees Celsius, feels like 40 degrees, humidity 19
-        percent, wind 9.6 meters per second". No "41 C", no stray symbols.
+  PASS: spoken as "Weather in Kuwait City, Kuwait: ...41 degrees Celsius, feels
+        like 40 degrees, humidity 19 percent, wind 9.6 meters per second". No
+        "K W", no "41 C", no stray symbols.
 
 Code-level proof - from repo root:
   uv run pytest -q tests/test_weather.py
-  -> format spells out degrees Celsius / percent / meters per second and contains
-     no raw glyphs (°, 41C, 19%, m/s).
+  -> format spells out degrees Celsius / percent / meters per second, expands the
+     country code to a full name, and contains no raw glyphs (°, 41C, 19%, m/s).
+
+
+-----------------------------------------------------------------------
+TTS - first clip of a session performs its audio tag (MCI cold-start)
+-----------------------------------------------------------------------
+Background: the FIRST spoken line of a session sometimes didn't perform its
+audio tag (e.g. a joke's [laughs]), while every later line did. Cause was in
+play_mp3_stream (core/tts_elevenlabs.py): it started Windows MCI playback on the
+FIRST streamed chunk, and MCI fixes the clip length at `open` - so on a cold
+first request (chunks dribble in slowly) it played only that opening sliver and
+stopped, dropping the rest of the clip including a tag past the first words.
+Warm requests arrived nearly complete by play-start, so they sounded fine - why
+only the first line was affected. Fix: buffer the whole stream to the temp file
+FIRST, then open + play the complete file, so MCI always sees the full duration.
+Trade-off: playback now starts after synthesis finishes (negligible for short
+assistant lines); the tier chain / fail-fast request_options are unchanged.
+
+Do this:
+  1. Fresh `uv run python main.py` (cold start), FIRST thing say "tell me a joke".
+  PASS (fixed): the whole joke plays AND you hear the [laughs] - on the very
+        first line, same as later lines.
+  OLD (broken): first line cut short / no laugh; subsequent jokes were fine.
+  2. Ask for a few more jokes - all still perform their tags.
+
+Note: no unit test - this is Windows-MCI audio glue (needs a real audio device),
+verified by ear like the other playback paths. The tag-reaches-API trace
+([tts] ElevenLabs -> API text=...) still proves the text side is intact.
 
 
 -----------------------------------------------------------------------

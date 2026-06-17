@@ -40,71 +40,44 @@ def play_mp3_stream(
     on_done:  Callable[[], None] | None,
     notify_fn: Callable[[Callable | None], None],
 ) -> None:
-    """Write MP3 chunks to a temp file and play via Windows MCI as they arrive."""
+    """Buffer the MP3 stream to a temp file, then play the COMPLETE file via MCI.
+
+    Why not play incrementally as chunks arrive: Windows MCI fixes the media
+    length at `open`, so playback kicked off on the first (tiny) chunk only
+    played that sliver and stopped — which silently dropped the rest of the
+    FIRST clip of a session (cold network dribbles the chunks in slowly),
+    including any audio tag past the opening words. Warm requests happened to
+    arrive nearly complete by the time play started, so they sounded fine, which
+    is exactly why only the first line of a session lost its tag. Writing the
+    whole stream out first, then opening + playing, makes MCI see the full
+    duration every time. For short assistant lines the extra wait is negligible.
+    """
     import ctypes
     import os as _os
     import tempfile
-    import time
 
     mci = ctypes.windll.winmm.mciSendStringW
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         tmp_path = f.name
 
-    alias   = f"jarvis_tts_{threading.get_ident()}"
-    opened  = False
-    playing = False
-
-    def _send(cmd: str) -> int:
-        return mci(cmd, None, 0, None)
-
-    def _try_start() -> bool:
-        nonlocal opened, playing
-        if opened:
-            return True
-        if _send(f'open "{tmp_path}" type mpegvideo alias {alias}') != 0:
-            return False
-        opened = True
-        if _send(f"play {alias}") != 0:
-            _send(f"close {alias}")
-            opened = False
-            return False
-        playing = True
-        notify_fn(on_ready)
-        return True
-
-    def _wait_done() -> None:
-        if not opened:
-            return
-        status = ctypes.create_unicode_buffer(64)
-        for _ in range(600):    # 60 s safety cap
-            status.value = ""
-            if mci(f"status {alias} mode", status, 64, None) != 0:
-                break
-            if status.value.lower() in {"stopped", "not ready"}:
-                break
-            time.sleep(0.1)
-
+    alias  = f"jarvis_tts_{threading.get_ident()}"
+    opened = False
     try:
         with open(tmp_path, "ab", buffering=0) as audio_file:
             for chunk in chunks:
-                if not chunk:
-                    continue
-                audio_file.write(chunk)
-                audio_file.flush()
-                if not playing:
-                    _try_start()
+                if chunk:
+                    audio_file.write(chunk)
 
-        if playing:
-            _wait_done()
-        else:
-            notify_fn(on_ready)
-            if _send(f'open "{tmp_path}" type mpegvideo alias {alias}') == 0:
-                opened = True
-                _send(f"play {alias} wait")
+        # on_ready right before playback so the UI "speaking" cue lines up with
+        # audio start (not with first-byte-received).
+        notify_fn(on_ready)
+        if mci(f'open "{tmp_path}" type mpegvideo alias {alias}', None, 0, None) == 0:
+            opened = True
+            mci(f"play {alias} wait", None, 0, None)
     finally:
         if opened:
-            _send(f"close {alias}")
+            mci(f"close {alias}", None, 0, None)
         try:
             _os.unlink(tmp_path)
         except OSError:
