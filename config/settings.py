@@ -50,6 +50,17 @@ class AppConfig:
     # this field lets a power user override that mapping with a raw voice
     # name (Kore, Puck, Charon, Zephyr, Aoede, ...).
     gemini_voice: str = ""
+    # ── Streaming STT (real-time transcription) ───────────────────────────────
+    # "google"   = legacy batch path (record-then-send; default; no key needed)
+    # "deepgram" = real-time websocket streaming via core/stt (nova-3). Flip this
+    # to "deepgram" (with DEEPGRAM_API_KEY in .env) to enable streaming; falls
+    # back to the Google batch path automatically if the key is missing/fails.
+    stt_provider: str = "google"
+    deepgram_api_key: str = ""           # from .env; never persisted to jarvis.json
+    deepgram_model: str = "nova-3"
+    stt_endpointing_ms: int = 300        # trailing silence (ms) before a segment finalizes
+    stt_utterance_end_ms: int = 1000     # trailing silence (ms) before UtteranceEnd fires
+    stt_language: str = "en-US"
     # ── ElevenLabs expressiveness (eleven_v3 + voice_settings) ────────────────
     # Model id sent on every ElevenLabs synth call. Default eleven_v3 — the only
     # model that *performs* the inline audio tags ([chuckles]/[sighs]/[whispers])
@@ -142,6 +153,7 @@ class AppConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             vapi_api_key=os.getenv("VAPI_API_KEY", ""),
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+            deepgram_api_key=os.getenv("DEEPGRAM_API_KEY", ""),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             gemini_voice=os.getenv("GEMINI_VOICE", ""),
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
@@ -166,8 +178,8 @@ class AppConfig:
                 instance = cls(**{k: v for k, v in data.items() if k in fields})
                 # Env vars always win — API keys must come from .env, not JSON.
                 env = cls.from_env()
-                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "gemini_api_key",
-                            "openweather_api_key", "claude_model", "wake_word", "debug_mode"):
+                for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "deepgram_api_key",
+                            "gemini_api_key", "openweather_api_key", "claude_model", "wake_word", "debug_mode"):
                     env_val = getattr(env, key)
                     if env_val:
                         setattr(instance, key, env_val)
@@ -204,8 +216,8 @@ class AppConfig:
         Mirrors the pattern used in core/automation.py for workflows.json.
         """
         _SENSITIVE = {
-            "anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "gemini_api_key",
-            "openweather_api_key",
+            "anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "deepgram_api_key",
+            "gemini_api_key", "openweather_api_key",
         }
         data = {k: v for k, v in asdict(self).items() if k not in _SENSITIVE}
         tmp = _JSON_PATH.with_suffix(_JSON_PATH.suffix + ".tmp")

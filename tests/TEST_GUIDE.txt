@@ -1216,6 +1216,34 @@ verified by ear like the other playback paths. The tag-reaches-API trace
 
 
 -----------------------------------------------------------------------
+Streaming STT - Phase 1 foundation (interface + Deepgram session, NOT wired)
+-----------------------------------------------------------------------
+Background: replacing the Google batch STT (record-then-send, ~2.5s silence tail
++ HTTP round-trip) with real-time streaming. Phase 1 lays the non-breaking
+foundation: a provider-agnostic StreamingSttSession interface (core/stt/base.py),
+a Deepgram websocket implementation (core/stt/deepgram.py, nova-3), and a
+config-driven factory (core/stt/factory.py). NOTHING is wired into the live
+voice path yet - stt_provider defaults to "google", so JARVIS behaves exactly as
+before. New config (config/settings.py + .env DEEPGRAM_API_KEY):
+    stt_provider           "google" (default) | "deepgram"
+    deepgram_model         "nova-3"
+    stt_endpointing_ms     300
+    stt_utterance_end_ms   1000
+    stt_language           "en-US"
+
+Manual test: none yet - there is no behaviour change until Phase 2 wires the
+streaming loop into VoiceEngine.listen(). Phase 2 will add the live "say a
+command, watch words stream in" test.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_stt_streaming.py
+  -> factory returns None for google / missing key and a DeepgramSttSession for
+     deepgram+key; the session maps interim->on_partial, is_final->on_final,
+     UtteranceEnd->on_utterance_end, drops blank transcripts, and finish()
+     flushes + closes the socket. (No network - the websocket is faked.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
