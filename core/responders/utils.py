@@ -119,8 +119,18 @@ def count_ok_steps(output: str) -> int:
     )
 
 
+_AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
+
+
 def first_sentence(text: str, cap: int = 150) -> str:
     if not text or len(text) <= cap:
+        return text
+    # Preserve intentional inline audio tags ([laughs]/[sighs]/[whispers]…):
+    # truncating a tagged response at its first sentence drops the tag (it
+    # usually sits just before the punchline), silently killing the
+    # expressiveness it was added for — see ElevenLabs v3 tag rendering. These
+    # lines are short and capped at one tag, so keeping the whole line is safe.
+    if _AUDIO_TAG_RE.search(text):
         return text
     m = re.search(r"[.!?]", text[:cap])
     return text[:m.end()].strip() if m else text[:cap].strip()

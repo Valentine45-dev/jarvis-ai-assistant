@@ -1124,6 +1124,44 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+TTS - audio tags must survive the spoken-response pipeline (first_sentence)
+-----------------------------------------------------------------------
+Background: even with eleven_v3 + a tag-capable voice, the [laughs]/[sighs]/
+[whispers] tags weren't rendering live - JARVIS spoke the words but made no
+laugh/sigh. Root cause was NOT the API or the voice (a direct-to-API probe
+laughed on all 5 voices). It was first_sentence() in core/responders/utils.py:
+it truncates any spoken response over 150 chars at the first '.!?' to keep acks
+short - and JARVIS puts the tag just before the punchline, i.e. in the tail that
+got cut. So the tag was stripped before it ever reached ElevenLabs. Fix:
+first_sentence() now returns the full line untouched when it contains an inline
+[..] audio tag (tags are capped at one per response and these lines are short,
+so brevity isn't a concern when expressiveness was intentional). Untagged long
+responses still truncate exactly as before.
+
+Do this (needs eleven_v3 + a funded key + TTS ON, not muted):
+  1. Fresh `uv run python main.py`, say "tell me a funny joke about america".
+  PASS: the response is spoken in FULL (setup + tag + punchline) and you hear an
+        actual soft laugh where [laughs softly] sits - not just the words.
+  OLD (broken): only the first sentence was spoken; the tag (and punchline) were
+        silently dropped, so no laugh.
+  2. With debug_mode on, watch the terminal / logs/terminal.log for the line:
+        [tts] ElevenLabs -> API model='eleven_v3' text='...[laughs softly]...'
+     The tag must be PRESENT in that text= string. (This is the ground-truth
+     trace of exactly what reaches the ElevenLabs API.)
+
+Audition by ear (REAL API, costs credits) - from repo root:
+  uv run python tests/_v3_tag_probe.py voices       # same [laughs] across voices
+  uv run python tests/_v3_tag_probe.py tags male-british   # one clip per tag
+  -> writes tests/tag_audio/*.mp3 (gitignored). Listen; only ear-verified tags
+     belong in CLAUDE.md's tag list.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_first_sentence_tags.py
+  -> tagged >150-char response survives first_sentence intact (tag reaches TTS);
+     untagged long response still truncates; assembler keeps the tag end-to-end.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

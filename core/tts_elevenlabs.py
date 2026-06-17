@@ -249,6 +249,10 @@ def _synth_once(
     BEFORE any playback/on_ready fires (the stream path is primed first), so a
     model-unavailable error can be retried on the next model without the user
     ever hearing a half-spoken line."""
+    # Ground-truth trace: the EXACT string handed to the ElevenLabs API, so any
+    # upstream tag-stripping/truncation (e.g. first_sentence) is visible in the
+    # debug terminal / logs/terminal.log. Compare against what the probe sends.
+    _dbg("tts", f"ElevenLabs -> API model={model!r} text={text!r}")
     stream_fn = getattr(client.text_to_speech, "stream", None)
     if stream_fn is not None:
         chunks = stream_fn(
