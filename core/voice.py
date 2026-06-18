@@ -351,7 +351,7 @@ class VoiceEngine:
                 on_error("Microphone muted.")
             return
 
-        _dbg("voice", "starting _listen_thread (Google STT)")
+        _dbg("voice", "starting _listen_thread")
         threading.Thread(
             target=self._listen_thread,
             args=(callback, on_error, timeout, phrase_time_limit),
@@ -365,13 +365,30 @@ class VoiceEngine:
         timeout:           float,
         phrase_time_limit: float,
     ) -> None:
-        import time as _time
         _dbg("voice", "_listen_thread running")
         self._listening.set()
-        # R3-15: wait for the wake detector to confirm its mic stream is closed
-        # (real handshake) before opening ours — two RawInputStreams on one
-        # device cause PortAudio/WASAPI device-busy errors. Falls back to a short
-        # sleep if the detector isn't running or the wait times out.
+        try:
+            self._wake_handshake()
+            # Streaming path (Deepgram) when configured; otherwise None → batch.
+            # If streaming starts but fails before producing any text, it returns
+            # False and we fall through to the Google batch path for this turn.
+            session = self._make_stt_session()
+            if session is not None:
+                _dbg("voice", "using streaming STT")
+                if self._run_streaming_stt(session, callback, on_error, timeout, phrase_time_limit):
+                    return
+                _dbg("voice", "streaming STT failed to produce a result — falling back to Google batch")
+            self._run_batch_stt(callback, on_error, timeout, phrase_time_limit)
+        finally:
+            self._listening.clear()
+            _dbg("voice", "_listen_thread done")
+
+    def _wake_handshake(self) -> None:
+        """R3-15: wait for the wake detector to confirm its mic stream is closed
+        before we open ours — two RawInputStreams on one device cause
+        PortAudio/WASAPI device-busy errors. Falls back to a short sleep if the
+        detector isn't running or the wait times out."""
+        import time as _time
         try:
             from core.wake_word import wake_detector
             if wake_detector.is_running:
@@ -381,6 +398,156 @@ class VoiceEngine:
                 _time.sleep(0.05)
         except Exception:
             _time.sleep(0.2)
+
+    def _make_stt_session(self):
+        """Build a streaming session from config, or None to mean 'use batch'.
+        Never raises — any construction failure degrades to the batch path."""
+        try:
+            from core.stt import create_stt_session
+            return create_stt_session(config)
+        except Exception as exc:
+            _dbg("voice", f"create_stt_session failed ({exc}) — using batch")
+            return None
+
+    def _run_streaming_stt(
+        self,
+        session,
+        callback:          Callable[[str], None],
+        on_error:          Callable[[str], None] | None,
+        timeout:           float,
+        phrase_time_limit: float,
+        *,
+        mic_streamer=None,
+    ) -> bool:
+        """Drive a StreamingSttSession to one utterance.
+
+        Returns True when the turn was handled (text delivered via callback, or a
+        clean no-speech reported via on_error). Returns False when streaming
+        couldn't start or errored before any text — the caller then falls back to
+        the Google batch path.
+
+        `mic_streamer` is injectable for tests; in production a real MicStreamer
+        is built from config.mic_device.
+        """
+        import time as _time
+
+        finals: list[str] = []
+        finals_lock = threading.Lock()
+        last_partial = {"text": ""}
+        done = threading.Event()
+        got_speech = threading.Event()
+        err = {"msg": None}
+
+        def _interim() -> str:
+            with finals_lock:
+                joined = " ".join(p for p in finals if p).strip()
+            return joined
+
+        def _on_partial(text: str) -> None:
+            got_speech.set()
+            last_partial["text"] = text
+            tail = (_interim() + " " + text).strip()
+            self._emit("transcript_partial", tail)
+
+        def _on_final(text: str) -> None:
+            got_speech.set()
+            with finals_lock:
+                finals.append(text)
+            self._emit("transcript_partial", _interim())
+
+        def _on_utt_end() -> None:
+            done.set()
+
+        def _on_sess_error(msg: str) -> None:
+            err["msg"] = msg
+            done.set()
+
+        try:
+            session.start(
+                on_partial=_on_partial,
+                on_final=_on_final,
+                on_utterance_end=_on_utt_end,
+                on_error=_on_sess_error,
+            )
+        except Exception as exc:
+            _dbg("voice", f"streaming session start failed: {exc}")
+            self._safe_close(session)
+            return False
+
+        streamer = mic_streamer
+        if streamer is None:
+            try:
+                from core.stt import MicStreamer
+                device = config.mic_device if config.mic_device >= 0 else None
+                streamer = MicStreamer(feed=session.feed, device=device)
+            except Exception as exc:
+                _dbg("voice", f"mic streamer init failed: {exc}")
+                self._safe_close(session)
+                return False
+        try:
+            streamer.start()
+        except Exception as exc:
+            _dbg("voice", f"mic streamer start failed: {exc}")
+            self._safe_close(session)
+            return False
+
+        start_t = _time.monotonic()
+        try:
+            while not done.is_set():
+                now = _time.monotonic()
+                if not got_speech.is_set():
+                    if now - start_t >= timeout:
+                        _dbg("voice", "streaming: no speech within timeout")
+                        break
+                elif now - start_t >= timeout + phrase_time_limit:
+                    _dbg("voice", "streaming: phrase time limit reached")
+                    break
+                _time.sleep(0.05)
+        finally:
+            try:
+                streamer.stop()
+            except Exception:
+                pass
+            try:
+                session.finish()
+            except Exception:
+                pass
+
+        text = _interim() or (last_partial["text"] or "").strip()
+        if not text and err["msg"]:
+            _dbg("voice", f"streaming errored before any text ({err['msg']}) — falling back")
+            return False
+        if text:
+            _dbg("voice", f"streaming final: {text!r}")
+            self._emit("transcript_final", text)
+            try:
+                callback(text)
+            except Exception as exc:
+                _dbg("voice", f"callback error: {exc}")
+            return True
+        # Connected fine but the user genuinely didn't speak.
+        if on_error:
+            try:
+                on_error("No speech detected — try speaking louder.")
+            except RuntimeError:
+                pass
+        return True
+
+    @staticmethod
+    def _safe_close(session) -> None:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+    def _run_batch_stt(
+        self,
+        callback:          Callable[[str], None],
+        on_error:          Callable[[str], None] | None,
+        timeout:           float,
+        phrase_time_limit: float,
+    ) -> None:
+        """Legacy capture → Google batch STT path (unchanged behaviour)."""
         try:
             threshold = self._capture.calibrate_threshold(
                 duration=0.3,
@@ -405,12 +572,11 @@ class VoiceEngine:
             _dbg("voice", f"recognise() returned: {text!r}")
             if text:
                 callback(text)
-            else:
-                if on_error:
-                    try:
-                        on_error("Could not understand audio.")
-                    except RuntimeError:
-                        pass
+            elif on_error:
+                try:
+                    on_error("Could not understand audio.")
+                except RuntimeError:
+                    pass
         except _SttErrorExc as exc:
             _dbg("voice", f"SttError: {exc}")
             if on_error:
@@ -419,15 +585,12 @@ class VoiceEngine:
                 except RuntimeError:
                     pass
         except Exception as exc:
-            _dbg("voice", f"Exception in _listen_thread: {type(exc).__name__}: {exc}")
+            _dbg("voice", f"Exception in _run_batch_stt: {type(exc).__name__}: {exc}")
             if on_error:
                 try:
                     on_error(f"Voice error: {exc}")
                 except RuntimeError:
                     pass
-        finally:
-            self._listening.clear()
-            _dbg("voice", "_listen_thread done")
 
     # ── Internal ─────────────────────────────────────────────────────────────
 

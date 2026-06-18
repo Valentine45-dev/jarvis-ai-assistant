@@ -8,5 +8,6 @@ until stt_provider is flipped to "deepgram" and Phase 2 wires the streaming loop
 
 from core.stt.base import StreamingSttSession
 from core.stt.factory import create_stt_session
+from core.stt.mic_streamer import MicStreamer
 
-__all__ = ["StreamingSttSession", "create_stt_session"]
+__all__ = ["StreamingSttSession", "create_stt_session", "MicStreamer"]

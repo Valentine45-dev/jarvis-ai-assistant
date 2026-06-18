@@ -1244,6 +1244,47 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Streaming STT - Phase 2 (wired into VoiceEngine.listen, Google batch fallback)
+-----------------------------------------------------------------------
+Background: Phase 2 makes streaming actually run. VoiceEngine.listen() now
+branches: if create_stt_session(config) returns a session (stt_provider=
+"deepgram" + a key), it drives the streaming path; otherwise it uses the
+unchanged Google batch path. A new MicStreamer (core/stt/mic_streamer.py) pumps
+raw 16 kHz PCM frames into the session - no local VAD, endpointing is Deepgram's
+job. Server-side endpointing replaces the old 2.5s silence tail, so the turn
+ends as soon as you stop talking (the latency win). Turn assembly accumulates
+is_final segments; on UtteranceEnd it fires the callback (brain) exactly like
+before, so main.py is untouched. Live interim words on the HUD come in Phase 3.
+
+Safety / fallback: if streaming can't start (connect refused, mic init error) or
+errors before producing ANY text, listen() automatically falls back to the
+Google batch path for that turn. A genuine no-speech (connected, nothing said)
+is reported as "No speech detected" - NOT retried as batch.
+
+Manual test A - default unchanged (stt_provider still "google"):
+  Leave config as-is. Say "what time is it" / "open chrome" -> works exactly as
+  before (batch path). This proves Phase 2 is non-breaking by default.
+
+Manual test B - streaming live (needs DEEPGRAM_API_KEY in .env):
+  Set stt_provider = "deepgram" (config/jarvis.json or Settings), restart.
+  Wake JARVIS, say a command. Expect:
+    - the turn to END noticeably faster than batch (no ~2.5s tail), and
+    - the [voice] log to show "using streaming STT" then "streaming final: ...".
+  Pull the network mid-utterance once -> it should fall back to the Google batch
+  path (log: "streaming ... falling back to Google batch") rather than hang.
+  Stay silent through a listen window -> "No speech detected", no batch retry.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_voice_streaming.py
+  -> _run_streaming_stt assembles finals into one utterance and calls the
+     callback; uses the last partial when no final arrives; returns False (batch
+     fallback) when the session can't start or errors before any text; reports a
+     clean no-speech (not a fallback) on genuine silence; still delivers text
+     when an error arrives AFTER a final. (No mic/network - session + MicStreamer
+     are faked.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
