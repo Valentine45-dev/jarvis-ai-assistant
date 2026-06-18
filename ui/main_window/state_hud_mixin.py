@@ -65,8 +65,8 @@ class _StateHudMixin:
             wake_detector.pause()
 
         orb_map = {
-            "idle": 0, "listening": 1, "thinking": 2, "processing": 2,
-            "speaking": 3, "awaiting_confirmation": 2,
+            "idle": 0, "connecting": 1, "listening": 1, "thinking": 2,
+            "processing": 2, "speaking": 3, "awaiting_confirmation": 2,
         }
         self._dashboard.left.orb.set_state(orb_map.get(s, 0))
         self._dashboard.left.mic.set_listening(s == "listening")
@@ -81,6 +81,8 @@ class _StateHudMixin:
         # HUD status for state changes
         if s == "idle":
             self._dashboard.left.hud_status.set_status("STANDBY")
+        elif s == "connecting":
+            self._dashboard.left.hud_status.set_status("CONNECTING")
         elif s == "listening":
             self._dashboard.left.hud_status.set_status("LISTENING")
         elif s == "thinking":
@@ -103,16 +105,25 @@ class _StateHudMixin:
         pill_base = (
             f"border-radius:{RADIUS_LG}px;letter-spacing:1.5px;padding:0 20px;"
         )
-        if s == "listening":
+        if s == "connecting":
+            # Amber "hold on" cue — mic isn't live yet, don't speak.
+            self._dashboard.left.state_pill.setStyleSheet(
+                "color:rgba(255,190,50,0.90);border:1px solid rgba(255,190,50,0.40);"
+                f"background:rgba(255,190,50,0.08);{pill_base}")
+            self._dashboard.left.status_lbl.setText("Connecting…")
+            self._set_cmd_placeholder("CONNECTING…")
+        elif s == "listening":
             self._dashboard.left.state_pill.setStyleSheet(
                 f"color:{CYAN};border:1px solid rgba(0,212,255,0.40);"
                 f"background:rgba(0,212,255,0.09);{pill_base}")
             self._dashboard.left.status_lbl.setText("Listening…")
+            self._set_cmd_placeholder("LISTENING…")
         elif s == "idle":
             self._dashboard.left.state_pill.setStyleSheet(
                 "color:rgba(210,220,245,0.88);border:1px solid rgba(0,102,255,0.28);"
                 f"background:rgba(0,102,255,0.05);{pill_base}")
             self._dashboard.left.status_lbl.setText("Awaiting command.")
+            self._set_cmd_placeholder("AWAITING DIRECTIVE...")
         elif s == "awaiting_confirmation":
             self._dashboard.left.state_pill.setStyleSheet(
                 "color:rgba(255,190,50,0.90);border:1px solid rgba(255,190,50,0.40);"
@@ -121,6 +132,14 @@ class _StateHudMixin:
             self._dashboard.left.state_pill.setStyleSheet(
                 "color:rgba(210,220,245,0.88);border:1px solid rgba(0,102,255,0.42);"
                 f"background:rgba(0,102,255,0.06);{pill_base}")
+
+    def _set_cmd_placeholder(self, text: str) -> None:
+        """Update the command-bar placeholder so the live-capture cue shows right
+        where the user looks (and where dictation lands). Best-effort."""
+        try:
+            self._dashboard.left.cmd_bar._input.setPlaceholderText(text)  # noqa: SLF001
+        except Exception:
+            pass
 
     def _fade_status_text(self):
         """Quick opacity fade on the status label for state transitions."""

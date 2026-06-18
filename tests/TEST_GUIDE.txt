@@ -1354,6 +1354,43 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Voice capture - readiness cue (CONNECTING -> LISTENING)
+-----------------------------------------------------------------------
+Background: the HUD flipped to LISTENING the instant a turn began, but capture
+isn't actually live until the wake-handshake + Deepgram connect + mic open
+finish (~1-1.5 s on the streaming path). Speaking in that window lost the first
+words (Deepgram fired SpeechStarted but no Results). Fix: VoiceEngine now emits
+a `capture_ready` signal the moment the mic + STT session are genuinely live
+(streaming: right after MicStreamer.start(); batch: right before capture()).
+The HUD holds on a new "connecting" state until then, only flipping to
+"listening" on capture_ready. So the cue you wait for is real.
+
+What "connecting" looks like (dashboard): amber CONNECTING pill, HUD status
+CONNECTING, orb active but the mic icon does NOT pulse yet, and the command-bar
+placeholder reads "CONNECTING…". On capture_ready it flips to the cyan
+LISTENING pill, the mic pulses, and the placeholder reads "LISTENING…". The
+VoiceView screen mirrors this (CONNECTING in amber -> LISTENING in green).
+
+Routing of the held state: _toggle_mic / _on_wake_word / _on_tts_done set
+"connecting"; _voice_capture guards on it; _on_capture_ready flips to
+"listening". A partial/final that races ahead of capture_ready is tolerated
+(still painted / still processed) so no command is ever dropped.
+
+Manual test (stt_provider="deepgram"): trigger a listen (wake word / mic
+button). Expect a brief amber CONNECTING, THEN cyan LISTENING + a pulsing mic.
+Speak only after LISTENING -> the whole utterance is captured. Speaking during
+CONNECTING is no longer the "lost first words" trap (and even if a word slips
+through early it isn't dropped). On the Google batch path the CONNECTING phase
+is near-instant (no websocket), which is expected.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_voice_dictation.py
+  -> _on_capture_ready flips connecting->listening (and is a no-op otherwise);
+     a partial paints during connecting; a final during connecting is still
+     processed (never dropped).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

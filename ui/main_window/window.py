@@ -208,6 +208,9 @@ class JarvisWindow(
         # path emits transcript_partial — the Google batch path never does, so
         # this is inert unless stt_provider="deepgram".
         from core.voice import voice_engine as _ve
+        _ve.bridge.capture_ready.connect(
+            self._on_capture_ready, Qt.QueuedConnection
+        )
         _ve.bridge.transcript_partial.connect(
             self._on_transcript_partial, Qt.QueuedConnection
         )

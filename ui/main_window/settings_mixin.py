@@ -84,8 +84,8 @@ class _SettingsMixin:
             "warning" if muted else "info",
         )
         # If we're currently mid-listen, drop back to idle so the UI doesn't
-        # sit in a "listening" pose while the engine is muted.
-        if muted and self._state == "listening":
+        # sit in a "listening"/"connecting" pose while the engine is muted.
+        if muted and self._state in ("listening", "connecting"):
             self._set_state("idle")
 
     def _on_tts_mute_toggled(self, muted: bool):

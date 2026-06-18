@@ -607,11 +607,12 @@ class VoiceView(QWidget):
 
     _STATE_LABEL: dict[str, tuple[str, str]] = {
         # state -> (display, color)
-        "idle":      ("IDLE",      INK_DIM),
-        "listening": ("LISTENING", GREEN),
-        "thinking":  ("THINKING",  CYAN),
-        "speaking":  ("SPEAKING",  CYAN),
-        "awaiting":  ("AWAITING",  AMBER),
+        "idle":       ("IDLE",       INK_DIM),
+        "connecting": ("CONNECTING", AMBER),
+        "listening":  ("LISTENING",  GREEN),
+        "thinking":   ("THINKING",   CYAN),
+        "speaking":   ("SPEAKING",   CYAN),
+        "awaiting":   ("AWAITING",   AMBER),
     }
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -850,7 +851,10 @@ class VoiceView(QWidget):
         # Update hero tile
         display, color = self._STATE_LABEL.get(state, (state.upper(), INK_DIM))
         self._hm_state.set_value(display, color=color)
-        if state == "listening":
+        if state == "connecting":
+            self._hm_state.set_sub("opening mic…")
+            self._mic.set_listening(False)  # not live yet — no pulse
+        elif state == "listening":
             self._hm_state.set_sub("mic open")
             self._mic.set_listening(True)
             # waveform dropped in the M5 redesign — orb carries the state cue now.

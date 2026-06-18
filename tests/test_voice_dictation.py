@@ -94,3 +94,31 @@ def test_voice_error_clears_dictation_and_goes_idle():
     _VoiceMixin._on_voice_error_ui(host, "No speech detected — try speaking louder.")
     assert field.cleared == 1 and field.value == ""
     assert host._states == ["idle"]
+
+
+# ── readiness cue (connecting → listening) ────────────────────────────────────
+
+def test_capture_ready_flips_connecting_to_listening():
+    host, _ = _make_host("connecting")
+    _VoiceMixin._on_capture_ready(host)
+    assert host._states == ["listening"]
+
+
+def test_capture_ready_is_noop_when_not_connecting():
+    host, _ = _make_host("idle")
+    _VoiceMixin._on_capture_ready(host)
+    assert host._states == []
+
+
+def test_partial_paints_during_connecting():
+    # A partial that beats the capture_ready signal must still render.
+    host, field = _make_host("connecting")
+    _VoiceMixin._on_transcript_partial(host, "open chrome")
+    assert field.value == "open chrome"
+
+
+def test_voice_heard_processes_even_if_still_connecting():
+    # Defensive: a final that beats capture_ready must not be dropped.
+    host, field = _make_host("connecting")
+    _VoiceMixin._on_voice_heard(host, "what time is it")
+    assert host._processed == ["what time is it"]

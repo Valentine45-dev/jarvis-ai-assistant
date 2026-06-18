@@ -13,6 +13,7 @@ Public API (unchanged — main.py and executor.py import from here):
     _EL_VOICES                 → dict[str, str]  (re-exported for executor.py)
 
 Signals (on voice_engine.bridge — connect from main thread):
+    capture_ready()          — mic + STT session are live; safe to speak now
     transcript_partial(str)  — interim word-by-word transcript
     transcript_final(str)    — confirmed full utterance
     speaking_started()       — TTS audio has begun
@@ -189,6 +190,7 @@ class VoiceBridge(QObject):
     module load time (before QApplication exists).  VoiceBridge is created
     lazily via voice_engine.bridge on the first access from the main thread.
     """
+    capture_ready      = pyqtSignal()      # mic + STT session live; ok to speak
     transcript_partial = pyqtSignal(str)   # interim word-by-word transcript
     transcript_final   = pyqtSignal(str)   # confirmed full utterance
     speaking_started   = pyqtSignal()      # TTS audio has begun playing
@@ -491,6 +493,10 @@ class VoiceEngine:
             self._safe_close(session)
             return False
 
+        # Mic stream + Deepgram session are both live now — tell the UI it's
+        # genuinely safe to speak (closes the "spoke too early" gap).
+        self._emit("capture_ready")
+
         start_t = _time.monotonic()
         try:
             while not done.is_set():
@@ -554,6 +560,9 @@ class VoiceEngine:
                 sensitivity=config.mic_sensitivity,
             )
             _dbg("voice", f"calibrated threshold: {threshold:.0f}")
+            # Calibration proved the device works and capture() is about to open
+            # the mic — signal the UI it's safe to speak (parity with streaming).
+            self._emit("capture_ready")
             wav_bytes = self._capture.capture(
                 timeout=timeout,
                 phrase_time_limit=phrase_time_limit,

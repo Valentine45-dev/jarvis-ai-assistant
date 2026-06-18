@@ -19,19 +19,24 @@ class _VoiceMixin:
     """Mic capture, STT result handling, wake-word, and TTS-done auto-resume."""
 
     def _toggle_mic(self):
-        if self._state == "listening":
+        if self._state in ("listening", "connecting"):
             self._set_state("idle")
         else:
-            self._set_state("listening")
+            self._set_state("connecting")
             self._voice_capture()
 
     def _voice_capture(self, auto_resume: bool = False):
         """Open the mic for one capture cycle.
 
+        The caller sets state to "connecting" first; we hold there until the
+        VoiceEngine fires capture_ready (mic + STT session live), at which point
+        _on_capture_ready flips us to "listening". This closes the window where
+        the HUD said LISTENING but capture wasn't actually live yet.
+
         auto_resume=True: 15-second timeout, silent on timeout (no toast).
         auto_resume=False: 8-second timeout, toast on any error.
         """
-        if self._state != "listening":
+        if self._state != "connecting":
             return
         from core.voice import voice_engine
         timeout = 15.0 if auto_resume else 8.0
@@ -53,6 +58,15 @@ class _VoiceMixin:
             timeout=timeout,
         )
 
+    def _on_capture_ready(self):
+        """Qt main thread — mic + STT session are live; safe to speak now.
+
+        Flip the held "connecting" state to the real "listening" cue. Guarded so
+        a late/duplicate signal can't yank us out of another state.
+        """
+        if self._state == "connecting":
+            self._set_state("listening")
+
     def _on_transcript_partial(self, text: str):
         """Qt main thread — interim streaming transcript (streaming STT only).
 
@@ -62,7 +76,7 @@ class _VoiceMixin:
         paint while actually listening; late partials after the turn ends are
         ignored so they can't clobber a fresh state.
         """
-        if self._state != "listening" or not text.strip():
+        if self._state not in ("listening", "connecting") or not text.strip():
             return
         try:
             # _TagLineEdit.setText() already moves the cursor to the end.
@@ -80,7 +94,9 @@ class _VoiceMixin:
     def _on_voice_heard(self, text: str):
         """Qt main thread — STT captured speech successfully."""
         self._clear_voice_dictation()
-        if self._state == "listening" and text.strip():
+        # "connecting" is tolerated in case the final beats the capture_ready
+        # signal in the Qt queue — we never want to drop a real command.
+        if self._state in ("listening", "connecting") and text.strip():
             self._process_cmd(text)
         else:
             self._set_state("idle")
@@ -104,7 +120,7 @@ class _VoiceMixin:
             return
         if voice_engine.mic_muted:
             return
-        self._set_state("listening")
+        self._set_state("connecting")
         self._voice_capture()
 
     def _on_tts_done(self, token: int):
@@ -135,7 +151,7 @@ class _VoiceMixin:
             return
         # Auto-resume: listen for follow-up with a longer timeout.
         # If the user stays silent for 15 s, _on_voice_error_ui("") fires → idle.
-        self._set_state("listening")
+        self._set_state("connecting")
         self._voice_capture(auto_resume=True)
 
     def _on_wake_word_toggle(self, enabled: bool):
