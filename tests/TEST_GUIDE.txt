@@ -1285,6 +1285,38 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Streaming STT - Phase 3 (live interim transcript in the command bar)
+-----------------------------------------------------------------------
+Background: Phase 3 is the HUD side. VoiceEngine already EMITS transcript_partial
+on the streaming path (per is_final segment); nothing was rendering it. Now
+window.py connects voice_engine.bridge.transcript_partial (first accessed on the
+Qt main thread, then queued from the worker thread) to _on_transcript_partial,
+which mirrors the interim words into the dashboard command bar as you speak -
+dictation style. The FINAL commit is unchanged: the existing voice callback
+(_on_voice_heard -> _process_cmd) still submits the turn, so there is no
+double-submit. The command bar is cleared when the turn ends (heard or error).
+
+Scope / safety: only the streaming path emits partials, so on the Google batch
+path (stt_provider="google", the default) the command bar never changes - zero
+behaviour change. Late partials arriving after the turn left "listening" are
+ignored so they can't clobber a fresh state.
+
+Manual test (needs stt_provider="deepgram" + DEEPGRAM_API_KEY):
+  Wake JARVIS and speak a command slowly. Expect the words to APPEAR in the
+  bottom command-bar input field (">_ ...") and grow/refine as you talk, then:
+    - the field CLEARS and the command runs the instant you stop (final commit).
+  Try the batch path (stt_provider="google"): the command bar stays on its
+  "AWAITING DIRECTIVE..." placeholder while you speak - unchanged, as expected.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_voice_dictation.py
+  -> _on_transcript_partial paints interim text into the command bar only while
+     listening (ignored otherwise / when blank), each partial replaces the last,
+     and the turn-end handlers (_on_voice_heard / _on_voice_error_ui) clear the
+     dictation. (No Qt - the command-bar input is a fake.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

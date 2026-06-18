@@ -202,6 +202,16 @@ class JarvisWindow(
             self._on_action_followup_tts, Qt.QueuedConnection
         )
 
+        # Live streaming transcript → command bar (Phase 3). The bridge is a
+        # separate QObject; first access MUST be on the Qt main thread (here),
+        # after which worker-thread emits queue safely. Only the streaming STT
+        # path emits transcript_partial — the Google batch path never does, so
+        # this is inert unless stt_provider="deepgram".
+        from core.voice import voice_engine as _ve
+        _ve.bridge.transcript_partial.connect(
+            self._on_transcript_partial, Qt.QueuedConnection
+        )
+
 
         # Start always-on wake-word detector (fires _wake_word_signal on detection)
         self._wake_word_enabled = bool(getattr(config, "wake_word_enabled", True))

@@ -53,8 +53,33 @@ class _VoiceMixin:
             timeout=timeout,
         )
 
+    def _on_transcript_partial(self, text: str):
+        """Qt main thread — interim streaming transcript (streaming STT only).
+
+        Mirrors the live words into the command bar as you speak, like
+        dictation. The final commit is handled by the existing callback path
+        (_on_voice_heard → _process_cmd), so we never submit from here. Only
+        paint while actually listening; late partials after the turn ends are
+        ignored so they can't clobber a fresh state.
+        """
+        if self._state != "listening" or not text.strip():
+            return
+        try:
+            # _TagLineEdit.setText() already moves the cursor to the end.
+            self._dashboard.left.cmd_bar._input.setText(text)  # noqa: SLF001 — local accessor
+        except Exception:
+            pass
+
+    def _clear_voice_dictation(self):
+        """Drop any interim dictation left in the command bar after a turn ends."""
+        try:
+            self._dashboard.left.cmd_bar._input.clear()  # noqa: SLF001
+        except Exception:
+            pass
+
     def _on_voice_heard(self, text: str):
         """Qt main thread — STT captured speech successfully."""
+        self._clear_voice_dictation()
         if self._state == "listening" and text.strip():
             self._process_cmd(text)
         else:
@@ -62,6 +87,7 @@ class _VoiceMixin:
 
     def _on_voice_error_ui(self, msg: str):
         """Qt main thread — STT timed out or failed."""
+        self._clear_voice_dictation()
         self._set_state("idle")
         if msg:  # empty = silent auto-resume timeout, no toast needed
             self._dashboard.toast.show_toast(msg, "warning")
