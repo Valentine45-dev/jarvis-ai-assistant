@@ -1391,6 +1391,44 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Provider fallback notices (user-facing toasts, not just debug)
+-----------------------------------------------------------------------
+Background: when TTS drops from ElevenLabs to the Google (Gemini) voice, or down
+to the offline (pyttsx3) voice, there's a noticeable pause while the backup
+synthesises - but the only signal was a [tts] debug line. Same for STT dropping
+from live Deepgram streaming to the Google batch path. Now those emit a short,
+plain-English toast via the central signals hub (new signals.notice(message,
+kind) -> window._on_notice -> dashboard toast). Deduped ONCE per target per
+session so a degraded run never spams.
+
+Messages (kept short - the toast is one line, ~1.4 s):
+  ElevenLabs -> Gemini, out of credits : "Premium voice out of credits -
+                                          switching to Google voice."  (warning)
+  ElevenLabs -> Gemini, transient      : "Premium voice unavailable -
+                                          switching to Google voice."  (info)
+  -> pyttsx3, Gemini daily limit       : "Cloud voices maxed out - using the
+                                          offline voice."              (warning)
+  -> pyttsx3, transient                : "Cloud voices unavailable - using the
+                                          offline voice."              (info)
+  Deepgram streaming -> Google batch   : "Live transcription dropped - using
+                                          backup recognition."         (warning)
+
+Manual test (hard to force naturally): the easiest is to break a key. Temporarily
+put a bad ELEVENLABS_API_KEY in .env (keep a valid GEMINI_API_KEY), restart, and
+say anything -> you should SEE one toast "Premium voice ... switching to Google
+voice" on the first reply, then hear the Gemini voice, and NO further toast on
+later replies (deduped). Restore the key after. (Same idea for Gemini->pyttsx3
+by breaking both cloud keys; for the STT toast, break the Deepgram key while
+stt_provider="deepgram" -> first listen toasts "Live transcription dropped".)
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_provider_notices.py
+  -> _announce_switch fires once per target (gemini/local) with quota->warning
+     vs transient->info wording; _announce_stt_fallback fires once. (Captured by
+     connecting a slot to signals.notice; no QApplication loop needed.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

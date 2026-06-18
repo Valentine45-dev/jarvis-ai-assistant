@@ -20,6 +20,11 @@ class JarvisSignals(QObject):
     hud_status_updated = pyqtSignal(str)
     theme_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    # User-facing heads-up toast (message, kind). Emitted off-thread (e.g. the
+    # TTS worker when it falls back to a backup voice, or the STT path when
+    # streaming drops to batch) and delivered to the main thread queued. Kind is
+    # advisory: "info" | "warning" | "error" | "success".
+    notice = pyqtSignal(str, str)
     confirmation_required = pyqtSignal(dict)
     workflow_library_changed = pyqtSignal()
     terminal_line_ready = pyqtSignal(str)   # one stdout/stderr line from a running command

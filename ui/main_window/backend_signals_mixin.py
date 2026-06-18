@@ -85,6 +85,20 @@ class _BackendSignalsMixin:
         self._last_error_toast_ts = now
         self._dashboard.toast.show_toast(text, "error")
 
+    def _on_notice(self, msg: str, kind: str) -> None:
+        """Qt main thread — a user-facing heads-up toast.
+
+        Used for things the user should know but would otherwise only see in the
+        debug log: TTS falling back to a backup voice, live transcription
+        dropping to batch, etc. The emitters dedupe (once per session), so this
+        slot just renders whatever arrives.
+        """
+        text = (msg or "").strip()
+        if not text:
+            return
+        lvl = kind if kind in ("info", "warning", "error", "success") else "info"
+        self._dashboard.toast.show_toast(text, lvl)
+
     def _on_reminder_action(self, payload: dict):
         """Qt main thread — delayed reminder with an executable JARVIS step."""
         from core.executor import dispatch

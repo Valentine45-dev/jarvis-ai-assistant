@@ -215,6 +215,7 @@ class VoiceEngine:
         self._mic_muted = False
         self._tts_muted = False
         self._bridge: VoiceBridge | None = None  # lazy — created on main thread
+        self._stt_fallback_announced = False     # one-shot streaming→batch toast
 
     # ── Signal bridge ─────────────────────────────────────────────────────────
 
@@ -380,6 +381,7 @@ class VoiceEngine:
                 if self._run_streaming_stt(session, callback, on_error, timeout, phrase_time_limit):
                     return
                 _dbg("voice", "streaming STT failed to produce a result — falling back to Google batch")
+                self._announce_stt_fallback()
             self._run_batch_stt(callback, on_error, timeout, phrase_time_limit)
         finally:
             self._listening.clear()
@@ -400,6 +402,20 @@ class VoiceEngine:
                 _time.sleep(0.05)
         except Exception:
             _time.sleep(0.2)
+
+    def _announce_stt_fallback(self) -> None:
+        """One-time toast when streaming recognition drops to the Google batch
+        path mid-session, so the user knows why latency/behaviour changed."""
+        if self._stt_fallback_announced:
+            return
+        self._stt_fallback_announced = True
+        try:
+            from core.signals import signals
+            signals.notice.emit(
+                "Live transcription dropped — using backup recognition.", "warning"
+            )
+        except Exception as exc:
+            _dbg("voice", f"notice emit failed: {exc}")
 
     def _make_stt_session(self):
         """Build a streaming session from config, or None to mean 'use batch'.

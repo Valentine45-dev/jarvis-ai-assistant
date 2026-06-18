@@ -228,6 +228,9 @@ class JarvisWindow(
         signals.reminder_action.connect(self._on_reminder_action)
         signals.reminder_fired.connect(self._on_reminder_fired)
         signals.error_occurred.connect(self._on_error_signal)
+        # User-facing heads-up toasts (e.g. TTS fell back to a backup voice).
+        # Emitted off the main thread → QueuedConnection.
+        signals.notice.connect(self._on_notice, Qt.QueuedConnection)
         signals.document_generation_done.connect(
             self._on_document_generation_done, Qt.QueuedConnection,
         )

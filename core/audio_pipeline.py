@@ -427,6 +427,10 @@ class TtsEngine:
         # pyttsx3. One quota failure flips this flag for the rest of the
         # session and we go straight to pyttsx3 on every line until restart.
         self._gemini_quota_locked = False
+        # Which fallback voices we've already told the user about this session,
+        # so a degraded session shows the heads-up toast once per target, not on
+        # every single utterance.
+        self._switch_announced: set[str] = set()
         # R3-21: a single TTS worker drains a bounded queue, instead of spawning
         # an unbounded daemon thread per say(). A burst of utterances (a chatty
         # workflow narrating each step) can't pile up N threads all blocked on
@@ -561,6 +565,10 @@ class TtsEngine:
                 # tags directly. Skipped if no key is configured OR the
                 # session-level quota lock fired earlier this run.
                 if config.gemini_api_key and not self._gemini_quota_locked:
+                    # ElevenLabs is the configured primary; landing on Gemini
+                    # means it fell back — give the user a one-time heads-up.
+                    if config.elevenlabs_api_key:
+                        self._announce_switch("gemini", quota=self._elevenlabs_quota_locked)
                     voice_name = (
                         (config.gemini_voice or "").strip()
                         or _GEMINI_VOICE_BY_PROFILE.get(config.tts_voice, _GEMINI_DEFAULT_VOICE)
@@ -583,6 +591,10 @@ class TtsEngine:
                             return
 
                 # ── Tier 3: pyttsx3 local fallback ──────────────────────────
+                # Only a "switch" worth announcing if a cloud voice was meant to
+                # handle this (otherwise pyttsx3 is the user's primary anyway).
+                if config.elevenlabs_api_key or config.gemini_api_key:
+                    self._announce_switch("local", quota=self._gemini_quota_locked)
                 self._say_local(text, _on_ready_once, on_done)
         except Exception as exc:
             # A tier raised after the earlier ones were exhausted (typically the
@@ -626,6 +638,30 @@ class TtsEngine:
             cb()
         except Exception as exc:
             _dbg("tts", f"callback error: {exc}")
+
+    def _announce_switch(self, target: str, *, quota: bool) -> None:
+        """One-time, user-friendly toast when TTS drops to a backup voice.
+
+        `target` is "gemini" (the Google voice) or "local" (the offline voice).
+        Deduped per target per session so a degraded run doesn't toast on every
+        line. Fires on the TTS worker thread; delivered to the UI queued via the
+        signals hub. Best-effort — never let a notice failure break playback."""
+        if target in self._switch_announced:
+            return
+        self._switch_announced.add(target)
+        if target == "gemini":
+            msg = ("Premium voice out of credits — switching to Google voice."
+                   if quota else
+                   "Premium voice unavailable — switching to Google voice.")
+        else:  # local / pyttsx3
+            msg = ("Cloud voices maxed out — using the offline voice."
+                   if quota else
+                   "Cloud voices unavailable — using the offline voice.")
+        try:
+            from core.signals import signals
+            signals.notice.emit(msg, "warning" if quota else "info")
+        except Exception as exc:
+            _dbg("tts", f"notice emit failed: {exc}")
 
     def _say_local(
         self,
