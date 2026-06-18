@@ -16,6 +16,7 @@ SDK shape (deepgram-sdk 7.x), all verified by introspection:
 
 from __future__ import annotations
 
+import queue
 import threading
 
 from core.log import debug as _dbg
@@ -47,7 +48,16 @@ class DeepgramSttSession(StreamingSttSession):
         self._cm = None
         self._conn = None
         self._reader: threading.Thread | None = None
+        self._writer: threading.Thread | None = None
         self._stop = threading.Event()
+        self._finishing = threading.Event()
+        # Audio is queued here by feed() (called on the real-time mic thread) and
+        # drained by the writer thread, so a slow websocket send NEVER stalls the
+        # mic read loop (which would overflow PortAudio's buffer and shred the
+        # audio — Deepgram then VADs on the energy but can't transcribe). 256
+        # chunks ≈ 16 s of 64 ms frames; drop-oldest if a stall outlasts that.
+        self._send_q: "queue.Queue[bytes]" = queue.Queue(maxsize=256)
+        self._dropped = 0
         self._on_partial = None
         self._on_final = None
         self._on_utterance_end = None
@@ -61,22 +71,60 @@ class DeepgramSttSession(StreamingSttSession):
         self._on_utterance_end = on_utterance_end
         self._on_error = on_error
         self._stop.clear()
+        self._finishing.clear()
         self._cm = self._make_cm()
         self._conn = self._cm.__enter__()
         self._reader = threading.Thread(target=self._read_loop, name="DeepgramRecv", daemon=True)
         self._reader.start()
+        self._writer = threading.Thread(target=self._write_loop, name="DeepgramSend", daemon=True)
+        self._writer.start()
         _dbg("stt", f"Deepgram session started (model={self._model!r})")
 
     def feed(self, pcm16: bytes) -> None:
-        conn = self._conn
-        if conn is None or self._stop.is_set():
+        # Non-blocking by design: just enqueue. The writer thread does the actual
+        # websocket send, so the mic thread is never blocked on the network.
+        if self._stop.is_set() or self._finishing.is_set():
             return
         try:
-            conn.send_media(pcm16)
-        except Exception as exc:
-            self._fail(f"Deepgram send failed: {exc}")
+            self._send_q.put_nowait(pcm16)
+        except queue.Full:
+            # Network can't keep up — drop the OLDEST frame to bound latency
+            # rather than block the mic thread or grow without limit.
+            self._dropped += 1
+            try:
+                self._send_q.get_nowait()
+                self._send_q.put_nowait(pcm16)
+            except (queue.Empty, queue.Full):
+                pass
+
+    def _write_loop(self) -> None:
+        """Drain queued audio to the websocket. Exits when finishing/stopped and
+        the queue is empty (so finish() can flush the tail before finalize)."""
+        while True:
+            try:
+                chunk = self._send_q.get(timeout=0.05)
+            except queue.Empty:
+                if self._finishing.is_set() or self._stop.is_set():
+                    return
+                continue
+            conn = self._conn
+            if conn is None or self._stop.is_set():
+                return
+            try:
+                conn.send_media(chunk)
+            except Exception as exc:
+                self._fail(f"Deepgram send failed: {exc}")
+                return
 
     def finish(self) -> None:
+        # Stop accepting new audio, let the writer flush what's already queued,
+        # THEN finalize + close so the last words actually reach Deepgram.
+        self._finishing.set()
+        writer = self._writer
+        if writer is not None and writer.is_alive() and writer is not threading.current_thread():
+            writer.join(timeout=2.0)
+        if self._dropped:
+            _dbg("stt", f"Deepgram send queue dropped {self._dropped} frame(s) — network lagged")
         conn = self._conn
         if conn is not None:
             try:
@@ -111,16 +159,22 @@ class DeepgramSttSession(StreamingSttSession):
         )
 
     def _read_loop(self) -> None:
+        count = 0
         try:
             while not self._stop.is_set():
                 event = self._conn.recv()
                 if event is None:
                     break
+                count += 1
                 self._dispatch(event)
         except Exception as exc:
             # A recv() raising after we asked to stop is just the socket closing.
             if not self._stop.is_set():
                 self._fail(f"Deepgram stream error: {exc}")
+        finally:
+            # One concise line per turn: zero events means the connection was
+            # alive but the server sent nothing (useful future health signal).
+            _dbg("stt", f"Deepgram read loop ended after {count} event(s)")
 
     def _dispatch(self, event) -> None:
         # Duck-typed so real SDK objects AND test fakes both work. UtteranceEnd
@@ -153,9 +207,9 @@ class DeepgramSttSession(StreamingSttSession):
                 cm.__exit__(None, None, None)
             except Exception:
                 pass
-        reader = self._reader
-        if reader is not None and reader.is_alive() and reader is not threading.current_thread():
-            reader.join(timeout=1.0)
+        for t in (self._writer, self._reader):
+            if t is not None and t.is_alive() and t is not threading.current_thread():
+                t.join(timeout=1.0)
 
     def _fail(self, message: str) -> None:
         _dbg("stt", message)

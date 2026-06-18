@@ -14,6 +14,7 @@ so importing this file never pulls PortAudio into processes that don't record.
 
 from __future__ import annotations
 
+import struct
 import threading
 
 from core.log import debug as _dbg
@@ -59,6 +60,12 @@ class MicStreamer:
         self._stream = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        # Diagnostics: how much audio we pumped and its peak level. A peak near
+        # 0 across a whole turn means the device delivered silence (muted / wrong
+        # default device / contended) — the mic is the problem, not the stream.
+        self._frames_fed = 0
+        self._peak = 0
+        self._overflows = 0
 
     def _sd(self):
         return self._sd_override if self._sd_override is not None else _default_sd()
@@ -84,8 +91,22 @@ class MicStreamer:
     def _loop(self) -> None:
         try:
             while not self._stop.is_set():
-                data, _ = self._stream.read(self._chunk)
-                self._feed(bytes(data))
+                data, overflowed = self._stream.read(self._chunk)
+                raw = bytes(data)
+                self._frames_fed += 1
+                if overflowed:
+                    # Input buffer overran — samples were dropped before we read
+                    # them. If this is non-zero the audio is gappy and Deepgram
+                    # may VAD on it but fail to transcribe. feed() must stay cheap
+                    # (it only enqueues now) so this should remain 0.
+                    self._overflows += 1
+                n = len(raw) // 2
+                if n:
+                    samples = struct.unpack(f"{n}h", raw)
+                    peak = max(max(samples), -min(samples))
+                    if peak > self._peak:
+                        self._peak = peak
+                self._feed(raw)
         except Exception as exc:
             # "stream is stopped" fires when stop() closes the device mid-read —
             # an expected end-of-turn, not a failure worth surfacing.
@@ -101,6 +122,11 @@ class MicStreamer:
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=1.0)
         self._close_stream()
+        # int16 full-scale is 32767; a healthy spoken peak is in the thousands.
+        # A peak in the low tens across a whole turn == effectively silence.
+        pct = round(self._peak / 327.67, 1)  # peak as % of full scale
+        _dbg("stt", f"mic streamer stopped: {self._frames_fed} frames fed, "
+                    f"peak={self._peak} ({pct}% full-scale), overflows={self._overflows}")
 
     def _close_stream(self) -> None:
         stream, self._stream = self._stream, None

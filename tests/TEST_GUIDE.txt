@@ -1317,6 +1317,43 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Streaming STT - audio reliability fix (decouple network send from mic thread)
+-----------------------------------------------------------------------
+Background: live testing showed intermittent turns where Deepgram fired
+SpeechStarted (it heard speech ENERGY) but returned zero Results - i.e. the
+audio was gappy/choppy, not silent (mic peak was a healthy 14-21% full-scale).
+Root cause: MicStreamer's read loop did the websocket send INLINE
+(stream.read -> feed -> send_media -> ws.send). When a send stalled on network
+jitter, stream.read() wasn't called in time, PortAudio's input buffer
+overran, and samples were dropped -> shredded audio Deepgram couldn't
+transcribe. Classic "never do network I/O on the audio thread".
+
+Fix: DeepgramSttSession.feed() now only ENQUEUES audio (non-blocking); a
+dedicated writer thread drains the queue to send_media. The mic read loop never
+blocks on the network. finish() flushes the queue (writer.join) BEFORE
+send_finalize so the tail of the utterance still reaches Deepgram. Queue is
+bounded (256 chunks ~ 16 s) with drop-oldest so a long stall can't grow
+unbounded or block the mic.
+
+Telemetry kept (one concise line per turn at debug): "mic streamer stopped:
+N frames fed, peak=P (X% full-scale), overflows=K" and "Deepgram read loop
+ended after N event(s)". overflows should be 0; "Deepgram send queue dropped
+N frame(s)" only logs when the network genuinely lagged.
+
+Manual test (stt_provider="deepgram"): say several commands in a row, waiting
+for the mic to go live each time. Expect EVERY spoken turn to transcribe (no
+"no speech within timeout" while you were clearly speaking), and the stop line
+to show overflows=0. Before the fix, ~half of turns died with SpeechStarted
+but no Results.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_stt_streaming.py
+  -> feed() forwards audio through the queue+writer and finish() flushes it in
+     order before close (test_feed_forwards_audio_then_stops_after_finish);
+     event mapping + blank-drop unchanged. (Websocket is faked.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
