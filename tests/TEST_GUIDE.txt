@@ -1429,6 +1429,27 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Command bar - placeholder / text vertical alignment
+-----------------------------------------------------------------------
+Background: the directive input (_TagLineEdit, a QTextEdit locked to a ~48px
+two-line box) drew its single line of text/placeholder at the TOP of the box, so
+"AWAITING DIRECTIVE..." floated above the centered ">_" prompt and mic. Fix:
+_apply_vcenter() sets a top viewport margin to vertically center the text while
+it's a single line (placeholder + short commands), and drops to top-align (0)
+once it wraps to two lines so both stay visible. Recomputed on resizeEvent (the
+widget's real height isn't known at __init__) and on every reflow.
+
+Manual test: launch JARVIS. The "AWAITING DIRECTIVE..." placeholder should sit
+vertically centered, in line with ">_" and the mic icon. Type a short command ->
+still centered. Type/paste a long command that wraps to two lines -> both lines
+visible (text top-aligns, no clipping). Voice dictation text should also sit
+centered as it streams in.
+
+(No unit test - pure Qt geometry; verified by eye + an offscreen construction
+check that placeholder/1-line center and wrapped text top-aligns.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

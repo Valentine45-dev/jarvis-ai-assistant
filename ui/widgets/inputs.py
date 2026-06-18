@@ -196,7 +196,8 @@ class _TagLineEdit(QTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.document().setDocumentMargin(0)
-        self.setFixedHeight(36)
+        self._vtop = -1  # cached top viewport margin (vertical-centering)
+        self.setFixedHeight(self._H_MIN)
         self.setPlaceholderText("Awaiting directive...")
         self._valid_tags = tuple(sorted(t.lower() for t in valid_tags))
         self._highlighter = _TagHighlighter(self.document(), valid_tags)
@@ -229,6 +230,9 @@ class _TagLineEdit(QTextEdit):
         self._tag_popup.itemClicked.connect(lambda *_: self._accept_tag_suggestion())
         self._popup_tag_range: tuple[int, int] | None = None
         self._popup_token_prefix: str = ""
+        # Center the placeholder right away (contentsChanged won't fire for the
+        # initial empty document).
+        self._reflow_height()
 
     # ── QLineEdit-compatible API ──────────────────────────────────────────
 
@@ -247,6 +251,24 @@ class _TagLineEdit(QTextEdit):
         c.setPosition(min(pos, len(self.toPlainText())))
         self.setTextCursor(c)
 
+    def _apply_vcenter(self):
+        """Vertically center the text while it's a single line (the usual state —
+        placeholder + short commands) so it lines up with the ">_" prompt and
+        mic; top-align once it wraps so a 2-line field still shows both lines."""
+        doc_h = int(self.document().size().height())
+        single_line = doc_h <= int(self.fontMetrics().height() * 1.6)
+        top = max(0, (self.height() - doc_h) // 2) if single_line else 0
+        if top != self._vtop:
+            self._vtop = top
+            self.setViewportMargins(0, top, 0, 0)
+
+    def resizeEvent(self, e):
+        # Recompute centering once the widget gets its real height on screen
+        # (the __init__ pass runs before layout, so the placeholder would
+        # otherwise keep a stale margin until the first keystroke).
+        super().resizeEvent(e)
+        self._apply_vcenter()
+
     def _reflow_height(self):
         """Grow/shrink with line count; cap height then scroll. Notify parent card."""
         doc_h = int(self.document().size().height())
@@ -255,6 +277,7 @@ class _TagLineEdit(QTextEdit):
         h = max(self._H_MIN, min(content_h, self._H_MAX))
         if h != self.height():
             self.setFixedHeight(h)
+        self._apply_vcenter()
         # Show vertical scroll only when content exceeds the fixed viewport
         if content_h > self._H_MAX - 1:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
