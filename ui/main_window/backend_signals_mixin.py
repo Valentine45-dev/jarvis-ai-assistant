@@ -97,7 +97,9 @@ class _BackendSignalsMixin:
         if not text:
             return
         lvl = kind if kind in ("info", "warning", "error", "success") else "info"
-        self._dashboard.toast.show_toast(text, lvl)
+        # These notices precede a delay (a backup voice synthesising, etc.), so
+        # hold them longer than the default 1.4 s flash.
+        self._dashboard.toast.show_toast(text, lvl, duration_ms=3500)
 
     def _on_reminder_action(self, payload: dict):
         """Qt main thread — delayed reminder with an executable JARVIS step."""

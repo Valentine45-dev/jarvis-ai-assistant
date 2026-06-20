@@ -104,12 +104,17 @@ class ToastNotification(QWidget):
         self.setGeometry(max(margin, x), 10, toast_w, 36)
         self._label.setGeometry(0, 0, 280, 36)
 
-    def show_toast(self, text, _kind="info"):
+    def show_toast(self, text, _kind="info", duration_ms=1400):
+        """Flash a toast for `duration_ms` before it fades (default 1.4 s).
+
+        Pass a longer duration for messages that precede a delay (e.g. the
+        provider-fallback notices) so they stay readable. Floored at 800 ms.
+        """
         self._label.setText(str(text))
         self._reposition()
         self.show()
         self._effect.setOpacity(1.0)
-        QTimer.singleShot(1400, self._fade_out)
+        QTimer.singleShot(max(800, int(duration_ms)), self._fade_out)
 
     def _fade_out(self):
         self._fade.stop()

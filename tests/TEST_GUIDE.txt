@@ -1401,7 +1401,9 @@ plain-English toast via the central signals hub (new signals.notice(message,
 kind) -> window._on_notice -> dashboard toast). Deduped ONCE per target per
 session so a degraded run never spams.
 
-Messages (kept short - the toast is one line, ~1.4 s):
+These notices precede a delay (a backup voice synthesising), so they show for
+~3.5 s instead of the default 1.4 s toast (show_toast gained an optional
+duration_ms arg; other callers are unchanged). Messages (one line):
   ElevenLabs -> Gemini, out of credits : "Premium voice out of credits -
                                           switching to Google voice."  (warning)
   ElevenLabs -> Gemini, transient      : "Premium voice unavailable -
