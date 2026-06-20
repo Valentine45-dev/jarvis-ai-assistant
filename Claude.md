@@ -739,7 +739,10 @@ Execute code, scripts, or terminal commands.
 { "manager": "string — pip|npm|uv (default: pip)" }
 { "pid": "int — process ID for kill_process" }
 { "process_name": "string — partial process name for kill_process" }
+{ "timeout": "int — optional: max seconds before the command is killed. Per-command override of the action default (run_python 30s; run_shell/git_command/npm_command/run_script/run_powershell/run_cmd 60s; install_package 120s). Coerced + clamped to 1–3600. Use when the user asks for a specific limit, e.g. 'run X with a 5 minute timeout', or for a known-long command like a full test suite or a big install." }
 ```
+
+**Timeout — when to set it:** Most commands need no `timeout`; the action default applies. Set it only when (a) the user names a limit (*"…with a 2 minute timeout"*, *"give it 10 minutes"* → `timeout: 600`), or (b) the command is known to run long and would otherwise hit the default and be killed mid-run (*"run the full test suite"*, *"pip install torch"* → a generous value like `timeout: 600`). Express minutes in seconds (5 min → 300). The value is clamped to 1–3600s.
 
 **HUD Label:** `EXECUTING`
 **Confirmation:** `true` for `run_shell` with destructive commands (rm, format, etc.) and always for `kill_process`

@@ -899,6 +899,30 @@ def _run_plan(steps: list[str], cwd: str | None) -> dict:
 
 # ── Main handler ──────────────────────────────────────────────────────────────
 
+# ── Per-command timeout (Phase 4) ──────────────────────────────────────────────
+# Every action keeps a sensible default, but the brain may override it per command
+# via a `timeout` parameter (seconds) — e.g. "run uv run pytest with a 5 minute
+# timeout". Values are coerced and clamped to a safe range so a bad or huge value
+# can't wedge a command open forever (or kill it instantly).
+_TIMEOUT_MIN = 1
+_TIMEOUT_MAX = 3600   # 1 hour hard ceiling
+
+
+def _resolve_timeout(params: dict, default: int) -> int:
+    """Per-command timeout in seconds: the brain-supplied ``timeout`` when valid
+    (coerced + clamped to [_TIMEOUT_MIN, _TIMEOUT_MAX]), otherwise *default*."""
+    raw = params.get("timeout")
+    if raw is None or raw == "":
+        return default
+    try:
+        val = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    if val <= 0:
+        return default
+    return max(_TIMEOUT_MIN, min(val, _TIMEOUT_MAX))
+
+
 def _handle_code_execution(action: str, params: dict) -> dict:
     # R2-5: master kill switch. If the operator has disabled code execution in
     # settings, refuse every action up-front — no danger check, no AI calls,
@@ -960,11 +984,12 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
     # ── PowerShell ────────────────────────────────────────────────────────────
     if action == "run_powershell":
+        to = _resolve_timeout(params, 60)
         t0 = time.monotonic()
         try:
             result = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code],
-                capture_output=True, text=True, timeout=60, cwd=cwd,
+                capture_output=True, text=True, timeout=to, cwd=cwd,
             )
             out = _truncate((result.stdout or result.stderr or "").strip())
             _store_block(CommandBlock(
@@ -973,7 +998,7 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             ))
             return _ok(out) if result.returncode == 0 else _err(out)
         except subprocess.TimeoutExpired:
-            return _err("PowerShell command timed out after 60s")
+            return _err(f"PowerShell command timed out after {to}s")
         except FileNotFoundError:
             return _err("powershell.exe not found on this system")
         except Exception as exc:
@@ -981,11 +1006,12 @@ def _handle_code_execution(action: str, params: dict) -> dict:
 
     # ── Command Prompt ────────────────────────────────────────────────────────
     if action == "run_cmd":
+        to = _resolve_timeout(params, 60)
         t0 = time.monotonic()
         try:
             result = subprocess.run(
                 ["cmd.exe", "/c", code],
-                capture_output=True, text=True, timeout=60, cwd=cwd,
+                capture_output=True, text=True, timeout=to, cwd=cwd,
             )
             out = _truncate((result.stdout or result.stderr or "").strip())
             _store_block(CommandBlock(
@@ -994,7 +1020,7 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             ))
             return _ok(out) if result.returncode == 0 else _err(out)
         except subprocess.TimeoutExpired:
-            return _err("CMD command timed out after 60s")
+            return _err(f"CMD command timed out after {to}s")
         except FileNotFoundError:
             return _err("cmd.exe not found on this system")
         except Exception as exc:
@@ -1031,10 +1057,11 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             cmd = ["uv", "add", package]
         else:
             return _err(f"Unknown package manager {manager!r}. Use pip, npm, or uv.")
+        to = _resolve_timeout(params, 120)
         t0 = time.monotonic()
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120, cwd=cwd,
+                cmd, capture_output=True, text=True, timeout=to, cwd=cwd,
             )
             out = _truncate((result.stdout or result.stderr or "").strip())
             _store_block(CommandBlock(
@@ -1043,7 +1070,7 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             ))
             return _ok(out) if result.returncode == 0 else _err(out)
         except subprocess.TimeoutExpired:
-            return _err("Package install timed out after 120s")
+            return _err(f"Package install timed out after {to}s")
         except Exception as exc:
             return _err(str(exc))
 
@@ -1153,7 +1180,7 @@ def _handle_code_execution(action: str, params: dict) -> dict:
         if first_use:
             return first_use
         out, exit_code, duration_ms = _stream_execute(
-            [sys.executable, "-c", code], cwd=cwd, timeout=30,
+            [sys.executable, "-c", code], cwd=cwd, timeout=_resolve_timeout(params, 30),
         )
         block = CommandBlock(
             command=code, output=out, exit_code=exit_code,
@@ -1208,7 +1235,9 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             args = shlex.split(code) if isinstance(code, str) else code
         except Exception as exc:
             return _err(f"Could not parse command: {exc}")
-        out, exit_code, duration_ms = _stream_execute(args, cwd=cwd, timeout=60)
+        out, exit_code, duration_ms = _stream_execute(
+            args, cwd=cwd, timeout=_resolve_timeout(params, 60),
+        )
         block = CommandBlock(
             command=code, output=out, exit_code=exit_code,
             duration_ms=duration_ms, cwd=os.getcwd(), ai_generated=ai_generated,
@@ -1225,7 +1254,9 @@ def _handle_code_execution(action: str, params: dict) -> dict:
             return _err(f"Script not found: {code}")
         run_cwd = cwd or str(p.parent)
         cmd_args = [sys.executable, str(p)] if p.suffix == ".py" else [str(p)]
-        out, exit_code, duration_ms = _stream_execute(cmd_args, cwd=run_cwd, timeout=60)
+        out, exit_code, duration_ms = _stream_execute(
+            cmd_args, cwd=run_cwd, timeout=_resolve_timeout(params, 60),
+        )
         block = CommandBlock(
             command=str(p), output=out, exit_code=exit_code,
             duration_ms=duration_ms, cwd=run_cwd,

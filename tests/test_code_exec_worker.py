@@ -478,3 +478,74 @@ def test_cancel_kills_running_foreground_subprocess(monkeypatch):
     # The handle is cleared on exit.
     with ce._foreground_lock:
         assert ce._foreground_proc is None
+
+
+# ── Phase 4: configurable per-command timeout ───────────────────────────────
+
+
+def test_resolve_timeout_defaults_and_coercion():
+    import core.handlers.code_exec as ce
+
+    # Missing / blank / invalid / non-positive → the action default.
+    assert ce._resolve_timeout({}, 60) == 60
+    assert ce._resolve_timeout({"timeout": None}, 60) == 60
+    assert ce._resolve_timeout({"timeout": ""}, 60) == 60
+    assert ce._resolve_timeout({"timeout": "abc"}, 60) == 60
+    assert ce._resolve_timeout({"timeout": 0}, 60) == 60
+    assert ce._resolve_timeout({"timeout": -5}, 60) == 60
+    # Valid values pass through, including string/float coercion.
+    assert ce._resolve_timeout({"timeout": 120}, 60) == 120
+    assert ce._resolve_timeout({"timeout": "45"}, 60) == 45
+    assert ce._resolve_timeout({"timeout": 12.9}, 60) == 12
+
+
+def test_resolve_timeout_clamps_to_safe_range():
+    import core.handlers.code_exec as ce
+
+    assert ce._resolve_timeout({"timeout": 999999}, 60) == ce._TIMEOUT_MAX
+    assert ce._resolve_timeout({"timeout": ce._TIMEOUT_MAX + 1}, 60) == ce._TIMEOUT_MAX
+    assert ce._resolve_timeout({"timeout": 1}, 60) == ce._TIMEOUT_MIN
+
+
+def test_stream_execute_honors_short_timeout(monkeypatch):
+    """A custom (short) timeout is enforced and the message reflects it."""
+    import core.handlers.code_exec as ce
+    from core.signals import signals
+
+    monkeypatch.setattr(signals, "terminal_line_ready", _FakeSig())
+    monkeypatch.setattr(signals, "terminal_done", _FakeSig())
+
+    t0 = time.monotonic()
+    out, code, _ms = ce._stream_execute(
+        [sys.executable, "-c", "import time; time.sleep(20)"], None, timeout=1
+    )
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 10, "short timeout was not enforced"
+    assert code != 0, "a timed-out command must report a non-zero exit code"
+    assert "timed out after 1s" in out
+
+
+def test_run_python_honors_brain_supplied_timeout(monkeypatch):
+    """End-to-end: a `timeout` param flows through _handle_code_execution to the
+    subprocess and kills the command at the requested limit, not the 30s default."""
+    import core.handlers.code_exec as ce
+    from core.signals import signals
+
+    monkeypatch.setattr(ce, "_code_exec_enabled", lambda: True)
+    monkeypatch.setattr(ce, "_run_python_session_confirmed", True, raising=False)
+    # Isolate from the post-run AI fix/explain layer (no network in tests).
+    monkeypatch.setattr(ce, "_post_execute", lambda block, cwd: None)
+    monkeypatch.setattr(signals, "terminal_line_ready", _FakeSig())
+    monkeypatch.setattr(signals, "terminal_done", _FakeSig())
+
+    t0 = time.monotonic()
+    out = ce._handle_code_execution(
+        "run_python",
+        {"code": "import time; time.sleep(20)", "timeout": 1, "_danger_confirmed": True},
+    )
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 10, "brain-supplied timeout did not take effect"
+    assert out["success"] is False
+    assert "timed out after 1s" in out["error"]

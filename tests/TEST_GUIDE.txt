@@ -1666,6 +1666,40 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Configurable per-command timeout (code_execution)
+-----------------------------------------------------------------------
+Background: every code_execution action had a hardcoded timeout (run_python 30s;
+run_shell/git/npm/run_script/powershell/cmd 60s; install_package 120s). A genuinely
+long command (full test suite, a big pip install) would hit the default and get
+killed mid-run. The brain can now pass a `timeout` parameter (seconds) to override
+the default per command. It's coerced (str/float -> int) and clamped to 1-3600s;
+a missing/blank/invalid/<=0 value falls back to the action default. Timeout
+messages now reflect the actual limit used (e.g. "timed out after 300s").
+
+The brain sets `timeout` when the user names a limit ("...with a 5 minute timeout"
+-> 300) or for a known-long command ("run the full test suite", "pip install
+torch" -> a generous value). See CLAUDE.md code_execution parameters.
+
+Manual test (uv run python main.py):
+  1. "run python that sleeps for 20 seconds with a 2 second timeout" (or just
+     "run python -c \"import time; time.sleep(20)\" with a 2 second timeout")
+     -> it's killed at ~2s and reports "timed out after 2s", NOT the 30s default.
+  2. "run uv run pytest with a 5 minute timeout" -> the brain emits timeout: 300;
+     a suite that takes >60s now completes instead of being cut off at the old
+     60s default.
+  3. A normal command with no timeout phrasing -> behaves exactly as before
+     (action default applies).
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_code_exec_worker.py
+  -> _resolve_timeout returns the default for missing/blank/invalid/<=0 and the
+     coerced+clamped value otherwise (str/float coercion, 1-3600 clamp);
+     _stream_execute enforces an arbitrary short timeout and the message reflects
+     it; and a brain-supplied `timeout` flows through _handle_code_execution to
+     kill run_python at the requested limit (1s) rather than the 30s default.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
