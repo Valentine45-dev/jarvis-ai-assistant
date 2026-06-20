@@ -9,6 +9,10 @@ wheels/
 .cursor/
 .claude/
 
+# Claude Code local dev conventions — loaded by Claude Code (not JARVIS's
+# brain.py); kept on disk per machine, not tracked.
+CLAUDE.local.md
+
 assets/reference/
 
 # Virtual environments
