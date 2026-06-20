@@ -119,17 +119,19 @@ def _play_wav_via_mci(
     on_ready: Callable[[], None] | None,
     on_done:  Callable[[], None] | None,
     notify_fn: Callable[[Callable | None], None],
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Play a WAV file via Windows MCI and fire callbacks at start/end.
 
-    Same pattern as core/tts_elevenlabs.play_mp3_bytes but for WAV. We
-    open the file, fire on_ready immediately, ``play wait`` (blocks
-    this thread until playback ends), then fire on_done. It runs on
-    TtsEngine's single TTS worker thread, so blocking here is fine —
-    the worker processes one utterance at a time.
+    Uses the shared interruptible player (core/tts_elevenlabs._mci_play_until_done)
+    so an Esc-to-interrupt can cut the clip mid-way: non-blocking ``play`` + a
+    poll loop on the SAME worker thread that owns the alias. Runs on TtsEngine's
+    single TTS worker thread, one utterance at a time.
     """
     import ctypes
     import os as _os
+
+    from core.tts_elevenlabs import _mci_play_until_done
 
     mci = ctypes.windll.winmm.mciSendStringW
     alias = f"jarvis_gemini_{threading.get_ident()}"
@@ -140,7 +142,7 @@ def _play_wav_via_mci(
         if rc != 0:
             raise RuntimeError(f"MCI open failed rc={rc} for {wav_path!r}")
         notify_fn(on_ready)
-        mci(f"play {alias} wait", None, 0, None)
+        _mci_play_until_done(mci, alias, should_stop)
     finally:
         mci(f"close {alias}", None, 0, None)
         try:
@@ -213,6 +215,7 @@ def say_gemini(
     voice_name: str = DEFAULT_VOICE_NAME,
     api_key: str,
     model: str = "gemini-2.5-flash-preview-tts",
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Synthesize *text* with Gemini Flash TTS and play it.
 
@@ -273,7 +276,7 @@ def say_gemini(
             pass
         raise
 
-    _play_wav_via_mci(wav_path, on_ready, on_done, notify_fn)
+    _play_wav_via_mci(wav_path, on_ready, on_done, notify_fn, should_stop)
 
 
 def probe_gemini(

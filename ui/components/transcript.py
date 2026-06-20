@@ -225,6 +225,12 @@ class TranscriptPanel(GlassPanel):
         self._rows.append((you, y_time, jarvis, j_time, intent, conf))
         self._render()
 
+    def add_interrupted(self, you, y_time):
+        """Log a command the user aborted with Esc: the prompt + an amber
+        'Interrupted' marker (rendered specially via the 'interrupted' intent)."""
+        self._rows.append((you, y_time, "Interrupted", y_time, "interrupted", None))
+        self._render()
+
     def append_jarvis_scheduled(
         self, jarvis: str, j_time: str, intent: str = "", conf: float | None = None
     ) -> None:
@@ -259,6 +265,12 @@ class TranscriptPanel(GlassPanel):
             if you:
                 you_html = html.escape(f"[{y_time}] YOU: {you}")
                 blocks.append(f"<div>{you_html}</div>")
+            if jarvis and intent == "interrupted":
+                # Aborted command — amber marker, no intent/confidence suffix.
+                line_html = html.escape(f"[{j_time}] ⛔ {jarvis}")
+                blocks.append(f'<div style="color:#ffb432;">{line_html}</div>')
+                blocks.append("<div>&nbsp;</div>")
+                continue
             if jarvis:
                 suffix = f" ({intent}, {int(conf * 100)}%)" if intent and conf is not None else ""
                 body = jarvis

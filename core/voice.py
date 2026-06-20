@@ -217,6 +217,7 @@ class VoiceEngine:
         self._bridge: VoiceBridge | None = None  # lazy — created on main thread
         self._stt_fallback_announced = False     # one-shot streaming→batch toast
         self._persistent_session = None          # reused warm Deepgram socket
+        self._listen_cancel = threading.Event()  # Esc-interrupt of a live capture
 
     # ── Signal bridge ─────────────────────────────────────────────────────────
 
@@ -300,6 +301,16 @@ class VoiceEngine:
 
         self._tts.say(text, on_ready=_ready_wrapper, on_done=_done_wrapper)
 
+    def stop_speaking(self) -> None:
+        """Interrupt TTS immediately (Esc) — stops the current clip mid-play and
+        clears any queued lines. No-op if nothing is speaking."""
+        self._tts.stop_speaking()
+
+    def cancel_listening(self) -> None:
+        """Abort an in-progress mic capture (Esc). The active listen thread sees
+        the flag, stops the mic, and returns without delivering text or error."""
+        self._listen_cancel.set()
+
     def switch_tts_voice(
         self,
         voice_key: str,
@@ -371,6 +382,7 @@ class VoiceEngine:
     ) -> None:
         _dbg("voice", "_listen_thread running")
         self._listening.set()
+        self._listen_cancel.clear()   # fresh turn — clear any stale interrupt
         try:
             self._wake_handshake()
             # Streaming path (Deepgram) when configured; otherwise None → batch.
@@ -556,6 +568,9 @@ class VoiceEngine:
         start_t = _time.monotonic()
         try:
             while not done.is_set():
+                if self._listen_cancel.is_set():
+                    _dbg("voice", "streaming: capture cancelled (Esc)")
+                    break
                 now = _time.monotonic()
                 if not got_speech.is_set():
                     if now - start_t >= timeout:
@@ -576,6 +591,10 @@ class VoiceEngine:
                 session.end_turn() if persistent else session.finish()
             except Exception:
                 pass
+
+        # Interrupted by Esc — deliver nothing (no command, no error toast).
+        if self._listen_cancel.is_set():
+            return True
 
         text = _interim() or (last_partial["text"] or "").strip()
         if not text and err["msg"]:
@@ -648,7 +667,12 @@ class VoiceEngine:
                 timeout=timeout,
                 phrase_time_limit=phrase_time_limit,
                 threshold=threshold,
+                cancel=self._listen_cancel,
             )
+            # Interrupted by Esc — deliver nothing (no command, no error toast).
+            if self._listen_cancel.is_set():
+                _dbg("voice", "batch: capture cancelled (Esc)")
+                return
             _dbg("voice", f"capture() returned: {'WAV bytes' if wav_bytes else 'None (no speech)'}")
             if wav_bytes is None:
                 if on_error:

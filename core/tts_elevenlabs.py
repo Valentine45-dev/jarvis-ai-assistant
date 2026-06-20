@@ -34,11 +34,44 @@ def _el():
 
 # ── MP3 streaming playback via Windows MCI ────────────────────────────────────
 
+def _mci_play_until_done(mci, alias: str, should_stop: Callable[[], bool] | None) -> None:
+    """Play an opened MCI alias WITHOUT blocking on `wait`, polling its status so
+    a stop signal can cut the clip mid-way (the Esc-to-interrupt feature).
+
+    Runs on the worker thread that owns `alias`, so the `stop` is issued on the
+    same thread that opened it — no MCI thread-affinity risk. Polls `status mode`
+    every ~40ms: stops on `should_stop()`, returns when playback finishes, and
+    bails if the clip never reaches `playing` within ~0.5s (already done)."""
+    import ctypes
+    import time as _time
+
+    mci(f"play {alias}", None, 0, None)          # async start (no `wait`)
+    buf = ctypes.create_unicode_buffer(64)
+    started = False
+    misses = 0
+    while True:
+        if should_stop is not None and should_stop():
+            mci(f"stop {alias}", None, 0, None)
+            return
+        mci(f"status {alias} mode", buf, 64, None)
+        mode = (buf.value or "").strip().lower()
+        if mode == "playing":
+            started, misses = True, 0
+        elif started:
+            return                                # finished naturally
+        else:
+            misses += 1
+            if misses > 12:                       # ~0.5s, never started → done
+                return
+        _time.sleep(0.04)
+
+
 def play_mp3_stream(
     chunks,
     on_ready: Callable[[], None] | None,
     on_done:  Callable[[], None] | None,
     notify_fn: Callable[[Callable | None], None],
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Buffer the MP3 stream to a temp file, then play the COMPLETE file via MCI.
 
@@ -61,20 +94,25 @@ def play_mp3_stream(
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         tmp_path = f.name
 
-    alias  = f"jarvis_tts_{threading.get_ident()}"
-    opened = False
+    alias   = f"jarvis_tts_{threading.get_ident()}"
+    opened  = False
+    aborted = False
     try:
         with open(tmp_path, "ab", buffering=0) as audio_file:
             for chunk in chunks:
+                if should_stop is not None and should_stop():
+                    aborted = True       # interrupted while still buffering
+                    break
                 if chunk:
                     audio_file.write(chunk)
 
         # on_ready right before playback so the UI "speaking" cue lines up with
         # audio start (not with first-byte-received).
-        notify_fn(on_ready)
-        if mci(f'open "{tmp_path}" type mpegvideo alias {alias}', None, 0, None) == 0:
-            opened = True
-            mci(f"play {alias} wait", None, 0, None)
+        if not aborted:
+            notify_fn(on_ready)
+            if mci(f'open "{tmp_path}" type mpegvideo alias {alias}', None, 0, None) == 0:
+                opened = True
+                _mci_play_until_done(mci, alias, should_stop)
     finally:
         if opened:
             mci(f"close {alias}", None, 0, None)
@@ -90,8 +128,9 @@ def play_mp3_bytes(
     mp3_bytes: bytes,
     on_done: Callable[[], None] | None,
     notify_fn: Callable[[Callable | None], None],
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
-    """Play a complete MP3 buffer synchronously via Windows MCI."""
+    """Play a complete MP3 buffer via Windows MCI (interruptible)."""
     import ctypes
     import tempfile
     import os as _os
@@ -102,12 +141,15 @@ def play_mp3_bytes(
         f.write(mp3_bytes)
         tmp_path = f.name
 
-    alias = f"jarvis_tts_bytes_{threading.get_ident()}"
+    alias  = f"jarvis_tts_bytes_{threading.get_ident()}"
+    opened = False
     try:
-        mci(f'open "{tmp_path}" type mpegvideo alias {alias}', None, 0, None)
-        mci(f"play {alias} wait", None, 0, None)
-        mci(f"close {alias}", None, 0, None)
+        if mci(f'open "{tmp_path}" type mpegvideo alias {alias}', None, 0, None) == 0:
+            opened = True
+            _mci_play_until_done(mci, alias, should_stop)
     finally:
+        if opened:
+            mci(f"close {alias}", None, 0, None)
         try:
             _os.unlink(tmp_path)
         except OSError:
@@ -217,6 +259,7 @@ def _synth_once(
     voice_id: str,
     model: str,
     voice_settings,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """One synthesis attempt for a single model. Errors propagate to the caller
     BEFORE any playback/on_ready fires (the stream path is primed first), so a
@@ -245,7 +288,8 @@ def _synth_once(
             notify_fn(on_ready)
             notify_fn(on_done)
             return
-        play_mp3_stream(itertools.chain([first], iterator), on_ready, on_done, notify_fn)
+        play_mp3_stream(itertools.chain([first], iterator), on_ready, on_done,
+                        notify_fn, should_stop)
         return
 
     mp3_bytes = b"".join(
@@ -259,7 +303,7 @@ def _synth_once(
         )
     )
     notify_fn(on_ready)
-    play_mp3_bytes(mp3_bytes, on_done, notify_fn)
+    play_mp3_bytes(mp3_bytes, on_done, notify_fn, should_stop)
 
 
 def say_elevenlabs(
@@ -275,6 +319,7 @@ def say_elevenlabs(
     similarity_boost: float = 0.75,
     style: float = 0.6,
     use_speaker_boost: bool = True,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     el = _el()
     if el is None:
@@ -295,6 +340,7 @@ def say_elevenlabs(
             _synth_once(
                 client, synth_text, on_ready, on_done, notify_fn,
                 voice_id=voice_id, model=candidate, voice_settings=voice_settings,
+                should_stop=should_stop,
             )
             _RESOLVED_MODEL[model] = candidate
             if candidate != model:

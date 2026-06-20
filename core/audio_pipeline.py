@@ -252,6 +252,7 @@ class AudioCapture:
         timeout: float = 8.0,
         phrase_time_limit: float = 12.0,
         threshold: float | None = None,
+        cancel=None,
     ) -> bytes | None:
         """Record from the default mic using RMS VAD.
 
@@ -260,6 +261,10 @@ class AudioCapture:
         timeout           : seconds to wait for speech to start before giving up
         phrase_time_limit : max recording time after speech has started
         threshold         : RMS silence threshold; uses sensitivity config if None
+        cancel            : optional threading.Event; when set, the capture loop
+                            breaks promptly (Esc-to-interrupt). Returns whatever
+                            was captured so far — the caller checks the event and
+                            discards it.
 
         Returns WAV bytes, or None when no speech was detected within *timeout*.
         Raises RuntimeError on PortAudio / device errors.
@@ -297,6 +302,8 @@ class AudioCapture:
             ) as stream:
                 _dbg("capture", "stream open — listening for speech")
                 for frame_idx in range(max_frames):
+                    if cancel is not None and cancel.is_set():
+                        break   # Esc-interrupt — caller discards the result
                     data, _ = stream.read(self.CHUNK)
                     raw = bytes(data)
                     frames.append(raw)
@@ -431,6 +438,12 @@ class TtsEngine:
         # so a degraded session shows the heads-up toast once per target, not on
         # every single utterance.
         self._switch_announced: set[str] = set()
+        # Interrupt support: a generation counter. stop_speaking() bumps it; the
+        # playing clip captured the old value and its poll loop stops the moment
+        # they differ. The active pyttsx3 engine (last-resort tier) is stashed so
+        # stop_speaking() can stop() it too.
+        self._gen = 0
+        self._active_pyttsx_engine = None
         # R3-21: a single TTS worker drains a bounded queue, instead of spawning
         # an unbounded daemon thread per say(). A burst of utterances (a chatty
         # workflow narrating each step) can't pile up N threads all blocked on
@@ -477,6 +490,30 @@ class TtsEngine:
                     self._speaking_count -= 1
                 self._notify(on_done)
 
+    def stop_speaking(self) -> None:
+        """Interrupt TTS immediately: bump the generation so the currently
+        playing clip's poll loop stops mid-clip, drain every queued utterance,
+        and stop the pyttsx3 engine if that tier is the one playing. Non-blocking
+        — never takes the per-clip _lock, so it returns at once."""
+        self._gen += 1
+        # Stop the local engine too (its runAndWait can't poll _gen).
+        engine = self._active_pyttsx_engine
+        if engine is not None:
+            try:
+                engine.stop()
+            except Exception:
+                pass
+        # Drain pending utterances (fire their on_done, release the counter).
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._queue.task_done()
+            with self._speaking_lock:
+                self._speaking_count -= 1
+            self._notify(item[2])
+
     # ── Internal ─────────────────────────────────────────────────────────────
 
     def _drop_oldest(self) -> None:
@@ -520,6 +557,10 @@ class TtsEngine:
         """Play one utterance through the provider tiers. Runs on the single TTS
         worker thread; is_speaking accounting is handled by say()/_worker_loop."""
         ready_called = threading.Event()
+        # Capture the generation this clip belongs to; stop_speaking() bumps
+        # self._gen, and the playback poll loops abort the moment they differ.
+        my_gen = self._gen
+        should_stop = lambda: self._gen != my_gen  # noqa: E731
 
         def _on_ready_once() -> None:
             if not ready_called.is_set():
@@ -528,6 +569,9 @@ class TtsEngine:
 
         try:
             with self._lock:
+                if should_stop():           # interrupted before this clip started
+                    self._notify(on_done)
+                    return
                 # ── Tier 1: ElevenLabs ──────────────────────────────────────
                 # Skipped once a quota_exceeded has been seen this session —
                 # otherwise we'd burn through ElevenLabs latency on every line
@@ -543,6 +587,7 @@ class TtsEngine:
                             similarity_boost=config.elevenlabs_similarity_boost,
                             style=config.elevenlabs_style,
                             use_speaker_boost=config.elevenlabs_use_speaker_boost,
+                            should_stop=should_stop,
                         )
                         return
                     except Exception as exc:
@@ -578,6 +623,7 @@ class TtsEngine:
                             text, _on_ready_once, on_done, self._notify,
                             voice_name=voice_name,
                             api_key=config.gemini_api_key,
+                            should_stop=should_stop,
                         )
                         return
                     except Exception as exc:
@@ -595,7 +641,7 @@ class TtsEngine:
                 # handle this (otherwise pyttsx3 is the user's primary anyway).
                 if config.elevenlabs_api_key or config.gemini_api_key:
                     self._announce_switch("local", quota=self._gemini_quota_locked)
-                self._say_local(text, _on_ready_once, on_done)
+                self._say_local(text, _on_ready_once, on_done, should_stop)
         except Exception as exc:
             # A tier raised after the earlier ones were exhausted (typically the
             # pyttsx3 fallback). Log and fire on_done so the speaking_finished
@@ -668,6 +714,7 @@ class TtsEngine:
         text: str,
         on_ready: Callable[[], None] | None,
         on_done:  Callable[[], None] | None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         """pyttsx3 (Windows SAPI) fallback TTS.
 
@@ -723,6 +770,11 @@ class TtsEngine:
                         selected_voice_name = v.name
                         break
             _dbg("tts", f"pyttsx3 → profile={config.tts_voice!r}  sapi={selected_voice_name!r}")
+            if should_stop is not None and should_stop():
+                self._notify(on_done)
+                return
+            # Expose the engine so stop_speaking() can interrupt runAndWait().
+            self._active_pyttsx_engine = engine
             self._notify(on_ready)
             engine.say(text)
             engine.runAndWait()
@@ -730,4 +782,6 @@ class TtsEngine:
             _dbg("tts", f"pyttsx3 fallback failed: {exc}")
             self._notify(on_ready)
             _dbg("JARVIS", text)
+        finally:
+            self._active_pyttsx_engine = None
         self._notify(on_done)

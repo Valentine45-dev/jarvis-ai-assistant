@@ -1544,6 +1544,53 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Esc-to-interrupt JARVIS
+-----------------------------------------------------------------------
+Background: once a command was submitted (typed or voice) there was no way to
+abort it. Now a global Esc (QShortcut, Qt.ApplicationShortcut in window.py)
+interrupts whatever's in flight: it bumps _transcript_update_token (the existing
+staleness guard - drops the pending brain reply, follow-up narration, and stale
+TTS callbacks), SILENCES the voice mid-sentence, cancels a live mic capture,
+stands down a pending confirmation, logs an amber "Interrupted" row in the
+sys-log, and restores the prompt to the command bar (only if it's empty - won't
+clobber text you've started typing). Handler: ui/main_window/interrupt_mixin.py.
+
+How instant voice-stop works: TtsEngine gained a generation counter. The Windows
+MCI players (core/tts_elevenlabs.play_mp3_stream / play_mp3_bytes, core/tts_gemini
+._play_wav_via_mci) no longer block on `play ... wait`; they use the shared
+_mci_play_until_done() - non-blocking `play` + a ~40ms poll loop on the SAME
+worker thread, which issues `stop` the moment should_stop() flips. stop_speaking()
+bumps the gen (current clip stops) and drains the queue; pyttsx3 falls back to
+engine.stop(). No cross-thread MCI calls.
+
+Known limit (by design): dispatch() runs synchronously on the Qt main thread, so
+an action ALREADY executing (e.g. a browser step) blocks the event loop and Esc
+can't fire until it returns. Interrupt covers thinking / speaking / listening /
+awaiting-confirmation - not an action mid-run.
+
+Manual test (uv run python main.py):
+  1. Type a command, press Esc while it's "thinking" -> nothing runs, the prompt
+     is back in the input, sys-log shows it + amber "Interrupted".
+  2. Ask something with a long spoken reply, press Esc mid-sentence -> audio cuts
+     INSTANTLY.
+  3. Trigger a listen (wake word / mic button), press Esc while LISTENING ->
+     capture aborts, back to idle, no "no speech" toast.
+  4. Trigger a destructive action's confirm card, press Esc -> cancelled, logged.
+  5. Press Esc while idle -> nothing happens. With the tag-suggestion popup open,
+     Esc closes the popup first (second Esc would interrupt).
+  6. Start typing a NEW command while JARVIS speaks, press Esc -> voice stops, your
+     in-progress text is NOT clobbered.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_interrupt.py
+  -> stop_speaking() bumps the gen + drains the queue (firing each on_done,
+     is_speaking->False); _mci_play_until_done issues `stop` on a should_stop
+     signal and otherwise runs to completion (faked mci); cancel_listening makes
+     _run_streaming_stt deliver nothing; the interrupt handler restores the prompt
+     only when the field is empty, logs the row, bumps the token, and idles.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

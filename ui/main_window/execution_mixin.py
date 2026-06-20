@@ -106,6 +106,9 @@ class _ExecutionMixin:
             )
             return
         self._transcript_update_token += 1
+        # Remember the prompt (typed OR voice) so Esc-interrupt can restore it
+        # to the command bar.
+        self._last_cmd_text = display_cmd
         now = datetime.now().strftime("%H:%M")
         # Cap history to avoid unbounded memory growth
         previous_cmd = self._runtime_ctx.get_previous_command(self._history)
@@ -164,7 +167,14 @@ class _ExecutionMixin:
             return
 
         # Normal flow: route through Claude
+        token = self._transcript_update_token
+
         def _on_result(result: dict):
+            # Drop a brain reply for a command that's been interrupted/superseded
+            # (Esc or a newer command bumped the token while Claude was thinking).
+            if token != self._transcript_update_token:
+                return
+            result["_token"] = token   # re-checked on the main thread (race guard)
             if result.get("_unknown_tag"):
                 self._dashboard.toast.show_toast(
                     f"Unknown tag @{result['_unknown_tag']} — routed by NLP", "warning"
@@ -179,6 +189,12 @@ class _ExecutionMixin:
 
     def _on_brain_result(self, result: dict):
         """Runs on the Qt main thread after brain.py returns."""
+        # Esc (or a newer command) may have bumped the token after the worker
+        # thread passed its own check but before this queued slot ran — drop the
+        # stale reply so an interrupted command never executes or speaks.
+        tok = result.get("_token")
+        if tok is not None and tok != self._transcript_update_token:
+            return
         intent = result.get("intent", "unknown")
         conf   = float(result.get("confidence", 0.85))
         resp   = result.get("response", "")

@@ -44,7 +44,7 @@ def test_overlapping_say_keeps_is_speaking_true(engine: ap.TtsEngine, monkeypatc
     started_one = threading.Event()
     started_two = threading.Event()
 
-    def fake_local(text, on_ready, on_done):
+    def fake_local(text, on_ready, on_done, should_stop=None):
         if text == "one":
             started_one.set()
             if on_ready:
@@ -82,7 +82,7 @@ def test_overlapping_say_keeps_is_speaking_true(engine: ap.TtsEngine, monkeypatc
 def test_count_returns_to_zero_on_provider_exception(engine: ap.TtsEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """The finally must decrement even when the tier raises — otherwise a single
     failed clip would wedge is_speaking True forever and the mic never reopens."""
-    def boom(text, on_ready, on_done):
+    def boom(text, on_ready, on_done, should_stop=None):
         raise RuntimeError("tts blew up")
 
     monkeypatch.setattr(engine, "_say_local", boom)

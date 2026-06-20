@@ -59,6 +59,7 @@ from ui.main_window.backend_signals_mixin import _BackendSignalsMixin
 from ui.main_window.settings_mixin import _SettingsMixin
 from ui.main_window.state_hud_mixin import _StateHudMixin
 from ui.main_window.lifecycle_mixin import _LifecycleMixin
+from ui.main_window.interrupt_mixin import _InterruptMixin
 
 # Module-level constants live in constants.py so the method-group mixins can
 # share them without importing this module (which would be an import cycle).
@@ -74,6 +75,7 @@ class JarvisWindow(
     _SettingsMixin,
     _StateHudMixin,
     _LifecycleMixin,
+    _InterruptMixin,
     QMainWindow,
 ):
     VIEW_NAMES = ["Dashboard", "Voice", "Automation", "History", "Settings", "Terminal"]
@@ -269,6 +271,7 @@ class JarvisWindow(
         self._dashboard.left.transcript.cancelled.connect(self._on_cancelled)
         self._pending_result: dict | None = None
         self._confirm_mode: str | None = None  # "claude" | "executor" | None
+        self._last_cmd_text: str = ""          # last prompt, for Esc-restore
         self._cmd_from_terminal = False          # set when a cmd originates in the Terminal box
                                                  # so _process_cmd doesn't open a 2nd block for it
         self._last_result: dict | None = None   # Phase 5: last successfully dispatched intent
@@ -313,6 +316,12 @@ class JarvisWindow(
         self._summon_shortcut = QShortcut(QKeySequence("Meta+J"), self)
         self._summon_shortcut.setContext(Qt.ApplicationShortcut)
         self._summon_shortcut.activated.connect(self._summon_window)
+
+        # Global Esc — interrupt whatever's in flight (thinking / speaking /
+        # listening / awaiting confirmation). No-op when idle.
+        self._interrupt_shortcut = QShortcut(QKeySequence("Escape"), self)
+        self._interrupt_shortcut.setContext(Qt.ApplicationShortcut)
+        self._interrupt_shortcut.activated.connect(self._on_interrupt_requested)
 
         # System-wide Win+J via RegisterHotKey (Windows only).
         self._win_hotkey_id: int | None = None
