@@ -88,6 +88,22 @@ class _ConfirmMixin:
                 r.get("hud_status", "STANDBY"),
                 confirmed=True,
             )
+        elif mode == "executor_code":
+            # code_execution confirm: resolve_confirmation() re-runs _stream_execute
+            # (a blocking subprocess) — it MUST go back onto the worker thread, not
+            # the Qt main thread, via the single _spawn_code_worker helper. The
+            # original brain context was stashed when the card was shown.
+            from core.executor import resolve_confirmation
+            ctx = getattr(self, "_code_exec_confirm_ctx", None) or {}
+            self._code_exec_confirm_ctx = None
+            self._spawn_code_worker(
+                lambda: resolve_confirmation("yes"),
+                result=ctx.get("result") or {"intent": "code_execution"},
+                intent=ctx.get("intent", "code_execution"),
+                conf=ctx.get("conf", 1.0),
+                resp=ctx.get("resp", ""),
+                hud=ctx.get("hud", "EXECUTING"),
+            )
         elif mode == "executor":
             # Resolve the executor confirmation on the Qt MAIN thread (via signal
             # + QueuedConnection). The callback may continue a workflow whose
@@ -116,6 +132,14 @@ class _ConfirmMixin:
         if mode == "executor":
             from core.executor import resolve_confirmation
             resolve_confirmation("no")
+        elif mode == "executor_code":
+            # Stand down the code_execution confirmation. resolve_confirmation("no")
+            # only pops the pending callback (never runs the subprocess), so it is
+            # safe on the main thread. Release the in-flight guard + stashed context.
+            from core.executor import resolve_confirmation
+            resolve_confirmation("no")
+            self._code_exec_confirm_ctx = None
+            self._code_exec_in_flight = False
 
         msg = self._confirmation_controller.CANCEL_MESSAGE
         j_time = datetime.now().strftime("%H:%M")

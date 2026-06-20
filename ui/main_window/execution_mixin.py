@@ -105,6 +105,13 @@ class _ExecutionMixin:
                 "A workflow is running — please wait.", "warning",
             )
             return
+        # A code_execution worker is running off the main thread — block new
+        # commands (a confirmation reply already short-circuited above).
+        if getattr(self, "_code_exec_in_flight", False):
+            self._dashboard.toast.show_toast(
+                "A command is running — please wait.", "warning",
+            )
+            return
         self._transcript_update_token += 1
         # Remember the prompt (typed OR voice) so Esc-interrupt can restore it
         # to the command bar.
@@ -281,6 +288,26 @@ class _ExecutionMixin:
             self._dashboard.left.status_lbl.setText("Running workflow — please wait…")
             self._set_state("processing")
 
+        # code_execution moves OFF the Qt main thread (subprocess can block for up
+        # to its timeout). The worker runs dispatch(); the result returns via
+        # signals.code_execution_done → _on_code_execution_done on the main thread.
+        # browser_automation / automation_task MUST stay synchronous below
+        # (Playwright sync API is thread-affine to the main thread).
+        if intent == "code_execution":
+            self._spawn_code_worker(
+                lambda: dispatch(result, confirmed=confirmed),
+                result=result, intent=intent, conf=conf, resp=resp, hud=hud,
+            )
+            # status_lbl is a hidden compat widget (dashboard.py) — keep the call for
+            # safety but surface the real, VISIBLE cue as a toast (same as the
+            # document_creation path). Use the brain's ack line when present.
+            self._dashboard.left.status_lbl.setText("Running command — please wait…")
+            self._dashboard.toast.show_toast(
+                resp or "Running command — please wait…", "info",
+            )
+            self._set_state("processing")
+            return
+
         exec_out = dispatch(result, confirmed=confirmed)
 
         # R2-15: document_creation runs on a worker thread — finish on signal.
@@ -346,6 +373,127 @@ class _ExecutionMixin:
             ctx["hud"],
             exec_out,
         )
+
+    # ── code_execution worker (off the Qt main thread) ─────────────────────────
+
+    def _spawn_code_worker(self, run_callable, *, result: dict, intent: str,
+                           conf: float, resp: str, hud: str) -> None:
+        """Run a code_execution step on a daemon thread; deliver the result back
+        to the main thread via signals.code_execution_done.
+
+        THE single worker entry point — reused for the first attempt
+        (run_callable = dispatch(...)) AND every post-confirmation re-run
+        (run_callable = resolve_confirmation("yes")). Must be called on the main
+        thread; the worker only runs run_callable() and emits the signal — it
+        never touches Qt widgets or the in-flight flags.
+        """
+        from core.signals import signals
+        from core.handlers.shared import _err
+
+        # Owner token: the done-slot clears the in-flight guard only for the
+        # command that still owns it, so an orphaned worker (post-Esc) can't clear
+        # a newer command's guard.
+        token = self._transcript_update_token
+        self._code_exec_in_flight = True
+        self._code_exec_flight_token = token
+
+        def _worker() -> None:
+            try:
+                exec_out = run_callable()
+            except Exception as exc:
+                exec_out = _err(str(exc))
+            # ALWAYS emit so the slot finishes + releases the guard, even on crash.
+            try:
+                signals.code_execution_done.emit({
+                    "exec_out": exec_out, "result": result, "intent": intent,
+                    "conf": conf, "resp": resp, "hud": hud, "token": token,
+                })
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, name="jarvis-code-exec", daemon=True).start()
+
+    def _on_code_execution_done(self, payload: dict) -> None:
+        """Main-thread slot for signals.code_execution_done.
+
+        Routes by result shape: a needs-confirmation result shows the confirm
+        card (and confirming re-spawns the worker); a final result finishes
+        normally. Mirrors _on_document_generation_done for the finish path.
+        """
+        exec_out = payload.get("exec_out") or {}
+        token = payload.get("token")
+
+        # Esc / superseded: the token was bumped while the worker ran. Drop the
+        # result, and release the guard ONLY if this payload still owns it.
+        if token != self._transcript_update_token:
+            if token == self._code_exec_flight_token:
+                self._code_exec_in_flight = False
+            return
+
+        result = payload.get("result") or {}
+        intent = payload.get("intent", "code_execution")
+        conf = payload.get("conf", 0.85)
+        resp = payload.get("resp", "")
+        hud = payload.get("hud", "EXECUTING")
+
+        # (a) NEEDS-CONFIRMATION — an executor gate (danger / raw shell / first-use
+        # run_python / multi-candidate kill) asked for a yes/no mid-execution.
+        if exec_out.get("needs_confirmation"):
+            from core.executor import resolve_confirmation
+            # Auto-confirm: skip the card but keep resolve OFF the main thread.
+            if self._auto_confirm:
+                self._spawn_code_worker(
+                    lambda: resolve_confirmation("yes"),
+                    result=result, intent=intent, conf=conf, resp=resp, hud=hud,
+                )
+                return
+            # Show the card. _confirm_mode="executor_code" routes the confirm
+            # through the worker (resolve_confirmation runs _stream_execute), unlike
+            # plain "executor" which resolves on the main thread (Playwright-safe).
+            j_time = datetime.now().strftime("%H:%M")
+            display_resp = self._confirmation_controller.prompt_from_result(exec_out)
+            self._confirm_mode = "executor_code"
+            # Preserve the real brain context across the confirm round-trip so the
+            # post-confirm re-run (and the eventual _finish_execute) sees the actual
+            # action/intent, not a stub. _pending_result is the "claude"-mode result
+            # and would be stale/None here, so use a dedicated slot.
+            self._code_exec_confirm_ctx = {
+                "result": result, "intent": intent,
+                "conf": conf, "resp": resp, "hud": hud,
+            }
+            self._dashboard.left.typing.hide_typing()
+            if self._history:
+                self._history[-1].update({"jarvis": display_resp, "jTime": j_time,
+                                          "intent": intent, "conf": conf})
+            self._transcript_update_token += 1
+            transcript_token = self._transcript_update_token
+            transcript_payload = (transcript_token, display_resp, j_time, intent, conf)
+            self._show_confirm_card(display_resp)
+            self._dashboard.toast.show_toast(display_resp, "warning")
+            try:
+                from core.voice import voice_engine
+                voice_engine.say(
+                    display_resp,
+                    on_ready=lambda: self._tts_ready.emit(transcript_payload),
+                )
+            except Exception:
+                self._tts_ready.emit(transcript_payload)
+            return
+
+        # (b) FINAL — release the guard (if owner), record outcome, finish on main.
+        if token == self._code_exec_flight_token:
+            self._code_exec_in_flight = False
+        from core.memory import memory
+        memory.inject_outcome(
+            intent=intent,
+            action=result.get("action", ""),
+            success=bool(exec_out.get("success")),
+            output=exec_out.get("output", ""),
+            error=exec_out.get("error", ""),
+        )
+        if exec_out.get("success") and intent in self._ACTION_INTENTS:
+            self._last_result = result
+        self._finish_execute(result, intent, conf, resp, hud, exec_out)
 
     def _finish_execute(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         exec_out: dict) -> None:

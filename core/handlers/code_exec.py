@@ -88,6 +88,61 @@ _bg_procs: dict[int, "subprocess.Popen[str]"] = {}
 _bg_procs_lock = threading.Lock()
 
 
+# ── Execution generation (Esc / interrupt gate) ───────────────────────────────
+# A monotonically-increasing counter bumped by cancel_active_execution() (the Esc
+# hook). _stream_execute captures the generation at start; its reader thread
+# suppresses the terminal stream once the generation moves on, so an orphaned
+# worker can't paint ghost output after the user has cancelled.
+_exec_gen: int = 0
+_exec_gen_lock = threading.Lock()
+
+# Phase 3: handle to the active foreground subprocess so the Esc hook can kill the
+# whole process tree mid-run (closing the "command keeps running after cancel"
+# limit). Only one foreground command runs at a time — the UI in-flight guard
+# enforces this — so a single ref + lock suffices. The blocking subprocess.run()
+# branches (run_powershell / run_cmd / install_package) do NOT register here; they
+# expose no Popen handle and rely on their own timeouts.
+_foreground_proc: "subprocess.Popen[str] | None" = None
+_foreground_lock = threading.Lock()
+
+
+def current_exec_generation() -> int:
+    with _exec_gen_lock:
+        return _exec_gen
+
+
+def _register_foreground(proc: "subprocess.Popen[str]") -> None:
+    global _foreground_proc
+    with _foreground_lock:
+        _foreground_proc = proc
+
+
+def _clear_foreground(proc: "subprocess.Popen[str]") -> None:
+    """Clear the handle only if *proc* is still the registered one, so a newer
+    command that has already registered its own proc isn't accidentally unset."""
+    global _foreground_proc
+    with _foreground_lock:
+        if _foreground_proc is proc:
+            _foreground_proc = None
+
+
+def cancel_active_execution() -> None:
+    """Esc hook: bump the generation so any in-flight command's streamed output
+    (and exit-code badge) is suppressed, AND kill the active foreground subprocess
+    tree so a long-running command stops immediately instead of running to
+    completion/timeout in the background. Safe to call when nothing is running."""
+    global _exec_gen
+    with _exec_gen_lock:
+        _exec_gen += 1
+    with _foreground_lock:
+        proc = _foreground_proc
+    if proc is not None:
+        try:
+            _kill_process_tree(proc)
+        except Exception:
+            pass
+
+
 def _terminate_bg_procs() -> None:
     """Atexit hook: terminate every tracked background process on JARVIS exit.
 
@@ -448,6 +503,10 @@ def _stream_execute(
 
     output_lines: list[str] = []
     t_start = time.monotonic()
+    # Snapshot the generation: if Esc bumps it mid-run, the reader stops painting
+    # the terminal (the orphaned worker still drains the pipe into output_lines so
+    # the dropped result stays internally consistent — it just isn't shown).
+    gen = current_exec_generation()
 
     # R3-20: launch in its own process group/session so a timeout can kill the
     # whole tree, not just the direct child.
@@ -477,10 +536,16 @@ def _stream_execute(
             pass
         return str(exc), -1, duration_ms
 
+    # Phase 3: expose this proc to the Esc hook so cancel_active_execution() can
+    # kill the whole tree mid-run. Cleared in the finally below.
+    _register_foreground(proc)
+
     def _reader():
         for raw in proc.stdout:
             line = raw.rstrip("\n\r")
             output_lines.append(line)
+            if current_exec_generation() != gen:
+                continue   # cancelled — keep draining the pipe but stop painting
             try:
                 signals.terminal_line_ready.emit(line)
             except Exception:
@@ -489,32 +554,41 @@ def _stream_execute(
     reader = threading.Thread(target=_reader, daemon=True)
     reader.start()
 
-    timed_out = False
     try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_process_tree(proc)   # R3-20: reap the whole tree, not just the child
-
-    reader.join(timeout=3)
-
-    if timed_out:
-        msg = f"⏱️ Command timed out after {timeout}s."
-        output_lines.append(msg)
+        timed_out = False
         try:
-            signals.terminal_line_ready.emit(msg)
-        except Exception:
-            pass
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_process_tree(proc)   # R3-20: reap the whole tree, not just the child
 
-    exit_code = proc.returncode if proc.returncode is not None else -1
-    duration_ms = int((time.monotonic() - t_start) * 1000)
+        reader.join(timeout=3)
 
-    try:
-        signals.terminal_done.emit(exit_code)
-    except Exception:
-        pass
+        # cancelled == Esc bumped the generation mid-run (cancel_active_execution
+        # also killed the proc tree, so proc.wait above has already returned).
+        cancelled = current_exec_generation() != gen
 
-    return _truncate("\n".join(output_lines)), exit_code, duration_ms
+        if timed_out:
+            msg = f"⏱️ Command timed out after {timeout}s."
+            output_lines.append(msg)
+            if not cancelled:
+                try:
+                    signals.terminal_line_ready.emit(msg)
+                except Exception:
+                    pass
+
+        exit_code = proc.returncode if proc.returncode is not None else -1
+        duration_ms = int((time.monotonic() - t_start) * 1000)
+
+        if not cancelled:
+            try:
+                signals.terminal_done.emit(exit_code)
+            except Exception:
+                pass
+
+        return _truncate("\n".join(output_lines)), exit_code, duration_ms
+    finally:
+        _clear_foreground(proc)
 
 
 # ── AI intelligence layer ────────────────────────────────────────────────────

@@ -9,10 +9,16 @@ voice mid-clip, cancels a live mic capture, stands down a pending confirmation,
 logs an "Interrupted" row in the sys-log, and restores the prompt to the command
 bar so it can be edited/resent.
 
-Known limit: ``dispatch()`` runs synchronously on the Qt main thread, so an
-action already executing (e.g. a browser step) blocks the event loop and Esc
-can't fire until it returns. Interrupt covers the threaded stages
-(thinking / speaking / listening) and confirmation.
+Known limit: ``dispatch()`` for browser_automation / automation_task runs
+synchronously on the Qt main thread, so a browser/workflow step already executing
+blocks the event loop and Esc can't fire until it returns. code_execution runs on
+a worker thread, so Esc unblocks the UI mid-run (the orphaned worker's result is
+dropped, its terminal output suppressed) AND kills the running subprocess tree
+(cancel_active_execution → _kill_process_tree) — except the blocking
+subprocess.run() branches (run_powershell / run_cmd / install_package), which
+expose no handle and run to their own timeout. Interrupt covers the threaded
+stages (thinking / speaking / listening), confirmation, and a running
+code_execution.
 """
 
 from __future__ import annotations
@@ -49,6 +55,22 @@ class _InterruptMixin:
         # 1. Invalidate any in-flight brain reply / follow-up narration / stale
         #    TTS callbacks (the token checks across the pipeline drop them).
         self._transcript_update_token += 1
+
+        # 1a. Release the code_execution worker guard immediately so the UI accepts
+        #     new commands. The orphaned worker's done-slot will see the bumped
+        #     token and drop its (now stale) result. cancel_active_execution() bumps
+        #     the execution generation (the orphan's reader stops painting ghost
+        #     output) AND kills the running subprocess tree so it stops at once
+        #     (Phase 3) — streaming commands only; subprocess.run() branches run to
+        #     their own timeout.
+        if getattr(self, "_code_exec_in_flight", False):
+            self._code_exec_in_flight = False
+            self._code_exec_confirm_ctx = None
+            try:
+                from core.handlers.code_exec import cancel_active_execution
+                cancel_active_execution()
+            except Exception:
+                pass
 
         # 2. Silence the voice immediately (cuts the current clip mid-play).
         try:

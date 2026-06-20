@@ -236,6 +236,11 @@ class JarvisWindow(
         signals.document_generation_done.connect(
             self._on_document_generation_done, Qt.QueuedConnection,
         )
+        # code_execution worker emits this off the main thread → QueuedConnection
+        # delivers the result back to the main thread for finish / confirm-card.
+        signals.code_execution_done.connect(
+            self._on_code_execution_done, Qt.QueuedConnection,
+        )
         # F-3: cron scheduler emits this from a worker thread; QueuedConnection
         # bridges onto the Qt main thread so the workflow dispatch runs
         # thread-affine to Playwright etc.
@@ -263,6 +268,14 @@ class JarvisWindow(
             # (Linux without root, weird Windows policy, etc.) block launch.
             print(f"[hotkeys] registration skipped: {exc!r}")
         self._doc_async_ctx: dict | None = None
+        # code_execution runs on a worker thread (see execution_mixin). These two
+        # are main-thread-only: in-flight blocks new commands, flight_token is the
+        # owning command so an orphaned worker can't clear a newer command's guard.
+        self._code_exec_in_flight: bool = False
+        self._code_exec_flight_token: int = -1
+        # Brain context stashed while a code_execution confirm card is shown, so the
+        # post-confirm re-run preserves the real action/intent (set in the done-slot).
+        self._code_exec_confirm_ctx: dict | None = None
         self._last_error_toast_msg = ""
         self._last_error_toast_ts = 0.0
 

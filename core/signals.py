@@ -31,6 +31,9 @@ class JarvisSignals(QObject):
     terminal_done = pyqtSignal(int)         # exit code when the process finishes
     # R2-15: document_creation runs off the Qt main thread; payload is {"exec_out": dict}
     document_generation_done = pyqtSignal(dict)
+    # code_execution runs off the Qt main thread; payload carries exec_out plus the
+    # finish context (result, intent, conf, resp, hud, token). Delivered queued.
+    code_execution_done = pyqtSignal(dict)
     # F-3: cron scheduler fires this when a workflow's schedule is due. Payload
     # is the workflow id (str). Main thread receives it via QueuedConnection
     # and dispatches the workflow through the standard executor path.

@@ -1594,6 +1594,78 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+code_execution runs off the Qt main thread (no more UI freeze)
+-----------------------------------------------------------------------
+Background: code_execution used to run synchronously inside dispatch() on the Qt
+main thread, so any shell/python/pip command froze the whole UI for the length of
+the subprocess (up to its timeout) and the "live" terminal stream only appeared
+all at once at the end. It now runs on a daemon worker thread (jarvis-code-exec),
+exactly like document_creation. The result returns via signals.code_execution_done
+(Qt.QueuedConnection) to _on_code_execution_done on the main thread, which either
+finishes the command or shows a confirm card. A confirm card's "Yes" re-enters the
+SAME worker helper (_spawn_code_worker) via the new _confirm_mode "executor_code",
+so the post-confirm re-run (resolve_confirmation -> _stream_execute) also stays off
+the main thread. browser_automation and automation_task/run_workflow are UNCHANGED
+- they still run synchronously on the main thread (Playwright's sync API is
+thread-affine to the thread that started the browser).
+
+A new in-flight guard (_code_exec_in_flight) blocks a second command while one is
+running (toast: "A command is running - please wait."). An owner token
+(_code_exec_flight_token) ensures an orphaned post-Esc worker can't clear a newer
+command's guard.
+
+Esc + ghost output: Esc releases the guard immediately (UI accepts new commands at
+once) and calls code_exec.cancel_active_execution(), which (a) bumps an execution
+generation so the orphaned worker's reader thread STOPS painting terminal lines and
+the exit-code badge - no ghost output after you cancel - and (b) [Phase 3] KILLS the
+running foreground subprocess tree (_kill_process_tree) so a long command stops at
+once instead of running on in the background. _stream_execute registers its live
+Popen in a lock-guarded handle while running and clears it on exit.
+Known limit (by design): the blocking subprocess.run() branches - run_powershell,
+run_cmd, install_package - expose no Popen handle, so Esc can't kill THOSE mid-run;
+they run to their own timeout (60s / 60s / 120s). All the streaming commands
+(run_shell, run_python, run_script, git, npm, AI plans/fixes) ARE killed.
+
+Manual test (uv run python main.py):
+  1. "run uv run pytest" (or any long command) -> the UI STAYS RESPONSIVE while it
+     runs, an info TOAST shows the brain's ack (e.g. "Firing up pytest...") as the
+     "running" cue, and terminal output STREAMS LIVE line-by-line (not all at once
+     at the end). NOTE: the left-panel status_lbl/hud_status/state_pill are HIDDEN
+     compat widgets (dashboard.py) - the visible cues are the toast + the streaming
+     terminal, NOT a status line.
+  2. While that command is still EXECUTING (terminal actively streaming - not the
+     earlier "thinking" phase), type another command -> amber toast "A command is
+     running - please wait."; the second command does not start. (During the THINKING
+     phase a second command instead SUPERSEDES the first via token staleness - only
+     one ever runs; that's expected, not the in-flight block.)
+  3. "use PowerShell to list my desktop" -> a confirm card appears; click Yes ->
+     it runs OFF the main thread (UI stays live) and reports back.
+  4. Start a long command (e.g. "run python -c \"import time; time.sleep(30)\"" or
+     "run uv run pytest"), press Esc mid-run -> UI returns to idle immediately, the
+     command bar gets the prompt back, NO further terminal lines appear, AND the
+     subprocess is actually KILLED (confirm in Task Manager - no lingering python /
+     pytest process). Contrast: a PowerShell/CMD/pip command can't be killed mid-run
+     and runs to its timeout.
+  5. "run git status" -> fast path, finishes normally, output shown.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_code_exec_worker.py
+  -> off-thread spawn sets the guard + flight token and runs the callable on a
+     worker thread; a final result finishes once and clears the guard; a
+     needs-confirmation result shows the card (mode "executor_code"), holds the
+     guard, and stashes the brain context; a single- AND multi-hop confirm
+     round-trip re-enters _spawn_code_worker each hop and clears the guard only on
+     the final result; auto-confirm re-spawns off-thread (never resolves on main);
+     _process_cmd rejects a new command while in flight; a stale (Esc-superseded)
+     token drops the result without finishing and only the owner releases the
+     guard; the cancelled execution generation suppresses the terminal stream
+     while a normal run still streams; and [Phase 3] cancel_active_execution()
+     kills the registered foreground subprocess (a 30s sleep returns in well under
+     15s), _clear_foreground only clears the matching proc, and cancel with nothing
+     running just bumps the generation.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
