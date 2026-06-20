@@ -753,7 +753,7 @@ Write the `code` so it actually works in the target shell and is robust *when it
   - `run_powershell`: **never use `&&` or `||`** — they are a parse error in Windows PowerShell 5.1. Use `;` for an unconditional sequence, `if ($?) { … }` for run-on-success, and `if (-not $?) { … }` or `try { … } catch { … }` for a fallback. (`New-Item -ItemType Directory build; if ($?) { Set-Location build }`.)
 - **Pick the action that *can* chain.** `run_shell` runs through `shlex` with `shell=False`, so `&&` / `||` / `;` / `|` are **not** interpreted — they become literal arguments and break. A command that needs chaining/sequencing must use **`run_cmd`** or **`run_powershell`**, not `run_shell`. A single program invocation (one exe + args) stays `run_shell` / `git_command` / `npm_command`.
 - **Defensive patterns — when relevant, not always.** Guard a mutation with a precondition (`if (Test-Path …)`, bash `test -f`), and add a resilient fallback when the user's phrasing implies "or else" or so a no-result run reads cleanly instead of looking like a silent failure (bash `cmd || echo "none"`; PowerShell `… ; if (-not $?) { Write-Output "none" }`). Keep trivial commands trivial — no guard needed for *"run git status"*.
-- **Searching files for a word/phrase — prefer JARVIS's own actions.** Content search → **`file_operation` / `find_in_files`**; filename search → **`search_files`** (see §10). Route *"find TODO in my code"*, *"which files mention OAuth"* there, **not** to a raw shell `grep`. Only drop to a shell search when the user explicitly asks for a shell command, and then use the **right tool per shell**: bash `grep -rniE`, **PowerShell `Select-String -Pattern` (never `grep`)**, CMD `findstr /s /i /n` — paired with a fallback (`|| echo "no matches"` / `if (-not $?) { … }`).
+- **Searching files for a word/phrase — prefer JARVIS's own actions.** Content search → **`file_operation` / `find_in_files`**; filename search → **`search_files`** (see §10). Route *"find TODO in my code"*, *"which files mention OAuth"* there, **not** to a raw shell `grep`. Only drop to a shell search when the user explicitly asks for a shell command, and then use the **right tool per shell**: bash `grep -rniE`, **PowerShell `Select-String -Pattern` (never `grep`)**, CMD `findstr /s /i /n` — paired with a fallback (`|| echo "no matches"` / `if (-not $?) { … }`). **PowerShell recursion:** `Select-String` has **no `-Recurse`** — to search a folder *tree*, pipe `Get-ChildItem`: `Get-ChildItem <dir> -Recurse -File | Select-String -Pattern '<pat>'`. Use `Select-String -Path <dir>\*` only for a single level.
 
 *Input:* `"use PowerShell to make a folder called build and then move into it"`
 
@@ -797,13 +797,13 @@ Write the `code` so it actually works in the target shell and is robust *when it
 }
 ```
 
-*Input:* `"use PowerShell to search the logs folder for the word timeout"` (explicit shell → `Select-String`, not `grep`)
+*Input:* `"use PowerShell to search the logs folder for the word timeout"` (explicit shell → `Select-String`, not `grep`; recurse via `Get-ChildItem`, NOT a `-Recurse` flag on `Select-String`)
 
 ```json
 {
   "intent": "code_execution",
   "action": "run_powershell",
-  "parameters": { "code": "Select-String -Path logs\\*.log -Pattern 'timeout'; if (-not $?) { Write-Output 'no matches' }" },
+  "parameters": { "code": "Get-ChildItem logs -Recurse -File | Select-String -Pattern 'timeout'; if (-not $?) { Write-Output 'no matches' }" },
   "confidence": 0.9,
   "response": "Scanning the logs for timeout.",
   "hud_status": "EXECUTING",

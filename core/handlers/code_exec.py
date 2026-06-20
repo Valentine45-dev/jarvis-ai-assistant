@@ -641,7 +641,10 @@ def _nl_to_command(natural_language: str, env_ctx: dict) -> str | None:
                 "PowerShell NEVER use && or || (parse error in PS 5.1) — use ; for an "
                 "unconditional sequence and 'if ($?) { ... }' for run-on-success. "
                 "To search file contents use Select-String in PowerShell or findstr "
-                "in CMD, never grep. Add a resilient fallback when natural "
+                "in CMD, never grep. Select-String has NO -Recurse flag — to search "
+                "a folder tree, pipe Get-ChildItem: "
+                "'Get-ChildItem <dir> -Recurse -File | Select-String -Pattern <pat>'. "
+                "Add a resilient fallback when natural "
                 "(e.g. '...; if (-not $?) { Write-Output \"none\" }'). "
                 "No explanation. No markdown. No backticks. Just the raw command."
             ),
