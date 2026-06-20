@@ -225,12 +225,6 @@ class TranscriptPanel(GlassPanel):
         self._rows.append((you, y_time, jarvis, j_time, intent, conf))
         self._render()
 
-    def add_interrupted(self, you, y_time):
-        """Log a command the user aborted with Esc: the prompt + an amber
-        'Interrupted' marker (rendered specially via the 'interrupted' intent)."""
-        self._rows.append((you, y_time, "Interrupted", y_time, "interrupted", None))
-        self._render()
-
     def append_jarvis_scheduled(
         self, jarvis: str, j_time: str, intent: str = "", conf: float | None = None
     ) -> None:

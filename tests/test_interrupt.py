@@ -126,10 +126,14 @@ class _FakeField:
 
 class _FakeTranscript:
     def __init__(self):
-        self.rows = []
+        self.marked = []
+        self.stopped = 0
 
-    def add_interrupted(self, you, t):
-        self.rows.append((you, t))
+    def mark_interrupted(self, j_time=""):
+        self.marked.append(j_time)
+
+    def stop_animations(self):
+        self.stopped += 1
 
 
 def _make_host(*, state, last, input_text):
@@ -161,7 +165,7 @@ def test_interrupt_restores_prompt_logs_and_idles():
     host, field, transcript = _make_host(state="thinking", last="open chrome", input_text="")
     _InterruptMixin._on_interrupt_requested(host)
     assert host._transcript_update_token == 6          # in-flight work invalidated
-    assert transcript.rows == [("open chrome", transcript.rows[0][1])]
+    assert len(transcript.marked) == 1                  # existing row marked (not appended)
     assert field.value == "open chrome" and field.focused   # restored (was empty)
     assert host.states == ["idle"]
     assert host._history[-1]["status"] == "interrupted"
@@ -177,4 +181,4 @@ def test_interrupt_is_noop_when_idle():
     host, field, transcript = _make_host(state="idle", last="x", input_text="")
     _InterruptMixin._on_interrupt_requested(host)
     assert host._transcript_update_token == 5          # untouched
-    assert host.states == [] and transcript.rows == []
+    assert host.states == [] and transcript.marked == []

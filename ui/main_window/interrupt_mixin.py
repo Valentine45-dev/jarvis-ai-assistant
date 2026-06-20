@@ -40,6 +40,11 @@ class _InterruptMixin:
             return
 
         was_confirm = self._state == "awaiting_confirmation"
+        # A command is genuinely in flight (a transcript row exists for it) only
+        # in these states. "listening"/"connecting" cancelled a capture before
+        # anything was submitted — nothing to log or restore.
+        in_command = self._state in ("thinking", "processing", "speaking",
+                                     "awaiting_confirmation")
 
         # 1. Invalidate any in-flight brain reply / follow-up narration / stale
         #    TTS callbacks (the token checks across the pipeline drop them).
@@ -76,12 +81,15 @@ class _InterruptMixin:
             except Exception:
                 pass
 
-        # 5. Log the interrupted prompt in the sys-log + mark history.
-        prompt = (getattr(self, "_last_cmd_text", "") or "").strip()
         now = datetime.now().strftime("%H:%M")
-        if prompt:
+        prompt = (getattr(self, "_last_cmd_text", "") or "").strip()
+
+        if in_command:
+            # 5. Mark the existing command row as Interrupted (UPDATE, not
+            #    append) so the running typewriter can't clobber it, then mark
+            #    history.
             try:
-                self._dashboard.left.transcript.add_interrupted(prompt, now)
+                self._dashboard.left.transcript.mark_interrupted(now)
             except Exception:
                 pass
             if self._history and self._history[-1].get("status") == "pending":
@@ -89,15 +97,25 @@ class _InterruptMixin:
                     "jarvis": "Interrupted", "jTime": now,
                     "intent": "interrupted", "status": "interrupted",
                 })
-
-        # 6. Restore the prompt — but don't clobber text already being typed.
-        try:
-            field = self._dashboard.left.cmd_bar._input  # noqa: SLF001
-            if prompt and not field.text().strip():
-                field.setText(prompt)
-                field.setFocus()
-        except Exception:
-            pass
+            # 6. Restore the prompt — but don't clobber text already typed.
+            try:
+                field = self._dashboard.left.cmd_bar._input  # noqa: SLF001
+                if prompt and not field.text().strip():
+                    field.setText(prompt)
+                    field.setFocus()
+            except Exception:
+                pass
+        else:
+            # Cancelled a live capture — no command was submitted. Just stop any
+            # animation and clear the half-typed dictation for a clean idle.
+            try:
+                self._dashboard.left.transcript.stop_animations()
+            except Exception:
+                pass
+            try:
+                self._clear_voice_dictation()
+            except Exception:
+                pass
 
         # 7. Reset: hide the typing indicator, drop to idle, flash the HUD.
         try:

@@ -98,6 +98,22 @@ class _TypewriterProxy(QObject):
         else:
             self._start_thinking()
 
+    def stop_animations(self):
+        """Halt every in-progress animation (you / jarvis / thinking dots) so a
+        running timer can't keep mutating the last row after it's finalized —
+        e.g. on Esc-interrupt, where the 'thinking' dots would otherwise clobber
+        the Interrupted marker."""
+        self._stop_thinking()
+        self._timer.stop()
+        self._pending = None
+        self._flush_you()   # snap in-progress user text to FULL, not truncated
+
+    def mark_interrupted(self, j_time=""):
+        """Stop animations and mark the last row's response as 'Interrupted'
+        (rendered with the amber marker via the 'interrupted' intent)."""
+        self.stop_animations()
+        self._panel.update_last_jarvis("Interrupted", j_time, "interrupted", None)
+
     def update_last_jarvis(self, text, j_time="", intent="", conf=None):
         self._stop_thinking()
         self._timer.stop()

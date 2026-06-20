@@ -1551,9 +1551,12 @@ abort it. Now a global Esc (QShortcut, Qt.ApplicationShortcut in window.py)
 interrupts whatever's in flight: it bumps _transcript_update_token (the existing
 staleness guard - drops the pending brain reply, follow-up narration, and stale
 TTS callbacks), SILENCES the voice mid-sentence, cancels a live mic capture,
-stands down a pending confirmation, logs an amber "Interrupted" row in the
-sys-log, and restores the prompt to the command bar (only if it's empty - won't
-clobber text you've started typing). Handler: ui/main_window/interrupt_mixin.py.
+stands down a pending confirmation, marks the in-flight command's existing
+sys-log row as an amber "Interrupted" (UPDATES the row - no duplicate - and
+stops the typewriter so its "thinking" dots can't clobber the marker), and
+restores the prompt to the command bar (only if it's empty - won't clobber text
+you've started typing). A bare listening-cancel logs nothing (no command was
+submitted). Handler: ui/main_window/interrupt_mixin.py.
 
 How instant voice-stop works: TtsEngine gained a generation counter. The Windows
 MCI players (core/tts_elevenlabs.play_mp3_stream / play_mp3_bytes, core/tts_gemini
