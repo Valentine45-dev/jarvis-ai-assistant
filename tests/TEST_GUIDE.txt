@@ -1485,6 +1485,23 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+CI - Windows runner added to the test matrix
+-----------------------------------------------------------------------
+Background: CI ran tests on ubuntu-latest only, despite JARVIS being a
+Windows-targeted app (MCI audio, pycaw mute probe, powershell/cmd exec, SAPI
+voices) - none of that platform code was exercised in CI. .github/workflows/
+test.yml now runs a matrix: ubuntu-latest x {3.11, 3.12} + windows-latest x 3.12.
+The apt-get system-deps step is gated `if: runner.os == 'Linux'` (Windows ships
+the Qt plugins + a bundled PortAudio wheel, so no system packages needed).
+
+Verify: open the GitHub Actions "tests" workflow on the latest push - there
+should now be a "pytest (windows-latest - Python 3.12)" job, green, running the
+same `pytest -q -m "not integration and not qt and not slow"` under
+QT_QPA_PLATFORM=offscreen. Locally on Windows that selection is 357 passed,
+2 deselected.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

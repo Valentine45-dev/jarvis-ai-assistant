@@ -12,12 +12,18 @@ concurrency:
 
 jobs:
   test:
-    name: pytest (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    name: pytest (${{ matrix.os }} · Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12"]
+        # JARVIS is a Windows-targeted PyQt5 app (MCI audio, pycaw, powershell/
+        # cmd exec paths) — windows-latest covers that platform; ubuntu covers
+        # the cross-platform core on two Python versions.
+        include:
+          - { os: ubuntu-latest,  python: "3.11" }
+          - { os: ubuntu-latest,  python: "3.12" }
+          - { os: windows-latest, python: "3.12" }
     steps:
       - uses: actions/checkout@v4
 
@@ -29,8 +35,11 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python }}
 
-      # Headless PyQt5 + audio backends need a few system libs.
+      # Headless PyQt5 + audio backends need a few system libs on LINUX only.
+      # Windows ships the Qt platform plugins and a bundled PortAudio wheel, so
+      # there's nothing to apt-get there.
       - name: System deps (Qt offscreen, libegl, libxkbcommon)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
