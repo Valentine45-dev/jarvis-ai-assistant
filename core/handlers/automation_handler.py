@@ -42,8 +42,18 @@ _KNOWN_STEP_INTENTS: frozenset[str] = frozenset({
 
 
 def _yield_ui() -> None:
-    """Keep Qt responsive while long workflow steps execute on the main thread."""
+    """Pump the Qt event loop between steps so the UI stays responsive while a
+    workflow executes on the Qt MAIN thread.
+
+    No-op off the main thread: when an eligible browser-free workflow runs on a
+    worker (see ``execution_mixin._workflow_is_offthread_safe``), the main event
+    loop pumps itself, and ``processEvents()`` must only ever be called from the
+    thread that owns the event loop — calling it from the worker is both
+    unnecessary and unsafe.
+    """
     try:
+        if threading.current_thread() is not threading.main_thread():
+            return
         from PyQt5.QtWidgets import QApplication
         app = QApplication.instance()
         if app is not None:
@@ -60,11 +70,28 @@ def _yield_ui() -> None:
 # _run_from again — nested spans must not clear the flag early. Mirrors the
 # module-level is_document_generation_in_flight() pattern (R2-15).
 _workflow_depth = 0
+# Read on the Qt main thread (is_workflow_in_flight in _process_cmd) and mutated on
+# the workflow worker thread when an eligible browser-free workflow runs off-thread,
+# so every access is lock-guarded.
+_workflow_depth_lock = threading.Lock()
+
+
+def _inc_workflow_depth() -> None:
+    global _workflow_depth
+    with _workflow_depth_lock:
+        _workflow_depth += 1
+
+
+def _dec_workflow_depth() -> None:
+    global _workflow_depth
+    with _workflow_depth_lock:
+        _workflow_depth -= 1
 
 
 def is_workflow_in_flight() -> bool:
     """True while any _run_from / _resume_after_confirm frame is executing."""
-    return _workflow_depth > 0
+    with _workflow_depth_lock:
+        return _workflow_depth > 0
 
 
 def _handle_automation_task(action: str, params: dict) -> dict:
@@ -423,12 +450,11 @@ def _handle_automation_task(action: str, params: dict) -> dict:
                     # R3-2: count the resume frame as in-flight too — its prelude
                     # (_yield_ui + original_fn) pumps processEvents before it
                     # recurses into _run_from.
-                    global _workflow_depth
-                    _workflow_depth += 1
+                    _inc_workflow_depth()
                     try:
                         return _resume_impl()
                     finally:
-                        _workflow_depth -= 1
+                        _dec_workflow_depth()
 
                 # Re-register pending confirmation with a continuation closure:
                 # UI confirm executes current step, then resumes later steps.
@@ -465,12 +491,11 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         # R3-1/R3-2: mark the workflow in-flight for the whole _run_from span so
         # main.py rejects re-entrant commands / cron fires during the
         # processEvents() pump. Counter handles the _resume → _run_from nesting.
-        global _workflow_depth
-        _workflow_depth += 1
+        _inc_workflow_depth()
         try:
             return _run_from_impl(start_idx)
         finally:
-            _workflow_depth -= 1
+            _dec_workflow_depth()
 
     out = _run_from(0)
     if out.get("needs_confirmation"):

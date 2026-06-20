@@ -273,6 +273,16 @@ class _ExecutionMixin:
         ("search_web",         "youtube_search"),
         ("search_web",         "web_search_generic"),
     })
+    # Step intents proven Playwright-free AND Qt-widget-free, so an INLINE workflow
+    # built only from them can run on the code_execution worker thread instead of
+    # blocking the Qt main thread. Deliberately conservative: browser/search/open_app
+    # can drive the thread-affine Playwright session, and other intents
+    # (jarvis_meta/type_text/control_mouse/read_screen/vision/document_creation) are
+    # not yet vetted for off-thread safety — any of those keeps the workflow on the
+    # main thread. Widen only after verifying an intent is thread-safe.
+    _OFFTHREAD_WORKFLOW_INTENTS: frozenset = frozenset({
+        "file_operation", "system_control", "code_execution", "reminder_task",
+    })
 
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         confirmed: bool = False):
@@ -285,6 +295,22 @@ class _ExecutionMixin:
         if (intent == "automation_task"
                 and result.get("action") == "run_workflow"
                 and (result.get("parameters") or {}).get("steps")):
+            # A browser-free inline workflow (all structured, whitelist-only steps)
+            # can run on the SAME worker harness as code_execution, so its steps and
+            # confirm round-trip don't freeze the Qt main thread. Anything that could
+            # touch Playwright or isn't statically classifiable stays synchronous
+            # below (Playwright's sync API is thread-affine to the main thread).
+            if self._workflow_is_offthread_safe(result):
+                self._spawn_code_worker(
+                    lambda: dispatch(result, confirmed=confirmed),
+                    result=result, intent=intent, conf=conf, resp=resp, hud=hud,
+                )
+                self._dashboard.left.status_lbl.setText("Running workflow — please wait…")
+                self._dashboard.toast.show_toast(
+                    resp or "Running workflow — please wait…", "info",
+                )
+                self._set_state("processing")
+                return
             self._dashboard.left.status_lbl.setText("Running workflow — please wait…")
             self._set_state("processing")
 
@@ -375,6 +401,26 @@ class _ExecutionMixin:
         )
 
     # ── code_execution worker (off the Qt main thread) ─────────────────────────
+
+    def _workflow_is_offthread_safe(self, result: dict) -> bool:
+        """True when an inline run_workflow can run on the worker thread.
+
+        Conservative by design — returns False (→ stay on the Qt main thread) unless
+        EVERY step is a structured dict (not a natural-language string, which is
+        resolved mid-run and could turn out to be a browser action) whose intent is in
+        the Playwright-free / Qt-free whitelist (_OFFTHREAD_WORKFLOW_INTENTS). Any NL
+        step, any browser/search/open_app step, or any unvetted intent disqualifies the
+        whole workflow.
+        """
+        steps = (result.get("parameters") or {}).get("steps")
+        if not isinstance(steps, list) or not steps:
+            return False
+        for step in steps:
+            if not isinstance(step, dict):
+                return False  # natural-language string — unknown until resolved
+            if step.get("intent") not in self._OFFTHREAD_WORKFLOW_INTENTS:
+                return False
+        return True
 
     def _spawn_code_worker(self, run_callable, *, result: dict, intent: str,
                            conf: float, resp: str, hud: str) -> None:

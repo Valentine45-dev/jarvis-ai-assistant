@@ -1737,6 +1737,52 @@ Manual test (uv run python main.py):
 
 
 -----------------------------------------------------------------------
+Browser-free inline workflows run off the Qt main thread (no UI freeze)
+-----------------------------------------------------------------------
+Background: automation_task/run_workflow dispatched synchronously on the Qt main
+thread; _run_from only kept the UI alive by pumping processEvents() between steps,
+so a multi-clause command (e.g. "create a folder in tests AND a file inside it")
+briefly froze the window ("Not Responding"). An INLINE workflow whose EVERY step is
+a structured dict with a Playwright-free / Qt-free intent now runs on the SAME
+worker harness as code_execution (worker -> code_execution_done -> main-thread
+finish/confirm-card -> confirm re-spawns the worker). Anything that could touch the
+browser stays on the main thread, unchanged.
+
+Eligibility (execution_mixin._workflow_is_offthread_safe) - ALL must hold:
+  - intent=automation_task, action=run_workflow, non-empty parameters.steps.
+  - EVERY step is a structured dict (NOT a natural-language string - those resolve
+    mid-run and could become a browser action).
+  - EVERY step's intent is in the whitelist _OFFTHREAD_WORKFLOW_INTENTS =
+    {file_operation, system_control, code_execution, reminder_task}.
+Anything else (NL string step, browser_automation/open_app/open_url/search_web, or
+any unvetted intent like jarvis_meta/type_text/control_mouse/read_screen/vision/
+document_creation) -> unchanged synchronous main-thread path.
+
+Also: _yield_ui() (automation_handler) is now a no-op off the main thread (the main
+loop pumps itself; processEvents must only run on the owning thread), and
+_workflow_depth is lock-guarded (read on main, mutated on the worker).
+
+Manual test (uv run python main.py):
+  1. "create a folder called temp inside the tests folder and then create a file
+     readme.txt inside it" -> runs on the worker; the UI STAYS RESPONSIVE (no
+     "Not Responding"); the create_directory/create_file confirm cards appear and,
+     on Confirm, the workflow CONTINUES off-thread to completion.
+  2. "create tests/x.txt and mute the volume" -> two-step file+system workflow, smooth.
+  3. "open chrome and search for lofi" -> UNCHANGED: stays on the main thread (browser
+     steps), no Playwright "cannot switch thread" error.
+  4. A saved workflow run by name -> UNCHANGED (synchronous; no inline steps to classify).
+  Clean up any tests/temp, tests/x.txt artifacts afterward.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_workflow_offthread.py
+  -> _workflow_is_offthread_safe returns True only for all-structured whitelist-only
+     steps and False for an NL-string step / browser step / non-whitelist intent /
+     empty steps; an eligible inline workflow routes to _spawn_code_worker (not inline
+     dispatch) while an ineligible (browser) one dispatches synchronously; and
+     _yield_ui pumps on the main thread but is a no-op on a worker thread.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
