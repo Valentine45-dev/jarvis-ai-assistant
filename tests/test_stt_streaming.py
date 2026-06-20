@@ -7,6 +7,7 @@ UtteranceEnd->on_utterance_end, and that finish() flushes + closes the stream.
 
 from __future__ import annotations
 
+import queue
 import time
 from types import SimpleNamespace
 
@@ -172,3 +173,89 @@ def test_feed_forwards_audio_then_stops_after_finish():
     sess.finish()
     sess.feed(b"\x05\x06")  # after finish → ignored
     assert conn.sent == [b"\x01\x02", b"\x03\x04"]
+
+
+# ── persistent mode (socket reused across turns, kept warm by KeepAlive) ───────
+
+class _BlockingConn:
+    """recv() blocks until an event (or None=close) is pushed, so the reader
+    thread stays alive ACROSS turns — like a real persistent websocket."""
+
+    def __init__(self):
+        self._q: queue.Queue = queue.Queue()
+        self.sent: list[bytes] = []
+        self.keepalives = 0
+        self.finalized = 0
+        self.closed = False
+
+    def recv(self):
+        return self._q.get()  # blocks; None ends the reader
+
+    def push(self, ev):
+        self._q.put(ev)
+
+    def send_media(self, b):
+        self.sent.append(b)
+
+    def send_finalize(self):
+        self.finalized += 1
+
+    def send_close_stream(self):
+        self.closed = True
+        self._q.put(None)  # unblock the reader so teardown's join() returns
+
+    def send_keep_alive(self):
+        self.keepalives += 1
+
+
+class _CountingCM:
+    def __init__(self, conn, opens):
+        self.conn, self.opens = conn, opens
+
+    def __enter__(self):
+        self.opens[0] += 1
+        return self.conn
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_persistent_reuses_socket_across_turns_and_finalizes_without_closing():
+    conn = _BlockingConn()
+    opens = [0]
+    sess = DeepgramSttSession(api_key="x", _connect=lambda: _CountingCM(conn, opens))
+    noop = dict(on_partial=lambda t: None, on_final=lambda t: None,
+                on_utterance_end=lambda: None, on_error=lambda m: None)
+
+    sess.begin_turn(**noop)
+    assert opens[0] == 1 and sess.is_alive()
+    sess.feed(b"aa")
+    sess.end_turn()
+    time.sleep(0.05)
+    assert conn.sent == [b"aa"]
+    assert conn.finalized == 1 and conn.closed is False       # Finalize, NOT close
+    assert sess.is_alive()                                    # socket stays warm
+
+    sess.begin_turn(**noop)                                   # second turn
+    assert opens[0] == 1                                      # NOT reopened
+    sess.feed(b"bb")
+    sess.end_turn()
+    time.sleep(0.05)
+    assert conn.sent == [b"aa", b"bb"]
+    assert conn.finalized == 2
+
+    sess.close()
+    assert conn.closed is True and not sess.is_alive()        # CloseStream on exit
+
+
+def test_persistent_keepalive_pings_while_idle():
+    conn = _BlockingConn()
+    sess = DeepgramSttSession(api_key="x", _connect=lambda: _CountingCM(conn, [0]))
+    sess._KEEPALIVE_S = 0.03                                  # speed up for the test
+    sess.begin_turn(on_partial=lambda t: None, on_final=lambda t: None,
+                    on_utterance_end=lambda: None, on_error=lambda m: None)
+    sess.end_turn()                                           # idle → keepalive runs
+    time.sleep(0.15)
+    pings = conn.keepalives
+    sess.close()
+    assert pings >= 1                                         # pinged while idle

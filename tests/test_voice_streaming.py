@@ -27,7 +27,15 @@ class _FakeSession:
         self.closed = False
         self.fed: list[bytes] = []
 
+    def begin_turn(self, **cbs):
+        self.began = getattr(self, "began", 0) + 1
+        self.start(**cbs)
+
+    def end_turn(self):
+        self.ended = getattr(self, "ended", 0) + 1
+
     def start(self, *, on_partial, on_final, on_utterance_end, on_error):
+        self.started = getattr(self, "started", 0) + 1
         if self._raise_on_start:
             raise RuntimeError("connect refused")
 
@@ -136,3 +144,19 @@ def test_error_after_text_still_delivers_text():
     handled, got, errs, _ = _run(eng, sess)
     assert handled is True
     assert got == ["turn on the lights"]
+
+
+# ── persistent mode ───────────────────────────────────────────────────────────
+
+def test_persistent_uses_begin_end_turn_and_keeps_socket_warm():
+    eng = VoiceEngine()
+    sess = _FakeSession([("final", "open chrome"), ("utt", None)])
+    got = []
+    handled = eng._run_streaming_stt(
+        sess, got.append, lambda m: None, 1.0, 2.0,
+        persistent=True, mic_streamer=_NoopStreamer(),
+    )
+    assert handled is True and got == ["open chrome"]
+    assert getattr(sess, "began", 0) == 1 and getattr(sess, "ended", 0) == 1
+    assert getattr(sess, "finished", False) is False   # finish() not used in persistent
+    assert sess.closed is False                        # socket stays warm

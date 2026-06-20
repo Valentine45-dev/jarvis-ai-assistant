@@ -1504,6 +1504,46 @@ QT_QPA_PLATFORM=offscreen. Locally on Windows that selection is 357 passed,
 
 
 -----------------------------------------------------------------------
+Streaming STT - persistent Deepgram socket (opt-in, kills the CONNECTING gap)
+-----------------------------------------------------------------------
+Background: each listen turn opened a fresh Deepgram websocket (~1s connect),
+which is the whole reason the CONNECTING state exists. New opt-in config
+`stt_persistent` (default False) keeps ONE socket open across turns and warms it
+with KeepAlive between them, so each turn skips the connect - capture is
+near-instant.
+
+How it works (researched against Deepgram docs): the socket opens on the FIRST
+turn (audio must flow before KeepAlive can hold it open), a keepalive thread
+pings every 5s while idle (Deepgram drops idle sockets after ~10s, NET-0001),
+and each turn ends with Finalize (flush + final result, socket stays open)
+instead of CloseStream. begin_turn/end_turn replace start/finish on the reused
+session; all websocket sends are serialised under one lock so the writer,
+keepalive, and finalize threads never interleave frames.
+
+Safety (3 layers, no regression risk): default False = today's fresh-socket-
+per-turn path, byte-for-byte. When True, if the warm socket is unhealthy at turn
+start it's discarded and a fresh per-turn socket opens; if THAT fails, the Google
+batch fallback still catches it. A stream error mid-turn drops the warm socket so
+the next turn reopens clean. The socket is closed gracefully on app exit
+(closeEvent -> voice_engine.close_persistent()).
+
+Manual test (needs DEEPGRAM_API_KEY): set stt_provider="deepgram" AND
+stt_persistent=true in config/jarvis.json, restart. First turn: log shows
+"Deepgram persistent socket open" once. Subsequent turns: NO new "socket open"
+line, and the CONNECTING phase should be much shorter / barely visible - you can
+basically talk right away. Leave it idle > 10s between turns and it should still
+work (keepalive held it). Flip stt_persistent back to false to compare.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_stt_streaming.py tests/test_voice_streaming.py
+  -> persistent reuses one socket across turns (opens once), Finalizes WITHOUT
+     closing, stays is_alive() between turns, pings KeepAlive while idle, and
+     CloseStream only on close(); VoiceEngine drives begin_turn/end_turn (not
+     start/finish) in persistent mode and leaves the socket warm. (Websocket +
+     mic faked.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

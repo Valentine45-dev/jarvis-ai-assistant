@@ -51,8 +51,10 @@ class DeepgramSttSession(StreamingSttSession):
         self._conn = None
         self._reader: threading.Thread | None = None
         self._writer: threading.Thread | None = None
-        self._stop = threading.Event()
-        self._finishing = threading.Event()
+        self._keepalive: threading.Thread | None = None
+        self._stop = threading.Event()         # permanent teardown (close)
+        self._turn_active = threading.Event()  # True while a turn feeds audio
+        self._send_lock = threading.Lock()     # serialise all websocket sends
         # Audio is queued here by feed() (called on the real-time mic thread) and
         # drained by the writer thread, so a slow websocket send NEVER stalls the
         # mic read loop (which would overflow PortAudio's buffer and shred the
@@ -65,27 +67,26 @@ class DeepgramSttSession(StreamingSttSession):
         self._on_utterance_end = None
         self._on_error = None
 
-    # ── StreamingSttSession ───────────────────────────────────────────────────
+    # KeepAlive cadence — Deepgram closes an idle socket after ~10 s (NET-0001),
+    # so ping every 5 s between turns to hold a persistent connection open.
+    _KEEPALIVE_S = 5.0
+
+    # ── StreamingSttSession (per-turn: socket opens and closes each turn) ──────
 
     def start(self, *, on_partial, on_final, on_utterance_end, on_error) -> None:
-        self._on_partial = on_partial
-        self._on_final = on_final
-        self._on_utterance_end = on_utterance_end
-        self._on_error = on_error
+        self.set_callbacks(on_partial=on_partial, on_final=on_final,
+                           on_utterance_end=on_utterance_end, on_error=on_error)
         self._stop.clear()
-        self._finishing.clear()
-        self._cm = self._make_cm()
-        self._conn = self._cm.__enter__()
-        self._reader = threading.Thread(target=self._read_loop, name="DeepgramRecv", daemon=True)
-        self._reader.start()
-        self._writer = threading.Thread(target=self._write_loop, name="DeepgramSend", daemon=True)
-        self._writer.start()
+        self._turn_active.set()
+        self._open_socket(keepalive=False)
         _dbg("stt", f"Deepgram session started (model={self._model!r})")
 
     def feed(self, pcm16: bytes) -> None:
         # Non-blocking by design: just enqueue. The writer thread does the actual
         # websocket send, so the mic thread is never blocked on the network.
-        if self._stop.is_set() or self._finishing.is_set():
+        # Gated on _turn_active so audio outside a turn (idle, persistent mode)
+        # is dropped rather than streamed.
+        if self._stop.is_set() or not self._turn_active.is_set():
             return
         try:
             self._send_q.put_nowait(pcm16)
@@ -99,45 +100,113 @@ class DeepgramSttSession(StreamingSttSession):
             except (queue.Empty, queue.Full):
                 pass
 
-    def _write_loop(self) -> None:
-        """Drain queued audio to the websocket. Exits when finishing/stopped and
-        the queue is empty (so finish() can flush the tail before finalize)."""
-        while True:
-            try:
-                chunk = self._send_q.get(timeout=0.05)
-            except queue.Empty:
-                if self._finishing.is_set() or self._stop.is_set():
-                    return
-                continue
-            conn = self._conn
-            if conn is None or self._stop.is_set():
-                return
-            try:
-                conn.send_media(chunk)
-            except Exception as exc:
-                self._fail(f"Deepgram send failed: {exc}")
-                return
-
     def finish(self) -> None:
-        # Stop accepting new audio, let the writer flush what's already queued,
-        # THEN finalize + close so the last words actually reach Deepgram.
-        self._finishing.set()
-        writer = self._writer
-        if writer is not None and writer.is_alive() and writer is not threading.current_thread():
-            writer.join(timeout=2.0)
-        if self._dropped:
-            _dbg("stt", f"Deepgram send queue dropped {self._dropped} frame(s) — network lagged")
-        conn = self._conn
-        if conn is not None:
-            try:
-                conn.send_finalize()
-                conn.send_close_stream()
-            except Exception:
-                pass
+        # Per-turn teardown: stop accepting audio, flush the queue, finalize so
+        # the tail is transcribed, then close the socket entirely.
+        self._turn_active.clear()
+        self._drain()
+        self._locked_send(lambda c: c.send_finalize())
+        self._locked_send(lambda c: c.send_close_stream())
         self._teardown()
 
     def close(self) -> None:
+        # Best-effort graceful close for a persistent socket (app shutdown).
+        self._locked_send(lambda c: c.send_close_stream())
         self._teardown()
+
+    # ── Persistent mode (socket stays open across turns; kept warm by KeepAlive)
+
+    def begin_turn(self, *, on_partial, on_final, on_utterance_end, on_error) -> None:
+        """Start a turn on a reused socket — opening it on the first turn (audio
+        flows immediately, which is required before KeepAlive can hold it open)."""
+        self.set_callbacks(on_partial=on_partial, on_final=on_final,
+                           on_utterance_end=on_utterance_end, on_error=on_error)
+        if not self.is_alive():
+            self._stop.clear()
+            self._open_socket(keepalive=True)
+            _dbg("stt", f"Deepgram persistent socket open (model={self._model!r})")
+        self._turn_active.set()
+
+    def end_turn(self) -> None:
+        """End a turn but KEEP the socket open: flush, Finalize (returns the
+        final result without closing), then let KeepAlive hold it for next time."""
+        self._turn_active.clear()
+        self._drain()
+        self._locked_send(lambda c: c.send_finalize())
+
+    def is_alive(self) -> bool:
+        return (
+            self._conn is not None
+            and not self._stop.is_set()
+            and self._reader is not None
+            and self._reader.is_alive()
+        )
+
+    def set_callbacks(self, *, on_partial, on_final, on_utterance_end, on_error) -> None:
+        self._on_partial = on_partial
+        self._on_final = on_final
+        self._on_utterance_end = on_utterance_end
+        self._on_error = on_error
+
+    # ── Socket / thread plumbing ──────────────────────────────────────────────
+
+    def _open_socket(self, *, keepalive: bool) -> None:
+        self._cm = self._make_cm()
+        self._conn = self._cm.__enter__()
+        self._reader = threading.Thread(target=self._read_loop, name="DeepgramRecv", daemon=True)
+        self._reader.start()
+        self._writer = threading.Thread(target=self._write_loop, name="DeepgramSend", daemon=True)
+        self._writer.start()
+        if keepalive:
+            self._keepalive = threading.Thread(
+                target=self._keepalive_loop, name="DeepgramKeepAlive", daemon=True)
+            self._keepalive.start()
+
+    def _locked_send(self, fn) -> bool:
+        """Run one websocket send under the send lock so the writer, keepalive,
+        and finalize/close threads never interleave frames. Returns True on
+        success; surfaces an error and returns False on failure."""
+        conn = self._conn
+        if conn is None or self._stop.is_set():
+            return False
+        with self._send_lock:
+            try:
+                fn(conn)
+                return True
+            except Exception as exc:
+                self._fail(f"Deepgram send failed: {exc}")
+                return False
+
+    def _drain(self, timeout: float = 2.0) -> None:
+        """Block until the audio queue is flushed (writer caught up) or timeout,
+        so Finalize is sent only after the turn's last audio reached the wire."""
+        import time
+        deadline = time.monotonic() + timeout
+        while (not self._send_q.empty() and not self._stop.is_set()
+               and time.monotonic() < deadline):
+            time.sleep(0.02)
+        if self._dropped:
+            _dbg("stt", f"Deepgram send queue dropped {self._dropped} frame(s) — network lagged")
+
+    def _write_loop(self) -> None:
+        """Drain queued audio to the websocket until the socket is torn down."""
+        while not self._stop.is_set():
+            try:
+                chunk = self._send_q.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if self._stop.is_set():
+                return
+            if not self._locked_send(lambda c, b=chunk: c.send_media(b)):
+                return
+
+    def _keepalive_loop(self) -> None:
+        """Ping every _KEEPALIVE_S while idle (between turns) to hold the socket
+        open. Skips pinging while a turn is feeding audio (no need) and exits the
+        moment the socket is torn down."""
+        while not self._stop.wait(self._KEEPALIVE_S):
+            if not self._turn_active.is_set():
+                self._locked_send(lambda c: c.send_keep_alive())
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -220,7 +289,7 @@ class DeepgramSttSession(StreamingSttSession):
                 cm.__exit__(None, None, None)
             except Exception:
                 pass
-        for t in (self._writer, self._reader):
+        for t in (self._writer, self._reader, self._keepalive):
             if t is not None and t.is_alive() and t is not threading.current_thread():
                 t.join(timeout=1.0)
 

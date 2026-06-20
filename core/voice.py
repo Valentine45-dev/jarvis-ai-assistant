@@ -216,6 +216,7 @@ class VoiceEngine:
         self._tts_muted = False
         self._bridge: VoiceBridge | None = None  # lazy — created on main thread
         self._stt_fallback_announced = False     # one-shot streaming→batch toast
+        self._persistent_session = None          # reused warm Deepgram socket
 
     # ── Signal bridge ─────────────────────────────────────────────────────────
 
@@ -375,10 +376,13 @@ class VoiceEngine:
             # Streaming path (Deepgram) when configured; otherwise None → batch.
             # If streaming starts but fails before producing any text, it returns
             # False and we fall through to the Google batch path for this turn.
-            session = self._make_stt_session()
+            session, persistent = self._acquire_stt_session()
             if session is not None:
-                _dbg("voice", "using streaming STT")
-                if self._run_streaming_stt(session, callback, on_error, timeout, phrase_time_limit):
+                _dbg("voice", f"using streaming STT (persistent={persistent})")
+                if self._run_streaming_stt(
+                    session, callback, on_error, timeout, phrase_time_limit,
+                    persistent=persistent,
+                ):
                     return
                 _dbg("voice", "streaming STT failed to produce a result — falling back to Google batch")
                 self._announce_stt_fallback()
@@ -417,15 +421,46 @@ class VoiceEngine:
         except Exception as exc:
             _dbg("voice", f"notice emit failed: {exc}")
 
-    def _make_stt_session(self):
-        """Build a streaming session from config, or None to mean 'use batch'.
-        Never raises — any construction failure degrades to the batch path."""
+    def _acquire_stt_session(self):
+        """Return (session, persistent) for this turn, or (None, False) for batch.
+
+        Persistent mode (config.stt_persistent) reuses one warm socket across
+        turns; we hand back the live one when it's healthy, else build a fresh
+        session (its socket opens on the first begin_turn). Never raises — any
+        failure degrades to the Google batch path."""
+        persistent = bool(getattr(config, "stt_persistent", False))
+        if persistent and self._persistent_session is not None:
+            try:
+                if self._persistent_session.is_alive():
+                    return self._persistent_session, True
+            except Exception:
+                pass
+            self._discard_persistent()
         try:
             from core.stt import create_stt_session
-            return create_stt_session(config)
+            session = create_stt_session(config)
         except Exception as exc:
             _dbg("voice", f"create_stt_session failed ({exc}) — using batch")
-            return None
+            return None, False
+        if session is None:
+            return None, False
+        if persistent:
+            self._persistent_session = session
+        return session, persistent
+
+    def _discard_persistent(self) -> None:
+        """Drop the warm session (e.g. after a stream error) so the next turn
+        opens a fresh socket."""
+        session, self._persistent_session = self._persistent_session, None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def close_persistent(self) -> None:
+        """Public: gracefully close the warm socket on app shutdown."""
+        self._discard_persistent()
 
     def _run_streaming_stt(
         self,
@@ -435,6 +470,7 @@ class VoiceEngine:
         timeout:           float,
         phrase_time_limit: float,
         *,
+        persistent: bool = False,
         mic_streamer=None,
     ) -> bool:
         """Drive a StreamingSttSession to one utterance.
@@ -443,6 +479,10 @@ class VoiceEngine:
         clean no-speech reported via on_error). Returns False when streaming
         couldn't start or errored before any text — the caller then falls back to
         the Google batch path.
+
+        `persistent` reuses one warm socket across turns: begin_turn/end_turn
+        (Finalize, keep open) instead of start/finish (open/close). A broken warm
+        socket is discarded so the next turn reopens fresh.
 
         `mic_streamer` is injectable for tests; in production a real MicStreamer
         is built from config.mic_device.
@@ -480,16 +520,16 @@ class VoiceEngine:
             err["msg"] = msg
             done.set()
 
+        cbs = dict(on_partial=_on_partial, on_final=_on_final,
+                   on_utterance_end=_on_utt_end, on_error=_on_sess_error)
         try:
-            session.start(
-                on_partial=_on_partial,
-                on_final=_on_final,
-                on_utterance_end=_on_utt_end,
-                on_error=_on_sess_error,
-            )
+            if persistent:
+                session.begin_turn(**cbs)
+            else:
+                session.start(**cbs)
         except Exception as exc:
             _dbg("voice", f"streaming session start failed: {exc}")
-            self._safe_close(session)
+            self._fail_session(session, persistent)
             return False
 
         streamer = mic_streamer
@@ -500,13 +540,13 @@ class VoiceEngine:
                 streamer = MicStreamer(feed=session.feed, device=device)
             except Exception as exc:
                 _dbg("voice", f"mic streamer init failed: {exc}")
-                self._safe_close(session)
+                self._end_turn_or_close(session, persistent)
                 return False
         try:
             streamer.start()
         except Exception as exc:
             _dbg("voice", f"mic streamer start failed: {exc}")
-            self._safe_close(session)
+            self._end_turn_or_close(session, persistent)
             return False
 
         # Mic stream + Deepgram session are both live now — tell the UI it's
@@ -531,13 +571,19 @@ class VoiceEngine:
             except Exception:
                 pass
             try:
-                session.finish()
+                # Persistent: Finalize but keep the socket warm for next turn.
+                # Per-turn: Finalize + close.
+                session.end_turn() if persistent else session.finish()
             except Exception:
                 pass
 
         text = _interim() or (last_partial["text"] or "").strip()
         if not text and err["msg"]:
             _dbg("voice", f"streaming errored before any text ({err['msg']}) — falling back")
+            # A warm socket that errored is suspect — drop it so the next turn
+            # reopens a fresh one rather than reusing a broken connection.
+            if persistent:
+                self._discard_persistent()
             return False
         if text:
             _dbg("voice", f"streaming final: {text!r}")
@@ -561,6 +607,25 @@ class VoiceEngine:
             session.close()
         except Exception:
             pass
+
+    def _fail_session(self, session, persistent: bool) -> None:
+        """A turn couldn't start. Persistent: drop the warm socket so the next
+        turn reopens fresh. Per-turn: just close this session."""
+        if persistent:
+            self._discard_persistent()
+        else:
+            self._safe_close(session)
+
+    def _end_turn_or_close(self, session, persistent: bool) -> None:
+        """Mic failed after the socket was up. Persistent: end the (empty) turn
+        but keep the socket warm. Per-turn: close it."""
+        if persistent:
+            try:
+                session.end_turn()
+            except Exception:
+                pass
+        else:
+            self._safe_close(session)
 
     def _run_batch_stt(
         self,

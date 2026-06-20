@@ -105,6 +105,13 @@ class _LifecycleMixin:
             pass
         from core.wake_word import wake_detector
         wake_detector.stop()
+        # Gracefully close the persistent Deepgram socket (no-op unless the
+        # opt-in streaming path opened one).
+        try:
+            from core.voice import voice_engine
+            voice_engine.close_persistent()
+        except Exception:
+            pass
         self._botbar._stop_rtt_thread()
         browser.stop()
         history_store.close()

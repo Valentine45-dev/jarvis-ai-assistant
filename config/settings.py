@@ -67,6 +67,12 @@ class AppConfig:
     # here — names you say, frequent places, project words — to cut mishears on
     # terms specific to you. nova-3 only; ignored on other models.
     stt_keyterms: list[str] = field(default_factory=list)
+    # Persistent Deepgram socket (opt-in). When True, one websocket is kept open
+    # across turns and warmed with KeepAlive between them, so each turn skips the
+    # ~1s connect — capture is near-instant (the CONNECTING gap nearly vanishes).
+    # Default False = a fresh socket per turn (proven path). Falls back to a
+    # fresh per-turn socket, then Google batch, if the warm socket is unhealthy.
+    stt_persistent: bool = False
     # ── ElevenLabs expressiveness (eleven_v3 + voice_settings) ────────────────
     # Model id sent on every ElevenLabs synth call. Default eleven_v3 — the only
     # model that *performs* the inline audio tags ([chuckles]/[sighs]/[whispers])
