@@ -637,6 +637,12 @@ def _nl_to_command(natural_language: str, env_ctx: dict) -> str | None:
                 f"Available tools: {tools}. "
                 f"CWD: {env_ctx.get('cwd', '.')}. {git}. "
                 "Respond with ONLY the exact PowerShell or CMD command to run. "
+                "Chaining: in CMD use && (run next on success) / || (fallback); in "
+                "PowerShell NEVER use && or || (parse error in PS 5.1) — use ; for an "
+                "unconditional sequence and 'if ($?) { ... }' for run-on-success. "
+                "To search file contents use Select-String in PowerShell or findstr "
+                "in CMD, never grep. Add a resilient fallback when natural "
+                "(e.g. '...; if (-not $?) { Write-Output \"none\" }'). "
                 "No explanation. No markdown. No backticks. Just the raw command."
             ),
             messages=[{"role": "user", "content": natural_language}],
@@ -828,7 +834,10 @@ def _plan_steps(goal: str, env_ctx: dict) -> list[str] | None:
                 "You are a Windows shell expert. Break the user's goal into ordered shell commands. "
                 f"Available tools: {tools}. CWD: {env_ctx.get('cwd', '.')}. "
                 "Return a JSON array of command strings only. Max 8 steps. "
-                "Each element must be a single, safe, executable command string. "
+                "Each element must be a single, safe, executable command string — "
+                "each runs on its own, so do NOT join steps with && or ||; make them "
+                "separate array elements. Any PowerShell inside a step must avoid "
+                "&& and || (parse error in PS 5.1); use ; or 'if ($?) { ... }'. "
                 'Example: ["git status","pip install flask","python app.py"] '
                 "No explanations inside the array. No markdown."
             ),

@@ -1700,6 +1700,43 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Shell scripting logic (chaining + search routing) in generated commands
+-----------------------------------------------------------------------
+Background: nothing told JARVIS how to chain shell commands per shell, and two
+real gaps existed - run_shell uses shlex + shell=False so &&/||/;/| are NOT
+interpreted (they become literal args and break), and Windows PowerShell 5.1
+treats && / || as a PARSE ERROR. Guidance now lives in three spots that generate
+shell: CLAUDE.md S11 (the brain), _nl_to_command (Haiku) and _plan_steps (Sonnet)
+in core/handlers/code_exec.py. A dev-side CLAUDE.local.md carries the same rules
+for Claude Code itself (loaded by Claude Code, NOT by JARVIS's brain.py).
+
+Rules encoded:
+  - run_cmd / bash chain with && (on success) and || (fallback).
+  - run_powershell NEVER uses && / || (PS 5.1 parse error) -> use ; and
+    'if ($?) { ... }' (run-on-success), 'if (-not $?)' / try-catch (fallback).
+  - A command that must chain routes to run_cmd or run_powershell, NOT run_shell.
+  - Defensive guards/fallbacks WHEN RELEVANT, not on trivial one-shot commands.
+  - Searching file CONTENTS -> file_operation/find_in_files; by name ->
+    search_files. Raw shell search only when explicitly asked, and then the right
+    tool per shell: bash grep, PowerShell Select-String (never grep), CMD findstr.
+
+These paths use live LLM calls, so they are verified MANUALLY, not by pytest.
+
+Manual test (uv run python main.py):
+  1. "use PowerShell to make a folder build and then move into it" -> run_powershell
+     using ';' / 'if ($?)' (NOT &&).
+  2. "in cmd, build the project then run it only if the build passes" -> run_cmd
+     using &&.
+  3. "create a folder and cd into it" (no shell named) -> a chaining-capable action
+     (run_powershell/run_cmd), NOT run_shell with a literal && that would break.
+  4. "find the word baseline in my project files" -> file_operation/find_in_files
+     (content grep), NOT a raw shell grep.
+  5. "use PowerShell to search the logs for the word timeout" -> run_powershell with
+     Select-String (not grep), fallback when natural.
+  6. "run git status" -> still a single plain command (no over-engineering).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
