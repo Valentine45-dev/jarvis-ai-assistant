@@ -61,6 +61,12 @@ class AppConfig:
     stt_endpointing_ms: int = 300        # trailing silence (ms) before a segment finalizes
     stt_utterance_end_ms: int = 1000     # trailing silence (ms) before UtteranceEnd fires
     stt_language: str = "en-US"
+    # Extra terms to bias Deepgram nova-3 recognition toward (keyterm prompting).
+    # The wake word + your name + a small built-in JARVIS vocabulary (browser
+    # engines, app/brand names) are ALWAYS included automatically; add your own
+    # here — names you say, frequent places, project words — to cut mishears on
+    # terms specific to you. nova-3 only; ignored on other models.
+    stt_keyterms: list[str] = field(default_factory=list)
     # ── ElevenLabs expressiveness (eleven_v3 + voice_settings) ────────────────
     # Model id sent on every ElevenLabs synth call. Default eleven_v3 — the only
     # model that *performs* the inline audio tags ([chuckles]/[sighs]/[whispers])

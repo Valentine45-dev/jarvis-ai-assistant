@@ -33,6 +33,7 @@ class DeepgramSttSession(StreamingSttSession):
         endpointing_ms: int = 300,
         utterance_end_ms: int = 1000,
         sample_rate: int = 16000,
+        keyterms: list[str] | None = None,
         _connect=None,
     ) -> None:
         self._api_key = api_key
@@ -41,6 +42,7 @@ class DeepgramSttSession(StreamingSttSession):
         self._endpointing_ms = int(endpointing_ms)
         self._utterance_end_ms = int(utterance_end_ms)
         self._sample_rate = int(sample_rate)
+        self._keyterms = list(keyterms or [])
         # Test seam: a zero-arg callable returning a context manager that yields a
         # connection object with send_media/recv/send_finalize/send_close_stream.
         self._connect_override = _connect
@@ -139,12 +141,10 @@ class DeepgramSttSession(StreamingSttSession):
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    def _make_cm(self):
-        if self._connect_override is not None:
-            return self._connect_override()
-        from deepgram import DeepgramClient  # lazy — keeps SDK off the import path
-        client = DeepgramClient(api_key=self._api_key)
-        return client.listen.v1.connect(
+    def _connect_params(self) -> dict:
+        """Query params for listen.v1.connect(). Split out (and SDK-free) so the
+        keyterm gating is unit-testable without opening a real websocket."""
+        params = dict(
             model=self._model,
             language=self._language,
             encoding="linear16",
@@ -157,6 +157,19 @@ class DeepgramSttSession(StreamingSttSession):
             punctuate=True,
             smart_format=True,
         )
+        # Keyterm prompting is nova-3 only — sending it to another model would be
+        # rejected, so gate on the model name. A list serializes to repeated
+        # keyterm= query params (Deepgram's expected format).
+        if self._keyterms and "nova-3" in (self._model or "").lower():
+            params["keyterm"] = list(self._keyterms)
+        return params
+
+    def _make_cm(self):
+        if self._connect_override is not None:
+            return self._connect_override()
+        from deepgram import DeepgramClient  # lazy — keeps SDK off the import path
+        client = DeepgramClient(api_key=self._api_key)
+        return client.listen.v1.connect(**self._connect_params())
 
     def _read_loop(self) -> None:
         count = 0

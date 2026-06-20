@@ -1450,6 +1450,41 @@ check that placeholder/1-line center and wrapped text top-aligns.)
 
 
 -----------------------------------------------------------------------
+Streaming STT - keyterm boosting (cut mishears on JARVIS/command words)
+-----------------------------------------------------------------------
+Background: live runs showed Deepgram mishearing JARVIS-specific words -
+"Jarvis" -> "Denise"/"Ray Jarvis", brand/app names, etc. nova-3 supports
+"keyterm prompting": a short list of terms it biases recognition toward. We now
+build that list and pass it on every streaming connect.
+
+The list (core/stt/factory.build_keyterms) = the wake word (config.wake_word) +
+your name (config.user_name) + a small built-in base of brand/proper nouns
+(Chrome, Edge, Firefox, Spotify, GitHub, YouTube, Gmail, VS Code, Notepad,
+Wikipedia, Reddit, Deepgram) + your own config.stt_keyterms. It is NOT a giant
+hardcoded blob: common words ("volume", "weather") are deliberately excluded
+(recognised fine; would dilute the boost), the list is deduped case-
+insensitively and capped at 50, and you extend it yourself via stt_keyterms.
+
+Scope: keyterms fix a BOUNDED vocabulary (wake word, command/brand words, names
+you add). They do NOT fix arbitrary open-ended proper nouns - e.g. a random city
+you never listed. Add cities/names you say often to stt_keyterms to bias those.
+Only sent on nova-3 (the connect param is nova-3 only); ignored on other models.
+
+Config: new `stt_keyterms` (list) in config/jarvis.json, default []. Example:
+    "stt_keyterms": ["Kuwait", "Mosul", "Valentine", "auth-rewrite"]
+
+Manual test (stt_provider="deepgram"): say "Jarvis, what's the time" a few times
+- "Jarvis" should land far more reliably than before. Add a name you say often
+to stt_keyterms, restart, and it should transcribe more consistently too.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_stt_streaming.py
+  -> build_keyterms leads with wake word + user name, includes the base, excludes
+     common words, dedupes case-insensitively, and tolerates a bare config;
+     _connect_params attaches `keyterm` ONLY for nova-3 with a non-empty list.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

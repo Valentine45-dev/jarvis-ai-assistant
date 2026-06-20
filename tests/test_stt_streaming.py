@@ -11,7 +11,7 @@ import time
 from types import SimpleNamespace
 
 from core.stt.deepgram import DeepgramSttSession
-from core.stt.factory import create_stt_session
+from core.stt.factory import build_keyterms, create_stt_session
 
 
 # ── fakes ─────────────────────────────────────────────────────────────────────
@@ -75,6 +75,42 @@ def test_factory_returns_none_for_google():
 def test_factory_returns_none_when_key_missing():
     cfg = SimpleNamespace(stt_provider="deepgram", deepgram_api_key="")
     assert create_stt_session(cfg) is None
+
+
+def test_keyterms_include_wake_word_user_name_and_base():
+    cfg = SimpleNamespace(wake_word="Jarvis", user_name="Valentine", stt_keyterms=[])
+    terms = build_keyterms(cfg)
+    assert terms[0] == "Jarvis" and terms[1] == "Valentine"
+    assert "Chrome" in terms and "Firefox" in terms          # built-in base
+    assert "volume" not in [t.lower() for t in terms]         # common words excluded
+
+
+def test_keyterms_append_user_extras_and_dedupe_case_insensitively():
+    cfg = SimpleNamespace(
+        wake_word="jarvis", user_name="", stt_keyterms=["Kuwait", "chrome", "Mosul"],
+    )
+    terms = build_keyterms(cfg)
+    assert "Kuwait" in terms and "Mosul" in terms             # user extras kept
+    # "chrome" dups the base "Chrome" — only one survives (first spelling wins).
+    assert sum(1 for t in terms if t.lower() == "chrome") == 1
+    assert "Chrome" in terms
+
+
+def test_keyterms_tolerate_missing_config_fields():
+    # The factory may see a bare config; build_keyterms must not raise.
+    terms = build_keyterms(SimpleNamespace())
+    assert "JARVIS" in terms
+
+
+def test_connect_params_includes_keyterm_only_for_nova3():
+    nova = DeepgramSttSession(api_key="x", model="nova-3", keyterms=["Jarvis", "Mosul"])
+    assert nova._connect_params()["keyterm"] == ["Jarvis", "Mosul"]
+
+    other = DeepgramSttSession(api_key="x", model="nova-2", keyterms=["Jarvis"])
+    assert "keyterm" not in other._connect_params()           # nova-3 only
+
+    empty = DeepgramSttSession(api_key="x", model="nova-3", keyterms=[])
+    assert "keyterm" not in empty._connect_params()           # nothing to send
 
 
 def test_factory_builds_deepgram_session():
