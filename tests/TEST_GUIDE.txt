@@ -1851,6 +1851,41 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
+Selective memory deletion (jarvis_meta/forget_memory)
+-----------------------------------------------------------------------
+Background: wipe_memory was all-or-nothing (ConversationMemory.clear() nukes the
+whole data/memory.jsonl). forget_memory deletes only the exchanges about ONE
+topic, keeping the rest. core/memory.py gains find_exchanges(query) (case-
+insensitive substring match over each user+assistant PAIR -> [{user, assistant,
+preview}]) and forget_exchanges(matches) (delete-by-identity, robust to new
+exchanges added since, so the 'forget X' command itself isn't caught). The meta
+handler previews the matches in a CONFIRM card before deleting (handler owns the
+card; requires_confirmation stays false in JSON).
+
+Routing: "forget everything / our whole conversation / start fresh" -> wipe_memory
+(unchanged). "forget what my brother said about X / forget the part about X /
+delete the memory about X" -> forget_memory with query=X.
+
+Manual test (uv run python main.py):
+  1. With the brother's "porn movies" search still in history, say
+     "forget what my brother said about porn movies" -> a confirm card PREVIEWS
+     the matched exchange(s) ("Forget 1 exchange about 'porn movies'? ...") ->
+     Confirm -> JARVIS reports it removed N exchange(s). The porn exchange is gone;
+     ask something that relied on OTHER earlier context and it still remembers.
+     (Or inspect data/memory.jsonl: the porn lines are gone, the rest remain.)
+  2. "forget about something we never discussed" -> "No memory about '...' found."
+  3. "forget everything" -> wipe_memory still clears ALL (unchanged).
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_memory_forget.py
+  -> find_exchanges matches only the relevant pair (case-insensitive, user OR
+     assistant content), returns [] on no match; forget_exchanges removes only the
+     matched pair, keeps the rest, persists to disk, and is identity-based (a later
+     same-topic exchange survives); handler returns needs_confirmation on a match,
+     a success no-op on none, and an error on an empty query.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

@@ -116,6 +116,62 @@ class ConversationMemory:
             self._messages.clear()
             self._save_locked()
 
+    def find_exchanges(self, query: str) -> list[dict[str, str]]:
+        """Return conversation exchanges (user+assistant pairs) whose user OR
+        assistant content contains *query* (case-insensitive substring).
+
+        Each match is ``{"user", "assistant", "preview"}`` so a caller can show a
+        confirm preview and later delete the exact pairs via forget_exchanges().
+        Used by jarvis_meta/forget_memory for selective (not all-or-nothing) wipes.
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        matches: list[dict[str, str]] = []
+        with self._lock:
+            msgs = self._messages
+            for i in range(0, len(msgs) - 1, 2):
+                if msgs[i].get("role") != "user" or msgs[i + 1].get("role") != "assistant":
+                    continue
+                u = msgs[i].get("content", "")
+                a = msgs[i + 1].get("content", "")
+                if q in u.lower() or q in a.lower():
+                    preview = " ".join(u.split())
+                    if len(preview) > 80:
+                        preview = preview[:80] + "…"
+                    matches.append({"user": u, "assistant": a, "preview": preview})
+        return matches
+
+    def forget_exchanges(self, matches: list[dict[str, str]]) -> int:
+        """Remove the given exchanges from memory AND disk; return the count
+        removed. Matched by exact user+assistant content (identity, not re-query)
+        so it's robust to new exchanges added since find_exchanges() ran — and the
+        'forget X' command itself (recorded after this turn) is never caught."""
+        if not matches:
+            return 0
+        targets = {(m.get("user", ""), m.get("assistant", "")) for m in matches}
+        removed = 0
+        with self._lock:
+            msgs = self._messages
+            kept: list[dict[str, str]] = []
+            i, n = 0, len(msgs)
+            while i < n:
+                if (
+                    i + 1 < n
+                    and msgs[i].get("role") == "user"
+                    and msgs[i + 1].get("role") == "assistant"
+                    and (msgs[i].get("content", ""), msgs[i + 1].get("content", "")) in targets
+                ):
+                    removed += 1
+                    i += 2  # drop this pair
+                    continue
+                kept.append(msgs[i])
+                i += 1
+            if removed:
+                self._messages = kept
+                self._save_locked()
+        return removed
+
     @property
     def exchange_count(self) -> int:
         with self._lock:

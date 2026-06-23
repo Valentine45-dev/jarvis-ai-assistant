@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 
 from config.settings import config
-from core.handlers.shared import _ok, _err, _tlog, get_page_cache
+from core.handlers.shared import _ok, _err, _tlog, get_page_cache, request_confirmation
 
 
 # Pool of programmer / dry-wit one-liners for jarvis_meta.tell_joke.
@@ -157,6 +157,46 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         except Exception as exc:
             _tlog(f"✗ {exc}")
             return _err(f"Couldn't clear memory: {exc}")
+
+    if action == "forget_memory":
+        # Selective wipe — delete only the exchanges about a specific topic,
+        # keeping the rest of the conversation. Previews the matches and confirms
+        # before deleting (the handler owns the confirm card, like file-ops).
+        query = (params.get("query") or "").strip()
+        if not query:
+            return _err(
+                "What should I forget? Name the topic — e.g. "
+                "'forget what my brother said about X'."
+            )
+        _tlog(f"❯ forget memory about {query!r}")
+        try:
+            from core.memory import memory as _conv_memory
+            matches = _conv_memory.find_exchanges(query)
+            if not matches:
+                _tlog("✓ nothing matched")
+                return _ok(f"No memory about '{query}' found — nothing to forget.")
+
+            def _forget_now() -> dict:
+                removed = _conv_memory.forget_exchanges(matches)
+                _tlog(f"✓ forgot {removed} exchange{'s' if removed != 1 else ''}")
+                return _ok(
+                    f"Forgotten — removed {removed} "
+                    f"exchange{'s' if removed != 1 else ''} about '{query}'."
+                )
+
+            n = len(matches)
+            preview = "\n".join(f"  • {m['preview']}" for m in matches[:5])
+            more = f"\n  …and {n - 5} more" if n > 5 else ""
+            prompt = (
+                f"Forget {n} exchange{'s' if n != 1 else ''} about '{query}'? "
+                f"The rest of our conversation stays.\n\n{preview}{more}"
+            )
+            result = request_confirmation(prompt, _forget_now)
+            result.update({"confirm_type": "forget_memory", "subject": query})
+            return result
+        except Exception as exc:
+            _tlog(f"✗ {exc}")
+            return _err(f"Couldn't forget that memory: {exc}")
 
     if action == "list_voices":
         from core.voice import _EL_VOICES
