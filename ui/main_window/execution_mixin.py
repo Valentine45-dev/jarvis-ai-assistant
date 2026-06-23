@@ -275,13 +275,17 @@ class _ExecutionMixin:
     })
     # Step intents proven Playwright-free AND Qt-widget-free, so an INLINE workflow
     # built only from them can run on the code_execution worker thread instead of
-    # blocking the Qt main thread. Deliberately conservative: browser/search/open_app
-    # can drive the thread-affine Playwright session, and other intents
-    # (jarvis_meta/type_text/control_mouse/read_screen/vision/document_creation) are
-    # not yet vetted for off-thread safety — any of those keeps the workflow on the
-    # main thread. Widen only after verifying an intent is thread-safe.
+    # blocking the Qt main thread. Vetted backends: file/system/code/reminder (pure
+    # backend), type_text + control_mouse (pyautogui + pyperclip — no Qt), read_screen
+    # (pyautogui screenshot + pytesseract OCR), weather (network only).
+    # Deliberately EXCLUDED: browser_automation / open_app / open_url / search_web
+    # (drive the thread-affine Playwright session) and vision_analysis (its
+    # source="browser" path also uses Playwright). jarvis_meta / document_creation
+    # remain out until vetted. Any non-whitelisted step keeps the whole workflow on
+    # the main thread.
     _OFFTHREAD_WORKFLOW_INTENTS: frozenset = frozenset({
         "file_operation", "system_control", "code_execution", "reminder_task",
+        "type_text", "control_mouse", "read_screen", "weather",
     })
 
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,

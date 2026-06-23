@@ -68,7 +68,8 @@ def test_browser_step_is_ineligible():
 
 
 def test_non_whitelist_intents_are_ineligible():
-    # search_web / open_app can drive the Playwright session; jarvis_meta isn't vetted.
+    # search_web / open_app can drive the Playwright session; vision_analysis's
+    # source="browser" path also uses Playwright; jarvis_meta isn't vetted.
     assert _eligible(_wf([
         {"intent": "search_web", "action": "google_search", "parameters": {}},
     ])) is False
@@ -76,8 +77,23 @@ def test_non_whitelist_intents_are_ineligible():
         {"intent": "open_app", "action": "open_browser", "parameters": {}},
     ])) is False
     assert _eligible(_wf([
+        {"intent": "vision_analysis", "action": "describe", "parameters": {"source": "browser"}},
+    ])) is False
+    assert _eligible(_wf([
         {"intent": "jarvis_meta", "action": "change_theme", "parameters": {}},
     ])) is False
+
+
+def test_vetted_input_screen_weather_intents_are_eligible():
+    # type_text / control_mouse (pyautogui + pyperclip), read_screen (pyautogui +
+    # pytesseract), weather (network) are all Qt-free / Playwright-free.
+    steps = [
+        {"intent": "type_text", "action": "type_text", "parameters": {"text": "hi"}},
+        {"intent": "control_mouse", "action": "click", "parameters": {"x": 1, "y": 2}},
+        {"intent": "read_screen", "action": "ocr_full", "parameters": {}},
+        {"intent": "weather", "action": "get_current_weather", "parameters": {}},
+    ]
+    assert _eligible(_wf(steps)) is True
 
 
 def test_empty_or_missing_steps_are_ineligible():

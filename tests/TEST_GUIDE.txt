@@ -1753,10 +1753,13 @@ Eligibility (execution_mixin._workflow_is_offthread_safe) - ALL must hold:
   - EVERY step is a structured dict (NOT a natural-language string - those resolve
     mid-run and could become a browser action).
   - EVERY step's intent is in the whitelist _OFFTHREAD_WORKFLOW_INTENTS =
-    {file_operation, system_control, code_execution, reminder_task}.
-Anything else (NL string step, browser_automation/open_app/open_url/search_web, or
-any unvetted intent like jarvis_meta/type_text/control_mouse/read_screen/vision/
-document_creation) -> unchanged synchronous main-thread path.
+    {file_operation, system_control, code_execution, reminder_task, type_text,
+    control_mouse, read_screen, weather} (all vetted Qt-free / Playwright-free:
+    pyautogui + pyperclip for input, pyautogui+pytesseract for OCR, network for
+    weather).
+Anything else (NL string step, browser_automation/open_app/open_url/search_web,
+vision_analysis [its source="browser" path uses Playwright], or unvetted intents
+like jarvis_meta/document_creation) -> unchanged synchronous main-thread path.
 
 Also: _yield_ui() (automation_handler) is now a no-op off the main thread (the main
 loop pumps itself; processEvents must only run on the owning thread), and
