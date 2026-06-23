@@ -121,3 +121,20 @@ def test_handler_empty_query_errors(monkeypatch, tmp_path):
     monkeypatch.setattr(mem_mod, "_PERSIST_PATH", tmp_path / "memory.jsonl")
     out = _handle_jarvis_meta("forget_memory", {"query": ""})
     assert out.get("success") is False
+
+
+# ── memory-meta commands are NOT recorded into history ──────────────────────
+
+
+def test_memory_meta_commands_are_not_logged():
+    # ask_claude skips add_exchange for these, so a "forget X" / "wipe" request
+    # leaves no trace of X (and won't self-match in the forget preview).
+    from core.brain import _is_memory_meta_command
+
+    assert _is_memory_meta_command({"intent": "jarvis_meta", "action": "forget_memory"}) is True
+    assert _is_memory_meta_command({"intent": "jarvis_meta", "action": "wipe_memory"}) is True
+    # every other command is still logged normally
+    assert _is_memory_meta_command({"intent": "jarvis_meta", "action": "tell_time"}) is False
+    assert _is_memory_meta_command({"intent": "jarvis_meta", "action": "conversational"}) is False
+    assert _is_memory_meta_command({"intent": "search_web", "action": "google_search"}) is False
+    assert _is_memory_meta_command({}) is False

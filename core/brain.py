@@ -253,6 +253,17 @@ def _get_client() -> anthropic.Anthropic:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _is_memory_meta_command(result: dict[str, Any]) -> bool:
+    """True for jarvis_meta commands that manage conversation memory itself
+    (forget_memory / wipe_memory). These must NOT be recorded into memory — a
+    'forget X' / 'wipe memory' request should leave no trace of what it cleared
+    (otherwise the request itself re-introduces the very topic into history)."""
+    return (
+        result.get("intent") == "jarvis_meta"
+        and result.get("action") in ("forget_memory", "wipe_memory")
+    )
+
+
 def ask_claude(
     raw_input: str,
     context: dict[str, Any] | None = None,
@@ -402,7 +413,7 @@ def ask_claude(
             raw = re.sub(r"\n?```$", "", raw)
 
         result: dict[str, Any] = _parse_claude_json_raw(raw)
-        if use_memory:
+        if use_memory and not _is_memory_meta_command(result):
             memory.add_exchange(cmd_text, raw)
 
         # Persist the spoken response so the next request can ask Claude to
@@ -465,7 +476,7 @@ def ask_claude(
                         raw = re.sub(r"^```[a-z]*\n?", "", raw)
                         raw = re.sub(r"\n?```$", "", raw)
                     result = _parse_claude_json_raw(raw)
-                    if use_memory:
+                    if use_memory and not _is_memory_meta_command(result):
                         memory.add_exchange(cmd_text, raw)
                     try:
                         spoken = (result.get("response") or "").strip()

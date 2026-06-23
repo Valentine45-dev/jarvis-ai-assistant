@@ -1866,6 +1866,13 @@ Routing: "forget everything / our whole conversation / start fresh" -> wipe_memo
 (unchanged). "forget what my brother said about X / forget the part about X /
 delete the memory about X" -> forget_memory with query=X.
 
+No self-trace: brain.py skips add_exchange for jarvis_meta forget_memory/wipe_memory
+(_is_memory_meta_command), so the "forget X" / "wipe" request itself is NOT written
+to memory.jsonl. Without this the request re-introduced the topic (e.g. "forget ...
+porn movies" got logged and then self-matched the forget preview) — see image where
+the preview showed 2 matches incl. the user's own command. Now the preview shows
+only the real target(s).
+
 Manual test (uv run python main.py):
   1. With the brother's "porn movies" search still in history, say
      "forget what my brother said about porn movies" -> a confirm card PREVIEWS
