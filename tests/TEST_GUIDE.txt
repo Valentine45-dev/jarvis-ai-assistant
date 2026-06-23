@@ -1873,6 +1873,12 @@ porn movies" got logged and then self-matched the forget preview) — see image 
 the preview showed 2 matches incl. the user's own command. Now the preview shows
 only the real target(s).
 
+No false FAILED: _execute_result no longer calls memory.inject_outcome for a
+needs_confirmation (PENDING) result — previously a confirm-required command logged a
+misleading "[Result: … → FAILED: failed]" the moment the card appeared (and, for
+memory-meta commands not in history, appended to the WRONG message). Genuine
+failures (non-zero exit / real error) are still recorded.
+
 Manual test (uv run python main.py):
   1. With the brother's "porn movies" search still in history, say
      "forget what my brother said about porn movies" -> a confirm card PREVIEWS

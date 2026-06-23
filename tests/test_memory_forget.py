@@ -138,3 +138,34 @@ def test_memory_meta_commands_are_not_logged():
     assert _is_memory_meta_command({"intent": "jarvis_meta", "action": "conversational"}) is False
     assert _is_memory_meta_command({"intent": "search_web", "action": "google_search"}) is False
     assert _is_memory_meta_command({}) is False
+
+
+def test_pending_confirmation_is_not_recorded_as_outcome(monkeypatch):
+    # A needs_confirmation result is pending, not an outcome — _execute_result must
+    # NOT call inject_outcome for it (that logged a misleading "FAILED: failed").
+    import types
+
+    import core.memory
+    import ui.main_window.execution_mixin as em
+    from ui.main_window.execution_mixin import _ExecutionMixin
+
+    monkeypatch.setattr(
+        em, "dispatch",
+        lambda *a, **k: {"needs_confirmation": True, "output": "Forget 1 exchange?"},
+    )
+    injected: list = []
+    monkeypatch.setattr(core.memory.memory, "inject_outcome", lambda **k: injected.append(k))
+
+    stub = types.SimpleNamespace()
+    stub._ACTION_INTENTS = _ExecutionMixin._ACTION_INTENTS
+    stub._last_result = None
+    finished: list = []
+    stub._finish_execute = lambda *a, **k: finished.append((a, k))
+
+    _ExecutionMixin._execute_result(
+        stub, {"intent": "jarvis_meta", "action": "forget_memory"},
+        "jarvis_meta", 0.96, "ok", "STANDBY",
+    )
+
+    assert injected == [], "pending confirmation must NOT be recorded as an outcome"
+    assert len(finished) == 1, "still finishes so the confirm card shows"

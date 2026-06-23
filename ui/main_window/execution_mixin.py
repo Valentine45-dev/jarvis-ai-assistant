@@ -368,13 +368,18 @@ class _ExecutionMixin:
             self._last_result = result
 
         from core.memory import memory
-        memory.inject_outcome(
-            intent=intent,
-            action=result.get("action", ""),
-            success=bool(exec_out.get("success")),
-            output=exec_out.get("output", ""),
-            error=exec_out.get("error", ""),
-        )
+        # A needs_confirmation result is PENDING (awaiting the user's yes), not an
+        # outcome — recording it logs a misleading "[Result: … → FAILED: failed]"
+        # and, for memory-meta commands that aren't in history, would append to the
+        # wrong message. Skip it; the real outcome is the user's decision next.
+        if not exec_out.get("needs_confirmation"):
+            memory.inject_outcome(
+                intent=intent,
+                action=result.get("action", ""),
+                success=bool(exec_out.get("success")),
+                output=exec_out.get("output", ""),
+                error=exec_out.get("error", ""),
+            )
 
         self._finish_execute(result, intent, conf, resp, hud, exec_out)
 
