@@ -105,3 +105,131 @@ def parse_create_workflow_command(raw_input: str) -> dict[str, Any] | None:
         "requires_confirmation": False,
     }
 
+
+# ── Deterministic file/folder-creation routing guardrail ──────────────────────
+# The model is non-deterministic about routing plain "create a folder and a file"
+# (no shell named): it sometimes picks run_powershell instead of the cross-platform
+# file_operation actions. This fast-path catches the COMMON, unambiguous phrasings
+# and returns a file_operation result directly, so the routing is deterministic and
+# never reaches raw shell. Anything it can't confidently parse returns None and
+# falls through to the model unchanged (zero regression risk).
+
+# Bail signals — let the model handle these richer cases.
+_FC_SHELL_NAMED = re.compile(
+    r"\b(?:powershell|pwsh|cmd|command prompt|command-line|bash|shell|terminal)\b",
+    re.IGNORECASE,
+)
+_FC_HAS_CONTENT = re.compile(
+    r"\b(?:with (?:the )?(?:content|text)|containing|that says|that reads|write\b)",
+    re.IGNORECASE,
+)
+# A single path token: word chars, dot, hyphen — no spaces (spaced names are
+# ambiguous, so we bail to the model). Optional surrounding quotes.
+_FC_NAME = r"['\"]?([\w.\-]+)['\"]?"
+_FC_LOC = r"(?:\s+(?:in|inside|under|within|into)\s+(?:the\s+)?['\"]?([\w./\\\-]+?)['\"]?(?:\s+(?:folder|directory))?)?"
+_FC_CREATE = r"(?:create|make|add|new)\s+(?:a\s+|an\s+)?(?:new\s+)?"
+
+_FC_FOLDER_AND_FILE = re.compile(
+    _FC_CREATE + r"folder\s+(?:called\s+|named\s+)?" + _FC_NAME + _FC_LOC +
+    # second clause: verb optional ("...and a file"), article optional ("...and file")
+    r"\s+and\s+(?:then\s+)?(?:also\s+)?(?:(?:create|make|add|new)\s+)?"
+    r"(?:a\s+|an\s+)?(?:new\s+)?(?:empty\s+)?file\s+(?:called\s+|named\s+)?" + _FC_NAME,
+    re.IGNORECASE,
+)
+_FC_FOLDER_ONLY = re.compile(
+    _FC_CREATE + r"folder\s+(?:called\s+|named\s+)?" + _FC_NAME + _FC_LOC + r"\s*$",
+    re.IGNORECASE,
+)
+_FC_FILE_ONLY = re.compile(
+    _FC_CREATE + r"(?:empty\s+)?file\s+(?:called\s+|named\s+)?" + _FC_NAME + _FC_LOC + r"\s*$",
+    re.IGNORECASE,
+)
+
+
+def _fc_join(loc: str | None, name: str) -> str:
+    """Join an optional location with a name using forward slashes (the executor
+    resolves relative paths). Normalises any backslashes in the location."""
+    name = (name or "").strip().strip("'\"")
+    if not loc:
+        return name
+    loc = loc.strip().strip("'\"").replace("\\", "/").rstrip("/")
+    return f"{loc}/{name}" if loc else name
+
+
+def parse_file_creation_command(raw_input: str) -> dict[str, Any] | None:
+    """Return a file_operation / automation_task dict for a clearly-phrased file or
+    folder creation request with NO shell named; else None (model handles it).
+
+    Deterministic guardrail against the brain occasionally routing plain file work
+    to run_powershell. Conservative on purpose — single-token names only, no
+    dictated content, no shell keyword.
+    """
+    text = (raw_input or "").strip()
+    if not text:
+        return None
+    stripped = re.sub(r"^\s*(hey|ok|okay)\s+jarvis[\s,\-:]*", "", text, flags=re.IGNORECASE)
+    low = stripped.lower()
+
+    # Gate: must be a creation of a folder/file, with no shell named and no content.
+    if not any(v in low for v in ("create", "make", "add", "new ")):
+        return None
+    if "folder" not in low and "file" not in low and "directory" not in low:
+        return None
+    if _FC_SHELL_NAMED.search(stripped) or _FC_HAS_CONTENT.search(stripped):
+        return None
+
+    # 1. Folder + file (file nested inside the new folder) → 2-step workflow.
+    m = _FC_FOLDER_AND_FILE.search(stripped)
+    if m:
+        folder = _fc_join(m.group(2), m.group(1))     # loc/folder
+        file_path = f"{folder}/{(m.group(3) or '').strip().strip(chr(39) + chr(34))}"
+        if folder and m.group(3):
+            return {
+                "intent": "automation_task",
+                "action": "run_workflow",
+                "parameters": {
+                    "steps": [
+                        {"intent": "file_operation", "action": "create_directory",
+                         "parameters": {"path": folder}},
+                        {"intent": "file_operation", "action": "create_file",
+                         "parameters": {"path": file_path, "content": ""}},
+                    ],
+                },
+                "confidence": 0.95,
+                "response": f"Creating {folder}, then {m.group(3)} inside it.",
+                "hud_status": "AUTOMATION",
+                "requires_confirmation": False,
+            }
+
+    # 2. Folder only.
+    m = _FC_FOLDER_ONLY.search(stripped)
+    if m:
+        folder = _fc_join(m.group(2), m.group(1))
+        if folder:
+            return {
+                "intent": "file_operation",
+                "action": "create_directory",
+                "parameters": {"path": folder},
+                "confidence": 0.95,
+                "response": f"Creating the {m.group(1)} folder.",
+                "hud_status": "FILE OPS",
+                "requires_confirmation": False,
+            }
+
+    # 3. File only (empty).
+    m = _FC_FILE_ONLY.search(stripped)
+    if m:
+        file_path = _fc_join(m.group(2), m.group(1))
+        if file_path:
+            return {
+                "intent": "file_operation",
+                "action": "create_file",
+                "parameters": {"path": file_path, "content": ""},
+                "confidence": 0.95,
+                "response": f"Creating {m.group(1)}.",
+                "hud_status": "FILE OPS",
+                "requires_confirmation": False,
+            }
+
+    return None
+

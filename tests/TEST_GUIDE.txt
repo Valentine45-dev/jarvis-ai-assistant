@@ -1806,6 +1806,50 @@ How to use when the app dies unexpectedly:
 Note: worker threads now in play (code_execution + browser-free workflows off the
 main thread) make threading.excepthook especially useful - an exception inside a
 worker that used to die quietly is now logged with its thread name.
+
+
+-----------------------------------------------------------------------
+Deterministic file/folder-creation routing guardrail
+-----------------------------------------------------------------------
+Background: the brain is non-deterministic about routing plain "create a folder
+and a file" (NO shell named) - across runs it produced automation_task, single
+file_operation (dropping the file), and run_powershell. Prompt nudges couldn't pin
+it. parse_file_creation_command (core/workflow_nlu.py) is now a deterministic
+fast-path, wired into ask_claude right after parse_create_workflow_command (BEFORE
+any model call), so common file-creation phrasings route to file_operation every
+time and never reach run_powershell.
+
+Scope (conservative - bails to the model on anything it can't cleanly parse):
+  - Folder + file ("create a folder X [in Y] and [then] a file Z inside it")
+    -> automation_task with create_directory + create_file (file nested in folder).
+  - Folder only -> file_operation/create_directory.
+  - File only ("create a file Z [in Y]") -> file_operation/create_file (empty).
+  - BAILS (returns None -> model handles) when: a shell is named (powershell/cmd/
+    bash/...), there's dictated content ("with content", "that says", "write ..."),
+    the name has spaces, or the phrasing isn't a clean create. Respects @tags -
+    only fires for no-tag / @files / @automate.
+
+Manual test (uv run python main.py):
+  1. "create a folder called temp inside the tests folder and then create a file
+     readme.txt inside it" -> NOW DETERMINISTIC: [brain] shows INTENT automation_task
+     with file_operation steps (tests/temp + tests/temp/readme.txt), never
+     run_powershell. Runs off-thread (browser-free workflow). Confirm cards appear.
+  2. Run it several times -> same routing every time (the whole point).
+  3. "use PowerShell to create a folder build and a file inside it" -> still
+     run_powershell (shell named -> guardrail bails).
+  4. "create a file notes.txt with content hello" -> guardrail bails; model routes.
+
+Code-level proof - from repo root:
+  uv run pytest -q tests/test_file_creation_routing.py
+  -> folder+file -> 2-step file_operation workflow with correct nested paths;
+     folder-only / file-only -> single file_operation; shell-named / dictated-content
+     / spaced-name / non-creation all bail to None; and ask_claude returns the
+     file_operation result with NO model call for a matching prompt.
+
+
+-----------------------------------------------------------------------
+Regression sweep (run after all of the above)
+-----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
   - Set + cancel a reminder normally.
   - Run a normal workflow end to end.

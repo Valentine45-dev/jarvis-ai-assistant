@@ -26,7 +26,7 @@ from config.settings import config
 from core import log as _log
 from core.memory import memory
 from core.personality import JARVIS_PERSONA_PROMPT, JARVIS_POST_EXECUTION_TONE
-from core.workflow_nlu import parse_create_workflow_command
+from core.workflow_nlu import parse_create_workflow_command, parse_file_creation_command
 
 # R2-27: cap concurrent Anthropic routing calls — unbounded daemon threads let
 # ten rapid voice commands spawn ten in-flight API requests.
@@ -281,6 +281,15 @@ def ask_claude(
         if tag_override == "automation_task":
             wf_result["confidence"] = min(1.0, float(wf_result.get("confidence", 0.9)) + 0.05)
         return wf_result
+
+    # Deterministic file/folder-creation guardrail: route plain "create a folder
+    # and/or a file" (no shell named) straight to file_operation so the model can't
+    # flip it to run_powershell. Respects an explicit @tag (only fires for file-ish
+    # tags or none); falls through to the model when the phrasing isn't a clean match.
+    if tag_override in (None, "file_operation", "automation_task"):
+        fc_result = parse_file_creation_command(cleaned if cleaned else text)
+        if fc_result:
+            return fc_result
 
     # 3. Context assembly (per-call metadata — not stored in history)
     ctx = build_context(
