@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import threading
+from pathlib import Path
 
 from core.handlers.shared import (
-    _ok,
-    _err,
-    _tlog,
-    _tlog_step,
     _enter_workflow_step,
+    _err,
     _leave_workflow_step,
+    _ok,
+    _tlog,
 )
 
 _DANGEROUS_STEPS: frozenset[tuple[str, str]] = frozenset({

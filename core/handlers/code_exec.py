@@ -46,15 +46,14 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
 
 from core.brain import _get_client  # R3-19: reuse the cached Anthropic client
-from core.handlers.shared import _ok, _err, request_confirmation
+from core.handlers.shared import _err, _ok, request_confirmation
 from core.personality import JARVIS_SHELL_RESULTS_PROMPT
-
 
 # ── Config probes (R2-1 / R2-5 / R2-7) ────────────────────────────────────────
 # Lazy-imported so tests can monkeypatch config without touching this module.
@@ -84,7 +83,7 @@ def _autorun_allowed() -> bool:
 # R2-14: guarded by _bg_procs_lock. Read/write happens from the dispatch
 # thread (run_background, kill_process) and from atexit cleanup; dict.pop
 # + iteration are not atomic together so we lock every access.
-_bg_procs: dict[int, "subprocess.Popen[str]"] = {}
+_bg_procs: dict[int, subprocess.Popen[str]] = {}
 _bg_procs_lock = threading.Lock()
 
 
@@ -102,7 +101,7 @@ _exec_gen_lock = threading.Lock()
 # enforces this — so a single ref + lock suffices. The blocking subprocess.run()
 # branches (run_powershell / run_cmd / install_package) do NOT register here; they
 # expose no Popen handle and rely on their own timeouts.
-_foreground_proc: "subprocess.Popen[str] | None" = None
+_foreground_proc: subprocess.Popen[str] | None = None
 _foreground_lock = threading.Lock()
 
 
@@ -111,13 +110,13 @@ def current_exec_generation() -> int:
         return _exec_gen
 
 
-def _register_foreground(proc: "subprocess.Popen[str]") -> None:
+def _register_foreground(proc: subprocess.Popen[str]) -> None:
     global _foreground_proc
     with _foreground_lock:
         _foreground_proc = proc
 
 
-def _clear_foreground(proc: "subprocess.Popen[str]") -> None:
+def _clear_foreground(proc: subprocess.Popen[str]) -> None:
     """Clear the handle only if *proc* is still the registered one, so a newer
     command that has already registered its own proc isn't accidentally unset."""
     global _foreground_proc
@@ -305,7 +304,7 @@ def _recent_blocks(n: int = 3) -> list[CommandBlock]:
 
 def _build_env_context() -> dict:
     """Snapshot of the current shell environment — injected into all AI calls."""
-    def _git_branch() -> Optional[str]:
+    def _git_branch() -> str | None:
         try:
             r = subprocess.run(
                 ["git", "branch", "--show-current"],
@@ -367,7 +366,7 @@ _DANGER_PATTERNS: list[re.Pattern] = [
 ]
 
 
-def _danger_check(command: str, on_confirm: Callable[[], dict] | None = None) -> Optional[dict]:
+def _danger_check(command: str, on_confirm: Callable[[], dict] | None = None) -> dict | None:
     """Return a confirmation/blocking dict if the command matches a danger pattern."""
     for pat in _DANGER_PATTERNS:
         if pat.search(command):
@@ -458,7 +457,7 @@ def _run_python_first_use_gate(code: str, cwd: str | None) -> dict | None:
 
 # ── Streaming execution ───────────────────────────────────────────────────────
 
-def _kill_process_tree(proc: "subprocess.Popen") -> None:
+def _kill_process_tree(proc: subprocess.Popen) -> None:
     """R3-20: kill *proc* AND its child tree. On timeout proc.kill() reaps only the
     direct child, orphaning grandchildren (a shell that launched a server, npm →
     node). Windows: ``taskkill /F /T`` (walks the PID tree). POSIX: ``killpg`` the
@@ -619,7 +618,6 @@ def _nl_to_command(natural_language: str, env_ctx: dict) -> str | None:
     Returns the raw command string, or None on failure.
     """
     try:
-        import anthropic
         from config.settings import config
         if not config.anthropic_api_key:
             return None
@@ -663,7 +661,6 @@ def _explain_output(block: CommandBlock) -> str | None:
     if len(block.output) <= 100:
         return None
     try:
-        import anthropic
         from config.settings import config
         if not config.anthropic_api_key:
             return None
@@ -692,7 +689,6 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
     """
     import json as _json
     try:
-        import anthropic
         from config.settings import config
         if not config.anthropic_api_key:
             return None
@@ -823,7 +819,6 @@ def _plan_steps(goal: str, env_ctx: dict) -> list[str] | None:
     """
     import json as _json
     try:
-        import anthropic
         from config.settings import config
         if not config.anthropic_api_key:
             return None

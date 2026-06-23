@@ -12,60 +12,60 @@ disjoint method names, so MRO order is irrelevant to correctness —
 ``QMainWindow`` (last) supplies the real ``__init__`` via ``super().__init__()``.
 """
 
-import sys
 import ctypes
+import sys
 from datetime import datetime
 
-from PyQt5.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QStackedWidget,
-    QShortcut,
-    QLabel,
-)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QKeySequence,
 )
-
-from ui.theme import (
-    jarvis_logo_icon,
+from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QShortcut,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
-from ui.bars import TopBar, BottomBar
-from ui.sidebar import HudSidebar
-from ui.dashboard import DashboardView
-from ui.voice import VoiceView
-from ui.views.automation.view import AutomationView
-from ui.history import HistoryView
-from ui.settings import SettingsView
-from ui.components.terminal import TerminalPanel
-from ui.popovers import QuickSettingsPopover, SystemStatusPopover
-from ui.command_palette import CommandPalette
+
 from config.settings import config
 from core.brain import TAG_INTENT_MAP
 from core.controllers.command_controller import CommandController
 from core.controllers.confirmation_controller import ConfirmationController
-from core.history_store import history_store
 from core.controllers.runtime_context import RuntimeCommandContext
+from core.history_store import history_store
 from core.signals import signals
 from core.vapi_client import sync_assistant_async
-
-from ui.main_window.voice_mixin import _VoiceMixin
-from ui.main_window.confirm_mixin import _ConfirmMixin
-from ui.main_window.execution_mixin import _ExecutionMixin
+from ui.bars import BottomBar, TopBar
+from ui.command_palette import CommandPalette
+from ui.components.terminal import TerminalPanel
+from ui.dashboard import DashboardView
+from ui.history import HistoryView
 from ui.main_window.backend_signals_mixin import _BackendSignalsMixin
-from ui.main_window.settings_mixin import _SettingsMixin
-from ui.main_window.state_hud_mixin import _StateHudMixin
-from ui.main_window.lifecycle_mixin import _LifecycleMixin
-from ui.main_window.interrupt_mixin import _InterruptMixin
+from ui.main_window.confirm_mixin import _ConfirmMixin
 
 # Module-level constants live in constants.py so the method-group mixins can
 # share them without importing this module (which would be an import cycle).
 from ui.main_window.constants import (  # noqa: E402
     _SETTINGS_NAV_IDX,
 )
+from ui.main_window.execution_mixin import _ExecutionMixin
+from ui.main_window.interrupt_mixin import _InterruptMixin
+from ui.main_window.lifecycle_mixin import _LifecycleMixin
+from ui.main_window.settings_mixin import _SettingsMixin
+from ui.main_window.state_hud_mixin import _StateHudMixin
+from ui.main_window.voice_mixin import _VoiceMixin
+from ui.popovers import QuickSettingsPopover, SystemStatusPopover
+from ui.settings import SettingsView
+from ui.sidebar import HudSidebar
+from ui.theme import (
+    jarvis_logo_icon,
+)
+from ui.views.automation.view import AutomationView
+from ui.voice import VoiceView
+
 
 class JarvisWindow(
     _VoiceMixin,
