@@ -1783,8 +1783,29 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
-Regression sweep (run after all of the above)
+Crash diagnostics (silent-exit visibility)
 -----------------------------------------------------------------------
+Background: the app could vanish to the shell prompt with NO Python traceback
+(only the benign "Could not parse stylesheet" lines), which masks the cause -
+a native segfault, a Qt thread-affinity violation, an unhandled exception on a
+worker thread, or the OS killing the process for memory. app.py now installs
+_install_crash_diagnostics() at startup: faulthandler (native dumps),
+sys.excepthook + threading.excepthook (main AND worker thread exceptions), and
+qInstallMessageHandler (Qt WARNING/CRITICAL/FATAL - e.g. "Cannot create children
+for a parent in a different thread"). All of it writes to stderr (terminal) AND
+appends to logs/crash.log (gitignored). Benign stylesheet spam is filtered out.
+
+How to use when the app dies unexpectedly:
+  1. Reproduce, then read logs/crash.log (or the terminal).
+  2. crash.log HAS a new entry (traceback / "Qt FATAL" / a thread name) -> a real
+     code crash; the entry points at the offending call.
+  3. crash.log stays EMPTY after a crash -> no Python/Qt fault fired = the OS
+     killed the process (almost always memory pressure). Remedy is headroom
+     (close browser engines / pytest / other apps), not a code fix.
+
+Note: worker threads now in play (code_execution + browser-free workflows off the
+main thread) make threading.excepthook especially useful - an exception inside a
+worker that used to die quietly is now logged with its thread name.
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
   - Set + cancel a reminder normally.
   - Run a normal workflow end to end.

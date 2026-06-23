@@ -27,7 +27,87 @@ from core.browser import browser
 from ui.main_window.window import JarvisWindow
 
 
+def _install_crash_diagnostics() -> None:
+    """Make crashes visible instead of the process vanishing silently.
+
+    Covers all three ways JARVIS can die without a Python traceback:
+    native segfault / abort / Qt fatal (faulthandler), an unhandled exception on
+    the main thread OR a worker thread (sys/threading excepthook), and Qt's own
+    warnings/criticals — including thread-affinity violations like "Cannot create
+    children for a parent in a different thread" (qInstallMessageHandler).
+    Everything is written to stderr (the terminal) and appended to logs/crash.log.
+    """
+    import faulthandler
+    import threading
+    import traceback
+    from datetime import datetime
+    from pathlib import Path
+
+    try:
+        faulthandler.enable()  # native-level dump to stderr on segfault/abort
+    except Exception:
+        pass
+
+    crash_log = Path(__file__).resolve().parents[2] / "logs" / "crash.log"
+    try:
+        crash_log.parent.mkdir(exist_ok=True)
+    except Exception:
+        pass
+
+    def _record(header: str, body: str) -> None:
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        text = f"\n===== {header} @ {stamp} =====\n{body}\n"
+        try:
+            sys.stderr.write(text)
+            sys.stderr.flush()
+        except Exception:
+            pass
+        try:
+            with open(crash_log, "a", encoding="utf-8") as fp:
+                fp.write(text)
+        except Exception:
+            pass
+
+    def _excepthook(exc_type, exc, tb):
+        _record("UNHANDLED EXCEPTION (main thread)",
+                "".join(traceback.format_exception(exc_type, exc, tb)))
+
+    sys.excepthook = _excepthook
+
+    def _thread_excepthook(args):
+        name = args.thread.name if args.thread else "?"
+        _record(f"UNHANDLED EXCEPTION (thread: {name})",
+                "".join(traceback.format_exception(
+                    args.exc_type, args.exc_value, args.exc_traceback)))
+
+    try:
+        threading.excepthook = _thread_excepthook  # Py3.8+
+    except Exception:
+        pass
+
+    try:
+        from PyQt5.QtCore import QtMsgType, qInstallMessageHandler
+
+        def _qt_handler(mode, _ctx, message):
+            msg = message or ""
+            if "Could not parse stylesheet" in msg:
+                return  # benign Fusion-QSS noise — don't clutter the log
+            label = {
+                QtMsgType.QtWarningMsg: "Qt WARNING",
+                QtMsgType.QtCriticalMsg: "Qt CRITICAL",
+                QtMsgType.QtFatalMsg: "Qt FATAL",
+            }.get(mode)
+            if label is None:
+                return  # skip Debug/Info chatter
+            _record(label, msg)
+
+        qInstallMessageHandler(_qt_handler)
+    except Exception:
+        pass
+
+
 def main():
+    _install_crash_diagnostics()
     import signal
     signal.signal(signal.SIGINT,  lambda *_: (browser.stop(), sys.exit(0)))
     signal.signal(signal.SIGTERM, lambda *_: (browser.stop(), sys.exit(0)))
