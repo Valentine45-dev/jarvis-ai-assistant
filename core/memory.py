@@ -34,6 +34,32 @@ def _strip_result_markers(text: str) -> str:
     return _RESULT_MARKER_RE.sub("", text or "")
 
 
+def _match_window(text: str, q: str, width: int = 60) -> str:
+    """A short snippet of *text* around the first case-insensitive hit of *q*,
+    with ellipses when truncated — so a forget preview can show WHY a match hit."""
+    flat = " ".join((text or "").split())
+    idx = flat.lower().find(q.lower())
+    if idx < 0:
+        return flat[:width] + ("…" if len(flat) > width else "")
+    start = max(0, idx - width // 3)
+    end = min(len(flat), idx + len(q) + width)
+    return ("…" if start > 0 else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
+def _assistant_match_snippet(assistant: str, q: str) -> str:
+    """Show the matched text from an assistant message in a human-readable way:
+    prefer the model's spoken `response` field over the raw JSON when the hit is
+    there; otherwise window the raw content."""
+    try:
+        obj = json.loads(_strip_result_markers(assistant))
+        resp = obj.get("response", "") if isinstance(obj, dict) else ""
+        if resp and q.lower() in resp.lower():
+            return _match_window(resp, q)
+    except Exception:
+        pass
+    return _match_window(assistant, q)
+
+
 def _redact_assistant_json(assistant_json: str) -> str:
     """R3-13: redact long sensitive parameter values from the model's JSON before
     it enters conversation memory, so dictated secrets (file bodies, passwords,
@@ -131,8 +157,10 @@ class ConversationMemory:
         """Return conversation exchanges (user+assistant pairs) whose user OR
         assistant content contains *query* (case-insensitive substring).
 
-        Each match is ``{"user", "assistant", "preview"}`` so a caller can show a
-        confirm preview and later delete the exact pairs via forget_exchanges().
+        Each match is ``{"user", "assistant", "matched_in", "preview"}``. "preview"
+        is human-readable and shows WHY the exchange matched: the user line, plus —
+        when the hit was only in JARVIS's reply — the matched reply snippet (so a
+        greeting that matched via its response isn't a mystery in the confirm card).
         Used by jarvis_meta/forget_memory for selective (not all-or-nothing) wipes.
         """
         q = (query or "").strip().lower()
@@ -146,11 +174,22 @@ class ConversationMemory:
                     continue
                 u = msgs[i].get("content", "")
                 a = msgs[i + 1].get("content", "")
-                if q in u.lower() or q in a.lower():
-                    preview = " ".join(u.split())
-                    if len(preview) > 80:
-                        preview = preview[:80] + "…"
-                    matches.append({"user": u, "assistant": a, "preview": preview})
+                in_user = q in u.lower()
+                in_asst = q in a.lower()
+                if not (in_user or in_asst):
+                    continue
+                user_line = " ".join(u.split())
+                if len(user_line) > 80:
+                    user_line = user_line[:80] + "…"
+                if in_user:
+                    preview = user_line
+                    matched_in = "user"
+                else:
+                    preview = f'{user_line}  ← matched in reply: "{_assistant_match_snippet(a, q)}"'
+                    matched_in = "assistant"
+                matches.append(
+                    {"user": u, "assistant": a, "matched_in": matched_in, "preview": preview}
+                )
         return matches
 
     def forget_exchanges(self, matches: list[dict[str, str]]) -> int:

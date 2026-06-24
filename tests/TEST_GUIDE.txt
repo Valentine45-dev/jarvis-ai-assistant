@@ -1906,8 +1906,41 @@ Code-level proof - from repo root:
 
 
 -----------------------------------------------------------------------
-Regression sweep (run after all of the above)
+Debug/UX polish: forget preview, confirm logging, colored logs, clean quit
 -----------------------------------------------------------------------
+Four improvements from a live-test review:
+
+1. Forget preview shows WHY it matched. find_exchanges (core/memory.py) now
+   returns matched_in ("user"|"assistant") and a preview that, for an assistant-
+   only hit, appends '← matched in reply: "…snippet…"'. So a casual greeting that
+   matched only because JARVIS's REPLY mentioned the topic is no longer a mystery
+   in the confirm card. Manual: a greeting whose reply said "your brother…" shows
+   the reply snippet in the forget card.
+
+2. Executor confirmations now logged. request_confirmation (core/handlers/
+   shared.py) prints "[confirm] executor confirmation requested → <prompt>".
+   Resolves the "[brain] CONFIRM: False but a modal appeared" confusion — that
+   modal is the EXECUTOR's confirmation (a separate layer from the brain's
+   requires_confirmation field). Manual: trigger forget_memory / a file delete →
+   a [confirm] line appears alongside the [brain] block.
+
+3. Readable debug. core/log.py colorizes each tag (lightweight ANSI, no new
+   dependency — auto-disabled when stdout isn't a TTY) and prints a blank line
+   whenever the tag changes, so [brain]/[tts]/[voice] groups don't run together.
+   Manual: run the app in a real terminal and confirm colored, spaced blocks.
+
+4. Clean quit (EPIPE fix). quit_application now calls self.close() (was
+   QApplication.quit()), so closeEvent runs the FULL shutdown — browser.stop(),
+   wake detector, hotkeys, Deepgram socket, history. app.quit() skipped closeEvent,
+   abandoning Playwright's node driver → it wrote to a closed pipe on teardown
+   ("Error: EPIPE: broken pipe"). Manual: say "close jarvis" / "bye" with a browser
+   engine open → app exits with NO node EPIPE dump in the terminal.
+
+Code-level proof:
+  uv run pytest -q tests/test_memory_forget.py
+  -> includes the preview/match-context assertions (matched_in + "matched in
+     reply"). The logger, confirm-line, and quit path are verified manually (UI /
+     terminal behavior).
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
   - Set + cancel a reminder normally.
   - Run a normal workflow end to end.

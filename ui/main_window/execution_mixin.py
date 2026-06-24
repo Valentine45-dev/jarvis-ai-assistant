@@ -18,7 +18,6 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 
-from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
 
 from config.settings import config
@@ -707,11 +706,15 @@ class _ExecutionMixin:
                 delay_ms = 400 if (voice_engine.tts_muted or _skip_tts) else min(
                     30000, 1800 + audio_len * 72
                 )
-                QTimer.singleShot(delay_ms, QApplication.instance().quit)
+                # self.close() (not app.quit()) so closeEvent runs the full
+                # shutdown — browser.stop(), wake detector, hotkeys, Deepgram socket,
+                # history. app.quit() skips closeEvent, abandoning the Playwright
+                # node driver → it writes to a closed pipe on teardown (EPIPE).
+                QTimer.singleShot(delay_ms, self.close)
         except Exception:
             self._tts_ready.emit(transcript_payload)
             if exec_out.get("quit_application"):
-                QTimer.singleShot(500, QApplication.instance().quit)
+                QTimer.singleShot(500, self.close)
 
         # Phase 2 (failures) + Phase 3 (success suggestions).
         # A daemon thread generates a context-aware spoken follow-up:

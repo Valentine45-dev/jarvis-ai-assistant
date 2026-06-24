@@ -46,6 +46,28 @@ def test_find_no_match_returns_empty(mem):
     assert mem.find_exchanges("") == []
 
 
+def test_preview_explains_an_assistant_only_match(tmp_path, monkeypatch):
+    # A greeting whose REPLY mentions the brother matches via assistant content.
+    # The preview must show WHY (so it isn't a mystery in the confirm card).
+    monkeypatch.setattr(mem_mod, "_PERSIST_PATH", tmp_path / "memory.jsonl")
+    m = ConversationMemory()
+    m.add_exchange(
+        "hey jarvis what's up",
+        '{"intent": "jarvis_meta", "action": "conversational", '
+        '"response": "Everything is clean, Valentine - your brother is handled."}',
+    )
+    matches = m.find_exchanges("brother")
+    assert len(matches) == 1
+    assert matches[0]["matched_in"] == "assistant"
+    assert "matched in reply" in matches[0]["preview"]
+    assert "brother" in matches[0]["preview"].lower()
+
+    # A user-side match keeps a clean, plain preview (no "matched in reply").
+    m.add_exchange("forget my brother stuff", '{"intent": "jarvis_meta"}')
+    user_hits = [x for x in m.find_exchanges("brother") if x["matched_in"] == "user"]
+    assert user_hits and "matched in reply" not in user_hits[0]["preview"]
+
+
 # ── forget_exchanges ────────────────────────────────────────────────────────
 
 

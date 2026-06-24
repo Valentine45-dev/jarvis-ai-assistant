@@ -137,6 +137,16 @@ def request_confirmation(prompt: str, fn: Any) -> dict:
             return _err("Please resolve the current confirmation first.")
         cid = str(uuid.uuid4())
         _pending_confirmation = _PendingConfirmation(cid, fn, prompt)
+    # Surface executor-level confirmations in the debug log. The brain's
+    # `requires_confirmation` (the [brain] CONFIRM line) is a SEPARATE flag and is
+    # often False here — the modal the user sees comes from THIS path, so without
+    # this line the log looks like it "got it wrong".
+    try:
+        from core.log import debug as _dbg
+        first_line = next((ln for ln in (prompt or "").splitlines() if ln.strip()), "")
+        _dbg("confirm", f"executor confirmation requested → {first_line.strip()}")
+    except Exception:
+        pass
     return _confirm(prompt)
 
 
