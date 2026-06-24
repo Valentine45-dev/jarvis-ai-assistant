@@ -1879,6 +1879,13 @@ misleading "[Result: … → FAILED: failed]" the moment the card appeared (and,
 memory-meta commands not in history, appended to the WRONG message). Genuine
 failures (non-zero exit / real error) are still recorded.
 
+Preview count == removed count: that same stray "[Result: …]" marker also caused
+"preview 2 / removed 1" — inject_outcome appended a marker to a matched assistant
+message BETWEEN find_exchanges (captured content without it) and forget_exchanges
+(saw it with it), so the exact-content identity match missed one pair. Two-layer
+fix: (a) the no-FAILED fix above stops the mutation; (b) forget_exchanges now
+strips [Result: …] markers before comparing, so the match is robust regardless.
+
 Manual test (uv run python main.py):
   1. With the brother's "porn movies" search still in history, say
      "forget what my brother said about porn movies" -> a confirm card PREVIEWS

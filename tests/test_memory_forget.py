@@ -70,6 +70,20 @@ def test_forget_empty_is_noop(mem):
     assert mem.exchange_count == 3
 
 
+def test_forget_tolerates_result_marker_added_after_capture(mem):
+    # Root cause of the observed "preview 2 / removed 1": inject_outcome appended a
+    # [Result: …] marker to a matched assistant message between find and delete, so
+    # exact-content identity matching missed it. forget_exchanges now strips markers.
+    matches = mem.find_exchanges("porn")
+    with mem._lock:  # noqa: SLF001 — simulate inject_outcome mutating the stored msg
+        for m in mem._messages:
+            if m["role"] == "assistant" and "search_web" in m["content"]:
+                m["content"] += "\n[Result: search_web/google_search → FAILED: failed]"
+    removed = mem.forget_exchanges(matches)
+    assert removed == 1
+    assert mem.find_exchanges("porn") == []
+
+
 def test_forget_is_identity_based_not_requery(mem):
     # Capture matches, THEN add a new exchange that also contains the query.
     matches = mem.find_exchanges("porn")

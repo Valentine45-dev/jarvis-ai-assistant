@@ -15,12 +15,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 
 from core.log import debug as _dbg
 
 _PERSIST_PATH = Path(__file__).parent.parent / "data" / "memory.jsonl"
+
+
+# inject_outcome appends "\n[Result: intent/action → detail]" lines to an assistant
+# message. forget_exchanges compares content by identity, so it strips these (which
+# may be added between capture and delete) to stay robust.
+_RESULT_MARKER_RE = re.compile(r"\n\[Result:[^\n]*\]")
+
+
+def _strip_result_markers(text: str) -> str:
+    return _RESULT_MARKER_RE.sub("", text or "")
 
 
 def _redact_assistant_json(assistant_json: str) -> str:
@@ -149,7 +160,13 @@ class ConversationMemory:
         'forget X' command itself (recorded after this turn) is never caught."""
         if not matches:
             return 0
-        targets = {(m.get("user", ""), m.get("assistant", "")) for m in matches}
+        # Compare with [Result: …] markers stripped: inject_outcome can append one
+        # to a matched assistant message between find_exchanges (capture) and here
+        # (delete), which would otherwise break the exact-content identity match.
+        targets = {
+            (m.get("user", ""), _strip_result_markers(m.get("assistant", "")))
+            for m in matches
+        }
         removed = 0
         with self._lock:
             msgs = self._messages
@@ -160,7 +177,10 @@ class ConversationMemory:
                     i + 1 < n
                     and msgs[i].get("role") == "user"
                     and msgs[i + 1].get("role") == "assistant"
-                    and (msgs[i].get("content", ""), msgs[i + 1].get("content", "")) in targets
+                    and (
+                        msgs[i].get("content", ""),
+                        _strip_result_markers(msgs[i + 1].get("content", "")),
+                    ) in targets
                 ):
                     removed += 1
                     i += 2  # drop this pair
