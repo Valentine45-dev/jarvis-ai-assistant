@@ -160,3 +160,54 @@ def test_persistent_uses_begin_end_turn_and_keeps_socket_warm():
     assert getattr(sess, "began", 0) == 1 and getattr(sess, "ended", 0) == 1
     assert getattr(sess, "finished", False) is False   # finish() not used in persistent
     assert sess.closed is False                        # socket stays warm
+
+
+class _StaleEndSession:
+    """Persistent-socket failure mode: a leftover UtteranceEnd from the PRIOR turn
+    arrives FIRST (before any speech), then the real utterance lands after a gap
+    longer than the capture loop's reaction time."""
+
+    def __init__(self):
+        self.fed: list[bytes] = []
+
+    def begin_turn(self, **cbs):
+        self.start(**cbs)
+
+    def end_turn(self):
+        pass
+
+    def start(self, *, on_partial, on_final, on_utterance_end, on_error):
+        def _run():
+            time.sleep(0.02)
+            on_utterance_end()        # ← stale end from the previous turn (no speech yet)
+            time.sleep(0.20)          # gap > loop poll, so an unguarded turn would end here
+            on_partial("open")
+            on_final("open chrome")
+            time.sleep(0.02)
+            on_utterance_end()        # ← the real end
+        threading.Thread(target=_run, daemon=True).start()
+
+    def feed(self, pcm16: bytes):
+        self.fed.append(pcm16)
+
+    def finish(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_persistent_ignores_stale_utterance_end_before_speech():
+    # The stale UtteranceEnd must NOT end the turn (it arrives before any speech);
+    # the real utterance is then captured. Without the got_speech guard the stale
+    # end would close the mic immediately and `got` would be empty.
+    eng = VoiceEngine()
+    sess = _StaleEndSession()
+    got: list[str] = []
+    errs: list[str] = []
+    handled = eng._run_streaming_stt(
+        sess, got.append, errs.append, 1.0, 2.0,
+        persistent=True, mic_streamer=_NoopStreamer(),
+    )
+    assert handled is True
+    assert got == ["open chrome"]   # stale end ignored, real speech captured

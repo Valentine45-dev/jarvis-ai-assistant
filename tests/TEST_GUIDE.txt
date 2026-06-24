@@ -1941,6 +1941,45 @@ Code-level proof:
   -> includes the preview/match-context assertions (matched_in + "matched in
      reply"). The logger, confirm-line, and quit path are verified manually (UI /
      terminal behavior).
+
+
+-----------------------------------------------------------------------
+Mic stops by itself right after JARVIS speaks (persistent-socket stale end)
+-----------------------------------------------------------------------
+Background: with stt_persistent=True one warm Deepgram socket is reused across
+turns. end_turn() sends Finalize but keeps the socket + callbacks; Deepgram's
+response (a final + UtteranceEnd) can arrive AFTER the next begin_turn() swapped in
+the new turn's callbacks, so the PRIOR turn's UtteranceEnd fires the new turn's
+_on_utt_end → done.set() → the mic closes after ~22 frames having captured nothing.
+Symptom: open the mic right after JARVIS replies → it turns off by itself; retrying
+1-2x works once the stale event has cleared.
+
+Fix (core/voice.py _run_streaming_stt._on_utt_end): ignore an UtteranceEnd that
+arrives before this turn has heard ANY speech (got_speech not set) — that's the
+stale leftover. A genuinely silent turn is still ended by the no-speech timeout, so
+nothing hangs. On a persistent socket it logs
+"[voice] ignored stale UtteranceEnd before speech (warm socket)".
+NOT done: a time-based "grace window" was considered and dropped — it risked
+clipping the start of fast speech; the got_speech guard is the safe, robust fix.
+Remaining minor edge (unobserved): a stale FINAL with text leaking into the new
+turn — would need a turn-epoch; revisit only if a previous command ever re-runs.
+
+Manual test (uv run python main.py, stt_persistent on):
+  Say something → let JARVIS reply → IMMEDIATELY open the mic and speak. Repeat 5x.
+  PASS: every attempt captures first-try; [stt] shows full frame counts (100+), not
+  ~22-frame stops; you may see "[voice] ignored stale UtteranceEnd before speech".
+  (Empty mic still closes on the no-speech timeout — correct, just not instant.)
+
+Code-level proof:
+  uv run pytest -q tests/test_voice_streaming.py
+  -> test_persistent_ignores_stale_utterance_end_before_speech: a stale UtteranceEnd
+     before speech is ignored and the real utterance ("open chrome") is still
+     captured; without the guard it would be empty.
+
+
+-----------------------------------------------------------------------
+Regression sweep (run after all of the above)
+-----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
   - Set + cancel a reminder normally.
   - Run a normal workflow end to end.

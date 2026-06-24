@@ -526,6 +526,16 @@ class VoiceEngine:
             self._emit("transcript_partial", _interim())
 
         def _on_utt_end() -> None:
+            # On a warm/persistent socket the PREVIOUS turn's Finalize can deliver a
+            # late UtteranceEnd that lands on THIS turn's callback, ending it before
+            # the user speaks (the mic "turns off by itself" right after JARVIS
+            # talks). If we haven't heard any speech yet, treat it as that stale
+            # leftover and ignore it — a genuinely silent turn is still ended by the
+            # no-speech timeout below, so nothing hangs.
+            if not got_speech.is_set():
+                if persistent:
+                    _dbg("voice", "ignored stale UtteranceEnd before speech (warm socket)")
+                return
             done.set()
 
         def _on_sess_error(msg: str) -> None:
