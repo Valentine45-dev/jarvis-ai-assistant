@@ -114,6 +114,22 @@ def test_connect_params_includes_keyterm_only_for_nova3():
     assert "keyterm" not in empty._connect_params()           # nothing to send
 
 
+def test_endpointing_values_are_clamped_to_safe_bounds():
+    # A config typo must not reach the API as an absurd value. endpointing is
+    # clamped to [10, 2000]; utterance_end to [1000, 5000] (Deepgram's floor).
+    low = DeepgramSttSession(api_key="x", endpointing_ms=2, utterance_end_ms=50)
+    assert low._connect_params()["endpointing"] == 10
+    assert low._connect_params()["utterance_end_ms"] == 1000
+
+    high = DeepgramSttSession(api_key="x", endpointing_ms=99999, utterance_end_ms=99999)
+    assert high._connect_params()["endpointing"] == 2000
+    assert high._connect_params()["utterance_end_ms"] == 5000
+
+    ok = DeepgramSttSession(api_key="x", endpointing_ms=300, utterance_end_ms=1200)
+    assert ok._connect_params()["endpointing"] == 300
+    assert ok._connect_params()["utterance_end_ms"] == 1200
+
+
 def test_factory_builds_deepgram_session():
     cfg = SimpleNamespace(
         stt_provider="deepgram", deepgram_api_key="k", deepgram_model="nova-3",

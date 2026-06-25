@@ -60,6 +60,13 @@ class AppConfig:
     deepgram_model: str = "nova-3"
     stt_endpointing_ms: int = 300        # trailing silence (ms) before a segment finalizes
     stt_utterance_end_ms: int = 1000     # trailing silence (ms) before UtteranceEnd fires
+    # Settle window (ms) after an UtteranceEnd before the turn commits. 0 = commit
+    # instantly (proven default, snappiest). When >0, a brief mid-command pause
+    # re-arms the turn instead of cutting you off: if speech resumes within this
+    # window the turn continues; if the window elapses silent, it commits. Costs
+    # ~this many ms of extra latency on every spoken command, so it's opt-in.
+    # A value around 350-500 makes capture tolerant of natural think-pauses.
+    stt_settle_ms: int = 0
     stt_language: str = "en-US"
     # Extra terms to bias Deepgram nova-3 recognition toward (keyterm prompting).
     # The wake word + your name + a small built-in JARVIS vocabulary (browser

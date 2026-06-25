@@ -23,6 +23,10 @@ from core.log import debug as _dbg
 from core.stt.base import StreamingSttSession
 
 
+def _clamp(value: int, lo: int, hi: int) -> int:
+    return max(lo, min(hi, value))
+
+
 class DeepgramSttSession(StreamingSttSession):
     def __init__(
         self,
@@ -39,8 +43,11 @@ class DeepgramSttSession(StreamingSttSession):
         self._api_key = api_key
         self._model = model
         self._language = language
-        self._endpointing_ms = int(endpointing_ms)
-        self._utterance_end_ms = int(utterance_end_ms)
+        # Clamp to sane bounds so a config typo (e.g. 5 or 99999) can't silently
+        # wreck capture. endpointing: 10ms-2s; utterance_end: Deepgram requires
+        # >=1000ms, cap at 5s. Both are coerced defensively before reaching the API.
+        self._endpointing_ms = _clamp(int(endpointing_ms), 10, 2000)
+        self._utterance_end_ms = _clamp(int(utterance_end_ms), 1000, 5000)
         self._sample_rate = int(sample_rate)
         self._keyterms = list(keyterms or [])
         # Test seam: a zero-arg callable returning a context manager that yields a

@@ -264,3 +264,80 @@ def test_listen_runs_again_after_previous_capture_finishes():
     eng.listen(lambda t: None)
     time.sleep(0.02)
     assert spawned == [1, 1]         # both proceeded — guard released between them
+
+
+# ── settle window (mid-command pause tolerance) ─────────────────────────────────
+
+class _PauseSession:
+    """Speaks, fires UtteranceEnd (a mid-command think-pause), THEN resumes with
+    more speech and fires the real end. With a settle window the first end must
+    NOT commit; without one it cuts the user off at the pause."""
+
+    def __init__(self):
+        self.fed: list[bytes] = []
+
+    def begin_turn(self, **cbs):
+        self.start(**cbs)
+
+    def end_turn(self):
+        pass
+
+    def start(self, *, on_partial, on_final, on_utterance_end, on_error):
+        def _run():
+            time.sleep(0.02)
+            on_final("open chrome")
+            on_utterance_end()        # ← pause mid-command (first end)
+            time.sleep(0.10)          # resumes well within a 300ms settle window
+            on_final("and search cats")
+            time.sleep(0.02)
+            on_utterance_end()        # ← the real end
+        threading.Thread(target=_run, daemon=True).start()
+
+    def feed(self, pcm16: bytes):
+        self.fed.append(pcm16)
+
+    def finish(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_settle_window_keeps_turn_open_through_midcommand_pause():
+    eng = VoiceEngine()
+    sess = _PauseSession()
+    got: list[str] = []
+    handled = eng._run_streaming_stt(
+        sess, got.append, lambda m: None, 2.0, 4.0,
+        persistent=True, mic_streamer=_NoopStreamer(), settle_ms=300,
+    )
+    assert handled is True
+    assert got == ["open chrome and search cats"]   # pause re-armed, full capture
+
+
+def test_no_settle_commits_on_first_utterance_end():
+    # settle_ms=0 (default) keeps the proven instant-commit behaviour: the first
+    # UtteranceEnd ends the turn, so the resumed half is lost (the cutoff F fixes).
+    eng = VoiceEngine()
+    sess = _PauseSession()
+    got: list[str] = []
+    handled = eng._run_streaming_stt(
+        sess, got.append, lambda m: None, 2.0, 4.0,
+        persistent=True, mic_streamer=_NoopStreamer(), settle_ms=0,
+    )
+    assert handled is True
+    assert got == ["open chrome"]                   # cut off at the pause
+
+
+def test_settle_window_still_commits_after_silence():
+    # When the user truly stops, the settle window elapses and the turn commits
+    # (just ~settle_ms later) — it doesn't hang waiting for more speech.
+    eng = VoiceEngine()
+    sess = _FakeSession([("final", "open chrome"), ("utt", None)])
+    got: list[str] = []
+    handled = eng._run_streaming_stt(
+        sess, got.append, lambda m: None, 2.0, 4.0,
+        mic_streamer=_NoopStreamer(), settle_ms=120,
+    )
+    assert handled is True
+    assert got == ["open chrome"]

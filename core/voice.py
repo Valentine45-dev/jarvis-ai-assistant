@@ -502,6 +502,7 @@ class VoiceEngine:
         *,
         persistent: bool = False,
         mic_streamer=None,
+        settle_ms: float | None = None,
     ) -> bool:
         """Drive a StreamingSttSession to one utterance.
 
@@ -516,14 +517,23 @@ class VoiceEngine:
 
         `mic_streamer` is injectable for tests; in production a real MicStreamer
         is built from config.mic_device.
+
+        `settle_ms` (default: config.stt_settle_ms) is a re-arm window: after an
+        UtteranceEnd we wait this long for resumed speech before committing, so a
+        mid-command think-pause doesn't cut the user off. 0 = commit instantly.
         """
         import time as _time
+
+        if settle_ms is None:
+            settle_ms = getattr(config, "stt_settle_ms", 0)
+        settle_s = max(0.0, float(settle_ms) / 1000.0)
 
         finals: list[str] = []
         finals_lock = threading.Lock()
         last_partial = {"text": ""}
         done = threading.Event()
         got_speech = threading.Event()
+        utt_end_at = {"t": None}   # monotonic time of a pending UtteranceEnd, or None
         err = {"msg": None}
 
         def _interim() -> str:
@@ -533,12 +543,14 @@ class VoiceEngine:
 
         def _on_partial(text: str) -> None:
             got_speech.set()
+            utt_end_at["t"] = None   # speech resumed — cancel any pending commit
             last_partial["text"] = text
             tail = (_interim() + " " + text).strip()
             self._emit("transcript_partial", tail)
 
         def _on_final(text: str) -> None:
             got_speech.set()
+            utt_end_at["t"] = None   # speech resumed — cancel any pending commit
             with finals_lock:
                 finals.append(text)
             self._emit("transcript_partial", _interim())
@@ -553,6 +565,14 @@ class VoiceEngine:
             if not got_speech.is_set():
                 if persistent:
                     _dbg("voice", "ignored stale UtteranceEnd before speech (warm socket)")
+                return
+            # With a settle window, arm a timer instead of committing now — if
+            # speech resumes within the window the on_partial/on_final handlers
+            # clear it and the turn continues (no mid-pause cutoff). The capture
+            # loop commits once the window elapses silent. settle_s == 0 keeps the
+            # old instant-commit behaviour.
+            if settle_s > 0:
+                utt_end_at["t"] = _time.monotonic()
                 return
             done.set()
 
@@ -604,9 +624,14 @@ class VoiceEngine:
                     if now - start_t >= timeout:
                         _dbg("voice", "streaming: no speech within timeout")
                         break
-                elif now - start_t >= timeout + phrase_time_limit:
-                    _dbg("voice", "streaming: phrase time limit reached")
-                    break
+                else:
+                    if now - start_t >= timeout + phrase_time_limit:
+                        _dbg("voice", "streaming: phrase time limit reached")
+                        break
+                    pending = utt_end_at["t"]
+                    if pending is not None and now - pending >= settle_s:
+                        _dbg("voice", "streaming: settled after pause — committing")
+                        break
                 _time.sleep(0.05)
         finally:
             try:

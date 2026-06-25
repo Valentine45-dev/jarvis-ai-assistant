@@ -2012,6 +2012,44 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+STT endpointing tuning — clamp + settle window (F)
+-----------------------------------------------------------------------
+Two parts.
+
+1) Clamp (core/stt/deepgram.py): endpointing_ms and utterance_end_ms were sent to
+   the API verbatim, so a config typo (e.g. 5ms or 99999ms) could silently wreck
+   capture. Now clamped: endpointing -> [10, 2000], utterance_end -> [1000, 5000]
+   (1000 is Deepgram's floor). Pure safety; valid values pass through unchanged.
+
+2) Settle window (config.stt_settle_ms, default 0 = OFF; core/voice.py
+   _run_streaming_stt): previously the turn committed the instant the FIRST
+   UtteranceEnd fired after speech — so a >=1s think-pause mid-command
+   ("open chrome ... and search cats") cut you off on the first half. With
+   stt_settle_ms > 0, an UtteranceEnd ARMS a timer instead of committing; if speech
+   resumes within the window the on_partial/on_final handlers clear it and the turn
+   continues; if the window elapses silent, it commits (logs
+   "[voice] streaming: settled after pause — committing"). Costs ~settle_ms latency
+   per command, so it's opt-in; 0 preserves the proven snappy default.
+
+Manual test (uv run python main.py, stt_provider="deepgram"):
+  Default (stt_settle_ms=0): everything behaves exactly as before — snappy commits.
+  Set stt_settle_ms=400 in config/jarvis.json, restart. Say a command, pause ~0.7s
+  mid-sentence, then finish ("open chrome <pause> and search for cats").
+  PASS with settle on: the whole phrase is captured as one command.
+  PASS with settle off (0): the phrase is cut at the pause (first half only) — the
+  difference is the point of the feature.
+
+Code-level proof:
+  uv run pytest -q tests/test_voice_streaming.py tests/test_stt_streaming.py
+  -> test_settle_window_keeps_turn_open_through_midcommand_pause: settle_ms=300, a
+     pause+resume captures "open chrome and search cats".
+  -> test_no_settle_commits_on_first_utterance_end: settle_ms=0, same session is cut
+     to "open chrome".
+  -> test_settle_window_still_commits_after_silence: a true stop still commits.
+  -> test_endpointing_values_are_clamped_to_safe_bounds: out-of-range ms are clamped.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
