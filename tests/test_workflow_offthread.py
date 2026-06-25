@@ -34,7 +34,13 @@ def _eligible(result) -> bool:
     stub = types.SimpleNamespace(
         _OFFTHREAD_WORKFLOW_INTENTS=_ExecutionMixin._OFFTHREAD_WORKFLOW_INTENTS,
     )
+    stub._resolve_workflow_steps = lambda r: _ExecutionMixin._resolve_workflow_steps(stub, r)
     return _ExecutionMixin._workflow_is_offthread_safe(stub, result)
+
+
+def _saved(task_name):
+    return {"intent": "automation_task", "action": "run_workflow",
+            "parameters": {"task_name": task_name}}
 
 
 # ── eligibility classifier ──────────────────────────────────────────────────
@@ -102,6 +108,55 @@ def test_empty_or_missing_steps_are_ineligible():
                       "parameters": {}}) is False
 
 
+# ── saved-by-name / cron workflows (D) ──────────────────────────────────────
+
+
+def test_saved_workflow_steps_resolved_and_eligible(monkeypatch):
+    # A saved-by-name workflow (no inline steps) resolves its persisted steps from
+    # the library; an all-whitelist saved workflow runs off-thread like an inline one.
+    import core.automation as ca
+    wf = {"id": "morning", "name": "Morning", "enabled": True, "steps": [
+        {"intent": "system_control", "action": "volume_mute", "parameters": {}},
+        {"intent": "file_operation", "action": "create_directory",
+         "parameters": {"path": "tests/temp"}},
+    ]}
+    monkeypatch.setattr(ca.workflow_library, "get", lambda n: wf if n == "morning" else None)
+    assert _eligible(_saved("morning")) is True
+
+
+def test_saved_workflow_with_browser_step_is_ineligible(monkeypatch):
+    import core.automation as ca
+    wf = {"id": "b", "enabled": True, "steps": [
+        {"intent": "browser_automation", "action": "navigate", "parameters": {}},
+    ]}
+    monkeypatch.setattr(ca.workflow_library, "get", lambda n: wf)
+    assert _eligible(_saved("b")) is False
+
+
+def test_saved_workflow_with_string_step_is_ineligible(monkeypatch):
+    # A persisted NL-string step could resolve to a browser action mid-run.
+    import core.automation as ca
+    wf = {"id": "s", "enabled": True, "steps": [
+        {"intent": "system_control", "action": "volume_mute", "parameters": {}},
+        "take a screenshot of the page",
+    ]}
+    monkeypatch.setattr(ca.workflow_library, "get", lambda n: wf)
+    assert _eligible(_saved("s")) is False
+
+
+def test_disabled_or_missing_saved_workflow_stays_synchronous(monkeypatch):
+    # Disabled/missing → None → main thread, so the handler reports the real
+    # disabled/not-found error rather than the worker swallowing it.
+    import core.automation as ca
+    disabled = {"id": "d", "enabled": False, "steps": [
+        {"intent": "system_control", "action": "volume_mute", "parameters": {}},
+    ]}
+    monkeypatch.setattr(ca.workflow_library, "get",
+                        lambda n: disabled if n == "d" else None)
+    assert _eligible(_saved("d")) is False        # disabled
+    assert _eligible(_saved("ghost")) is False    # missing
+
+
 # ── routing in _execute_result ──────────────────────────────────────────────
 
 
@@ -110,6 +165,9 @@ def _routing_stub():
     stub._OFFTHREAD_WORKFLOW_INTENTS = _ExecutionMixin._OFFTHREAD_WORKFLOW_INTENTS
     stub._ACTION_INTENTS = _ExecutionMixin._ACTION_INTENTS
     # Bind the real classifier so _execute_result's self._workflow_is_offthread_safe works.
+    stub._resolve_workflow_steps = lambda result: (
+        _ExecutionMixin._resolve_workflow_steps(stub, result)
+    )
     stub._workflow_is_offthread_safe = lambda result: (
         _ExecutionMixin._workflow_is_offthread_safe(stub, result)
     )
@@ -165,6 +223,90 @@ def test_ineligible_workflow_dispatches_synchronously(monkeypatch):
 
     assert stub._spawn_calls == [], "browser workflow must stay on the main thread"
     assert len(dispatched) == 1, "ineligible workflow dispatches synchronously"
+
+
+def test_saved_by_name_workflow_routes_to_worker(monkeypatch):
+    # A saved-by-name run (task_name, no inline steps) must now also go off-thread
+    # when its persisted steps are all whitelist-safe.
+    import core.automation as ca
+    import ui.main_window.execution_mixin as em
+
+    wf = {"id": "tidy", "enabled": True, "steps": [
+        {"intent": "file_operation", "action": "create_directory",
+         "parameters": {"path": "tests/temp"}},
+    ]}
+    monkeypatch.setattr(ca.workflow_library, "get", lambda n: wf if n == "tidy" else None)
+    dispatched = []
+    monkeypatch.setattr(
+        em, "dispatch",
+        lambda *a, **k: dispatched.append((a, k)) or {"success": True, "output": "", "error": ""},
+    )
+    stub = _routing_stub()
+    _ExecutionMixin._execute_result(stub, _saved("tidy"), "automation_task", 0.9, "ok", "AUTOMATION")
+
+    assert len(stub._spawn_calls) == 1, "eligible saved workflow must spawn the worker"
+    assert dispatched == [], "must NOT dispatch on the main thread"
+
+
+def test_scheduled_offthread_workflow_never_auto_confirms(monkeypatch):
+    # F-3 safety: a scheduled (cron) fire that needs confirmation must show the
+    # card even with auto_confirm ON — it must NOT spawn a resolve("yes") worker.
+    import core.voice
+    monkeypatch.setattr(core.voice, "voice_engine",
+                        types.SimpleNamespace(say=lambda *a, **k: None))
+
+    stub = types.SimpleNamespace()
+    stub._transcript_update_token = 7
+    stub._code_exec_flight_token = 7
+    stub._code_exec_in_flight = True
+    stub._auto_confirm = True
+    stub._spawn_calls = []
+    stub._spawn_code_worker = lambda *a, **k: stub._spawn_calls.append((a, k))
+    stub._shown = []
+    stub._show_confirm_card = lambda msg: stub._shown.append(msg)
+    stub._confirm_mode = None
+    stub._confirmation_controller = types.SimpleNamespace(
+        prompt_from_result=lambda e: "Delete file X?")
+    stub._history = [{}]
+    stub._tts_ready = types.SimpleNamespace(emit=lambda *_: None)
+    stub._dashboard = types.SimpleNamespace(
+        left=types.SimpleNamespace(
+            typing=types.SimpleNamespace(hide_typing=lambda: None)),
+        toast=types.SimpleNamespace(show_toast=lambda *a, **k: None),
+    )
+
+    payload = {
+        "exec_out": {"needs_confirmation": True},
+        "result": {"intent": "automation_task", "action": "run_workflow",
+                   "parameters": {"task_name": "cleanup"}, "_scheduled": True},
+        "intent": "automation_task", "conf": 0.9, "resp": "x", "hud": "AUTOMATION",
+        "token": 7,
+    }
+    _ExecutionMixin._on_code_execution_done(stub, payload)
+
+    assert stub._spawn_calls == [], "scheduled fire must NOT auto-confirm off-thread"
+    assert stub._shown == ["Delete file X?"], "must show the confirmation card instead"
+
+
+def test_non_scheduled_offthread_workflow_auto_confirms(monkeypatch):
+    # Control: a NON-scheduled needs-confirmation result with auto_confirm ON still
+    # auto-resolves off-thread (the scheduled guard is the only difference).
+    stub = types.SimpleNamespace()
+    stub._transcript_update_token = 3
+    stub._code_exec_flight_token = 3
+    stub._auto_confirm = True
+    stub._spawn_calls = []
+    stub._spawn_code_worker = lambda *a, **k: stub._spawn_calls.append((a, k))
+
+    payload = {
+        "exec_out": {"needs_confirmation": True},
+        "result": {"intent": "code_execution", "action": "run_shell", "parameters": {}},
+        "intent": "code_execution", "conf": 0.9, "resp": "x", "hud": "EXECUTING",
+        "token": 3,
+    }
+    _ExecutionMixin._on_code_execution_done(stub, payload)
+
+    assert len(stub._spawn_calls) == 1, "non-scheduled auto_confirm should resolve off-thread"
 
 
 # ── thread-aware _yield_ui ──────────────────────────────────────────────────

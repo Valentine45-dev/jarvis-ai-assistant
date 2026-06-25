@@ -296,13 +296,14 @@ class _ExecutionMixin:
         # caused: "Cannot switch to a different thread" on any step that touches Playwright
         # (e.g. open YouTube + search in one line).
         if (intent == "automation_task"
-                and result.get("action") == "run_workflow"
-                and (result.get("parameters") or {}).get("steps")):
-            # A browser-free inline workflow (all structured, whitelist-only steps)
-            # can run on the SAME worker harness as code_execution, so its steps and
-            # confirm round-trip don't freeze the Qt main thread. Anything that could
-            # touch Playwright or isn't statically classifiable stays synchronous
-            # below (Playwright's sync API is thread-affine to the main thread).
+                and result.get("action") == "run_workflow"):
+            # A browser-free workflow (all structured, whitelist-only steps) can run
+            # on the SAME worker harness as code_execution — whether its steps are
+            # INLINE or loaded from a SAVED-by-name / cron-fired workflow — so its
+            # steps and confirm round-trip don't freeze the Qt main thread. Anything
+            # that could touch Playwright or isn't statically classifiable stays
+            # synchronous below (Playwright's sync API is thread-affine to the main
+            # thread).
             if self._workflow_is_offthread_safe(result):
                 self._spawn_code_worker(
                     lambda: dispatch(result, confirmed=confirmed),
@@ -410,17 +411,44 @@ class _ExecutionMixin:
 
     # ── code_execution worker (off the Qt main thread) ─────────────────────────
 
+    def _resolve_workflow_steps(self, result: dict):
+        """Return the step list to classify for off-thread eligibility, or None.
+
+        Inline steps (parameters.steps) win; otherwise a saved-by-name workflow
+        (parameters.task_name — also how cron fires and direct triggers arrive) is
+        looked up in the library and its persisted steps returned. A disabled or
+        missing workflow returns None so the workflow stays synchronous and the
+        handler reports the real not-found / disabled error.
+        """
+        params = result.get("parameters") or {}
+        steps = params.get("steps")
+        if isinstance(steps, list) and steps:
+            return steps
+        task_name = (params.get("task_name") or "").strip()
+        if not task_name:
+            return None
+        try:
+            from core.automation import workflow_library
+            wf = workflow_library.get(task_name)
+        except Exception:
+            return None
+        if wf is None or not wf.get("enabled", True):
+            return None
+        saved = wf.get("steps")
+        return saved if isinstance(saved, list) and saved else None
+
     def _workflow_is_offthread_safe(self, result: dict) -> bool:
-        """True when an inline run_workflow can run on the worker thread.
+        """True when a run_workflow can run on the worker thread.
 
         Conservative by design — returns False (→ stay on the Qt main thread) unless
         EVERY step is a structured dict (not a natural-language string, which is
         resolved mid-run and could turn out to be a browser action) whose intent is in
-        the Playwright-free / Qt-free whitelist (_OFFTHREAD_WORKFLOW_INTENTS). Any NL
-        step, any browser/search/open_app step, or any unvetted intent disqualifies the
-        whole workflow.
+        the Playwright-free / Qt-free whitelist (_OFFTHREAD_WORKFLOW_INTENTS). Works for
+        INLINE steps AND saved-by-name / cron-fired workflows (steps resolved via
+        _resolve_workflow_steps). Any NL step, any browser/search/open_app step, or any
+        unvetted intent disqualifies the whole workflow.
         """
-        steps = (result.get("parameters") or {}).get("steps")
+        steps = self._resolve_workflow_steps(result)
         if not isinstance(steps, list) or not steps:
             return False
         for step in steps:
@@ -495,7 +523,11 @@ class _ExecutionMixin:
         if exec_out.get("needs_confirmation"):
             from core.executor import resolve_confirmation
             # Auto-confirm: skip the card but keep resolve OFF the main thread.
-            if self._auto_confirm:
+            # F-3 carve-out: a SCHEDULED (cron) fire never auto-confirms a
+            # destructive step, even with auto_confirm ON — now that saved/cron
+            # workflows can run off-thread, this path must honour _scheduled too,
+            # or a daily cron could silently run a delete while the user is away.
+            if self._auto_confirm and not result.get("_scheduled"):
                 self._spawn_code_worker(
                     lambda: resolve_confirmation("yes"),
                     result=result, intent=intent, conf=conf, resp=resp, hud=hud,
@@ -562,8 +594,11 @@ class _ExecutionMixin:
         # ── needs_confirmation from executor (e.g. folder not found) ────────
         # Not the same as Claude's requires_confirmation — this is the executor
         # asking the user a yes/no mid-execution.
-        if exec_out.get("needs_confirmation") and self._auto_confirm:
+        if (exec_out.get("needs_confirmation") and self._auto_confirm
+                and not result.get("_scheduled")):
             # Auto-confirm is active — skip the UI hold and execute immediately.
+            # F-3: a scheduled (cron) fire is excluded — it always shows the card
+            # for a destructive step so a cron can't silently run it unattended.
             from core.executor import resolve_confirmation
             resolved = resolve_confirmation("yes")
             self._on_confirmation_resolved(resolved)

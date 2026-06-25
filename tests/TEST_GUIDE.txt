@@ -2050,6 +2050,51 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Saved / cron workflows off the Qt main thread (D)
+-----------------------------------------------------------------------
+Before: only an INLINE run_workflow (parameters.steps present) was eligible to run
+on the worker thread. A saved-by-name run ("run my morning routine"), a direct
+trigger, and a cron fire all arrive as parameters.task_name with NO inline steps,
+so they fell through to the synchronous dispatch and ran on the Qt main thread —
+freezing the UI for the whole routine.
+
+After: _resolve_workflow_steps() loads a saved workflow's persisted steps from the
+library when only task_name is present, and _workflow_is_offthread_safe() classifies
+them with the SAME whitelist (_OFFTHREAD_WORKFLOW_INTENTS) as inline steps. An
+all-whitelist saved/cron workflow now runs off-thread; anything with a browser/
+search/open_app step, an NL-string step, or a disabled/missing workflow stays
+synchronous on the main thread (Playwright's sync API is main-thread-affine), so the
+handler still reports the real disabled/not-found error.
+
+F-3 safety (IMPORTANT): because scheduled fires can now go off-thread, the off-thread
+auto-confirm bypass (_on_code_execution_done) and the synchronous one (_finish_execute)
+now BOTH honour result["_scheduled"] — a cron fire NEVER auto-confirms a destructive
+step even with auto_confirm ON; it always shows the card. (Previously only the
+brain-level requires_confirmation bypass checked _scheduled.)
+
+Manual test (uv run python main.py):
+  1) Save a browser-free workflow (e.g. mute + create a folder + a reminder). Run it
+     by name ("run <name>"). PASS: the UI stays responsive while it runs (you can move
+     the window / it doesn't freeze); the workflow completes; transcript shows steps.
+  2) Save a workflow that opens Chrome / navigates. Run it by name. PASS: still works
+     (runs synchronously on the main thread — Playwright is happy), no thread crash.
+  3) Turn auto-confirm ON. Give a SCHEDULED workflow a delete step and let the cron
+     fire (or set a near-future cron). PASS: a confirmation CARD appears — the cron
+     does NOT silently delete. Same workflow run manually with auto-confirm ON does
+     auto-confirm (the difference is the _scheduled flag).
+
+Code-level proof:
+  uv run pytest -q tests/test_workflow_offthread.py
+  -> test_saved_workflow_steps_resolved_and_eligible / _with_browser_step_is_ineligible
+     / _with_string_step_is_ineligible / _disabled_or_missing_saved_workflow_stays_synchronous
+  -> test_saved_by_name_workflow_routes_to_worker: task_name-only run spawns the worker.
+  -> test_scheduled_offthread_workflow_never_auto_confirms: _scheduled + auto_confirm
+     shows the card, no resolve worker.
+  -> test_non_scheduled_offthread_workflow_auto_confirms: control — non-scheduled still
+     auto-resolves off-thread.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
