@@ -211,3 +211,56 @@ def test_persistent_ignores_stale_utterance_end_before_speech():
     )
     assert handled is True
     assert got == ["open chrome"]   # stale end ignored, real speech captured
+
+
+# ── re-entry guard ─────────────────────────────────────────────────────────────
+
+def test_second_listen_ignored_while_capture_in_flight():
+    """A second listen() while one capture is live must be a no-op — otherwise two
+    mic streamers feed the one warm Deepgram socket and audio gets captured twice
+    (the 'Alright. Bye.' double-capture). The guard is a dedicated flag, NOT the
+    HUD-owned _listening event (which the state machine may clear mid-capture)."""
+    eng = VoiceEngine()
+    started = threading.Event()
+    release = threading.Event()
+    spawned = []
+
+    def _fake_thread(callback, on_error, timeout, phrase):
+        spawned.append(1)
+        started.set()
+        release.wait(1.0)            # hold the "capture" open
+        with eng._capture_lock:      # mirror the real finally: clear the guard
+            eng._capture_active = False
+
+    eng._listen_thread = _fake_thread
+
+    eng.listen(lambda t: None)       # first capture opens
+    assert started.wait(1.0)
+    eng.listen(lambda t: None)       # second call while first is live → ignored
+
+    # Even if the HUD clears the icon flag mid-capture, re-entry is still blocked.
+    eng.clear_listening()
+    eng.listen(lambda t: None)
+
+    release.set()
+    time.sleep(0.05)
+    assert spawned == [1]            # only the first listen() ever spawned a thread
+
+
+def test_listen_runs_again_after_previous_capture_finishes():
+    """Once a capture completes and clears the guard, the next listen() proceeds."""
+    eng = VoiceEngine()
+    spawned = []
+
+    def _fake_thread(callback, on_error, timeout, phrase):
+        spawned.append(1)
+        with eng._capture_lock:      # complete immediately, clearing the guard
+            eng._capture_active = False
+
+    eng._listen_thread = _fake_thread
+
+    eng.listen(lambda t: None)
+    time.sleep(0.02)
+    eng.listen(lambda t: None)
+    time.sleep(0.02)
+    assert spawned == [1, 1]         # both proceeded — guard released between them

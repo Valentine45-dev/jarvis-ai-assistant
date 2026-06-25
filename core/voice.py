@@ -218,6 +218,12 @@ class VoiceEngine:
         self._stt_fallback_announced = False     # one-shot streaming→batch toast
         self._persistent_session = None          # reused warm Deepgram socket
         self._listen_cancel = threading.Event()  # Esc-interrupt of a live capture
+        # Re-entry guard for listen(). Distinct from _listening (a HUD icon flag
+        # the state machine clears on leaving "listening"); this one is owned
+        # solely by the listen lifecycle so a second listen() can't open a second
+        # mic on the same warm socket while one capture is still in flight.
+        self._capture_lock   = threading.Lock()
+        self._capture_active = False
 
     # ── Signal bridge ─────────────────────────────────────────────────────────
 
@@ -366,6 +372,16 @@ class VoiceEngine:
                 on_error("Microphone muted.")
             return
 
+        # Re-entry guard: refuse a second capture while one is already running.
+        # Atomic test-and-set under the lock so two near-simultaneous calls
+        # (e.g. the post-TTS relisten racing a still-finishing turn) can't both
+        # open a mic on the one shared Deepgram socket.
+        with self._capture_lock:
+            if self._capture_active:
+                _dbg("voice", "listen() ignored — capture already in flight")
+                return
+            self._capture_active = True
+
         _dbg("voice", "starting _listen_thread")
         threading.Thread(
             target=self._listen_thread,
@@ -401,6 +417,8 @@ class VoiceEngine:
             self._run_batch_stt(callback, on_error, timeout, phrase_time_limit)
         finally:
             self._listening.clear()
+            with self._capture_lock:
+                self._capture_active = False
             _dbg("voice", "_listen_thread done")
 
     def _wake_handshake(self) -> None:

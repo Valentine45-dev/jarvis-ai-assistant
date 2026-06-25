@@ -1978,6 +1978,40 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Double-listen re-entry guard (core/voice.py listen())
+-----------------------------------------------------------------------
+Bug: listen() spawned a capture thread with NO re-entry check, so it could be
+entered again while a capture was already live. Two mic streamers then fed the
+ONE warm Deepgram socket → audio captured twice (e.g. "Alright. Bye. See you
+next time." transcribed twice) and garbled frames. Seen in the log as two
+"[stt] mic streamer started" with no "stopped" between them.
+Why _listening couldn't be the guard: the HUD state machine calls
+clear_listening() whenever it leaves the "listening" state (it's a mic-icon
+flag), so it can be cleared mid-capture — unreliable for gating re-entry.
+
+Fix: a dedicated guard owned solely by the listen lifecycle —
+self._capture_active (bool) under self._capture_lock. listen() does an atomic
+test-and-set: if a capture is already active it logs
+"[voice] listen() ignored — capture already in flight" and returns; otherwise it
+sets the flag and spawns the thread. _listen_thread clears the flag in its
+finally. _listening (the HUD icon flag) is untouched and keeps its old behaviour.
+
+Manual test (uv run python main.py):
+  Speak a command → let JARVIS reply → rapidly trigger listening again while the
+  prior turn may still be finishing. Repeat 5x.
+  PASS: no command is captured/executed twice; at most one
+  "[stt] mic streamer started" is live at a time; you may see
+  "[voice] listen() ignored — capture already in flight" when re-entry is blocked.
+
+Code-level proof:
+  uv run pytest -q tests/test_voice_streaming.py
+  -> test_second_listen_ignored_while_capture_in_flight: a 2nd listen() while one
+     is live (and even after clear_listening()) spawns nothing — only the first runs.
+  -> test_listen_runs_again_after_previous_capture_finishes: once the guard clears,
+     the next listen() proceeds normally.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
