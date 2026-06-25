@@ -68,6 +68,11 @@ class AppConfig:
     # A value around 350-500 makes capture tolerant of natural think-pauses.
     stt_settle_ms: int = 0
     stt_language: str = "en-US"
+    # Opt-in explicit-content gate for web searches (default OFF). When True, an
+    # adult/NSFW search query gets a confirmation card before JARVIS searches —
+    # a speed-bump for a shared/family machine, never a refusal (JARVIS stays a
+    # controller, not a safety filter). See core/content_gate.py.
+    safe_search_confirm: bool = False
     # Extra terms to bias Deepgram nova-3 recognition toward (keyterm prompting).
     # The wake word + your name + a small built-in JARVIS vocabulary (browser
     # engines, app/brand names) are ALWAYS included automatically; add your own

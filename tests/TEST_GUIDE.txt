@@ -2095,6 +2095,42 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Opt-in explicit-content search gate (NSFW gate)
+-----------------------------------------------------------------------
+New config flag: config.safe_search_confirm (default FALSE). JARVIS stays a
+"controller, not a safety filter" — it NEVER refuses a search. When the user opts
+in (safe_search_confirm=true in config/jarvis.json), an explicit/adult query gets a
+confirmation card BEFORE the search runs, so a shared/family machine doesn't surface
+NSFW results on a careless or misheard command. OFF = behaviour fully unchanged.
+
+Detection (core/content_gate.py, is_explicit_query): conservative on purpose — a
+missed term beats a false positive nagging a normal search. Single tokens are
+word-boundary matched (so "sex" in "Essex", "anal" in "analysis", "cum" in
+"cumulative" do NOT trip it) and the most ambiguous singles (nude/naked/escort/sex)
+are intentionally excluded ("nude lipstick", "naked mole rat", "sex education" pass
+clean). Unambiguous phrases ("porn movies", "sex tape", "nude photos") match as
+substrings.
+
+Wiring (core/handlers/app_launcher.py): _handle_search_web checks the flag; on an
+explicit query it returns request_confirmation(...) whose callback runs the real
+_do_search_web once the user confirms. The search logic moved to _do_search_web
+unchanged, so the clean path is identical to before.
+
+Manual test (uv run python main.py):
+  Default (safe_search_confirm off): "search youtube for <anything>" runs as before.
+  Set safe_search_confirm=true in config/jarvis.json, restart.
+    - Say/type an explicit search -> a confirmation card appears; nothing is searched
+      until you confirm; confirming runs the search normally.
+    - A normal search ("kuwait weather", "essex county") runs WITHOUT a card.
+
+Code-level proof:
+  uv run pytest -q tests/test_content_gate.py
+  -> test_explicit_terms_and_phrases_match / test_clean_queries_do_not_match (the
+     false-positive guard), and the three handler-wiring tests (off=direct,
+     on+explicit=confirm, on+clean=direct).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

@@ -694,11 +694,32 @@ def _handle_close_app(action: str, params: dict) -> dict:
 
 
 def _handle_search_web(action: str, params: dict) -> dict:
-    from core.browser import browser
-
     query        = params.get("query", "")
     platform_key = params.get("platform", "google")
     _tlog(f"❯ search {query!r} on {platform_key}")
+
+    # Opt-in explicit-content gate (default OFF): confirm before an adult query
+    # so a shared/family machine doesn't surface NSFW results on a careless or
+    # misheard command. A speed-bump, never a refusal — JARVIS stays a controller.
+    from config.settings import config
+    if getattr(config, "safe_search_confirm", False):
+        from core.content_gate import is_explicit_query
+        if is_explicit_query(query):
+            from core.handlers.shared import request_confirmation
+            _tlog("⚠ explicit query — awaiting confirmation (safe_search_confirm on)")
+            prompt = (
+                f'That search looks explicit — "{query}". '
+                f"Search {platform_key} anyway?"
+            )
+            return request_confirmation(
+                prompt, lambda: _do_search_web(query, platform_key)
+            )
+    return _do_search_web(query, platform_key)
+
+
+def _do_search_web(query: str, platform_key: str) -> dict:
+    from core.browser import browser
+
     urls = {
         "google":        f"https://www.google.com/search?q={quote_plus(query)}",
         "youtube":       f"https://www.youtube.com/results?search_query={quote_plus(query)}",
