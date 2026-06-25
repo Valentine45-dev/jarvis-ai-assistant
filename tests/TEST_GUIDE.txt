@@ -2131,6 +2131,39 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Settings UI: Pause tolerance (stt_settle_ms) + Safe search (safe_search_confirm)
+-----------------------------------------------------------------------
+Wired both new knobs into the Settings page (ui/settings.py) so they're toggleable
+without hand-editing config/jarvis.json:
+  - Voice & audio → "Pause tolerance": a 0–800 ms slider (readout shows "Off" at 0)
+    bound to stt_settle_ms. Applies on APPLY_CFG; takes effect on the NEXT turn (no
+    restart) since the streaming loop reads config.stt_settle_ms per turn.
+  - Behaviour & visuals → "Safe search": a ToggleSwitch bound to safe_search_confirm.
+    Applies on APPLY_CFG; read per search call, so no restart.
+Both mark the page dirty (● UNSAVED) on change and persist via config.save() (asdict,
+so new dataclass fields persist automatically).
+
+Manual test (uv run python main.py → Settings):
+  - Drag "Pause tolerance" to e.g. 350, hit APPLY_CFG → SAVED ✓. Speak a command with
+    a short mid-sentence pause → the whole phrase is captured (was cut off at 0/off).
+  - Flip "Safe search" ON, APPLY_CFG. An explicit search now shows a confirm card;
+    a normal search does not. Flip OFF → explicit searches go straight through.
+  - Reopen Settings → both controls reflect the saved values (read from config).
+
+Code-level proof (full-GUI test — opt-in, see note):
+  JARVIS_RUN_QT=1 uv run pytest -q tests/test_settings_knobs.py
+  -> test_new_knobs_read_initial_values_from_config: slider + toggle init FROM config.
+  -> test_apply_writes_new_knobs_to_config: APPLY_CFG writes both back to config.
+  -> test_settle_readout_shows_off_at_zero: 0 → "Off", else the ms value.
+
+NOTE on qtgui tests: a full-GUI QApplication built in-process alongside the
+thread-spawning rest of the suite segfaults, so qtgui-marked tests are SKIPPED in the
+default run and opt-in via JARVIS_RUN_QT=1 (same pattern as integration tests). Plain
+`qt` tests (lightweight QCoreApplication, e.g. test_workflow_thread_hop) still run in
+the default suite.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

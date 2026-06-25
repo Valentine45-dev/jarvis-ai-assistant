@@ -160,9 +160,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[Any]) -> No
 
     Set `JARVIS_RUN_INTEGRATION=1` to opt back in.
     """
-    if os.environ.get("JARVIS_RUN_INTEGRATION"):
-        return
     skip_integration = pytest.mark.skip(reason="integration test (set JARVIS_RUN_INTEGRATION=1)")
+    # qtgui tests build a real full-GUI QApplication + widgets; instantiating one
+    # in-process alongside the thread-spawning rest of the suite segfaults, so they
+    # run on demand in their own session (JARVIS_RUN_QT=1) — same opt-in pattern as
+    # integration. (Plain `qt` tests use a lightweight QCoreApplication and run fine.)
+    skip_qtgui = pytest.mark.skip(reason="qtgui test (run alone with JARVIS_RUN_QT=1)")
+    run_integration = bool(os.environ.get("JARVIS_RUN_INTEGRATION"))
+    run_qt = bool(os.environ.get("JARVIS_RUN_QT"))
     for item in items:
-        if "integration" in item.keywords:
+        if "integration" in item.keywords and not run_integration:
             item.add_marker(skip_integration)
+        if "qtgui" in item.keywords and not run_qt:
+            item.add_marker(skip_qtgui)

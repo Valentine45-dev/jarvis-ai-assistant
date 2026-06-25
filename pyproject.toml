@@ -51,7 +51,8 @@ addopts = "-ra --strict-markers --tb=short"
 markers = [
     "slow: tests that take more than a few seconds (deselect with -m 'not slow')",
     "integration: tests that hit external services (network, real subprocess, real browser)",
-    "qt: tests that require a Qt application (auto-skipped on headless CI)",
+    "qt: tests that require a lightweight QCoreApplication (run in-process)",
+    "qtgui: tests that build a full-GUI QApplication + widgets (opt-in via JARVIS_RUN_QT=1; a real QApplication in-process with the threaded suite segfaults)",
 ]
 
 [tool.ruff]

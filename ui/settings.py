@@ -855,6 +855,37 @@ class SettingsView(QWidget):
         panel.add(_section_row("TTS speed", tts_wrap,
                                "Speech rate of the TTS engine. 100 = default."))
 
+        # STT pause-tolerance (settle window). 0 = off (snappiest); >0 waits that
+        # long after you stop before committing, so a mid-command think-pause
+        # doesn't cut you off. Takes effect on the next turn (no restart).
+        settle_row = QHBoxLayout()
+        settle_row.setSpacing(10)
+        self._settle_slider = QSlider(Qt.Horizontal)
+        self._settle_slider.setRange(0, 800)
+        self._settle_slider.setSingleStep(50)
+        self._settle_slider.setPageStep(100)
+        self._settle_slider.setValue(int(getattr(config, "stt_settle_ms", 0)))
+        self._settle_slider.setStyleSheet(_SLIDER_SS)
+        self._settle_slider.setFixedWidth(140)
+        self._settle_val = QLabel(self._fmt_settle(self._settle_slider.value()))
+        self._settle_val.setFixedWidth(34)
+        self._settle_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._settle_val.setStyleSheet(
+            f"QLabel {{ color: {INK_FAINT}; background: transparent; border: none;"
+            f"font-family: '{FM}'; font-size: 10px; }}"
+        )
+        self._settle_slider.valueChanged.connect(
+            lambda v: self._settle_val.setText(self._fmt_settle(v)))
+        settle_row.addWidget(self._settle_slider)
+        settle_row.addWidget(self._settle_val)
+        settle_wrap = QWidget()
+        settle_wrap.setLayout(settle_row)
+        panel.add(_section_row(
+            "Pause tolerance", settle_wrap,
+            "Wait after you stop before committing, so a mid-command pause doesn't "
+            "cut you off. 0 = off (snappiest). ~350-500ms suits natural pauses.",
+        ))
+
         # Noise gate + wake word listener
         self._noise_toggle = ToggleSwitch(config.noise_gate)
         panel.add(_section_row("Noise gate", self._noise_toggle,
@@ -886,6 +917,13 @@ class SettingsView(QWidget):
         self._flag_conf.toggled.connect(self.auto_confirm_changed.emit)
         panel.add(_section_row("Auto-confirm", self._flag_conf,
                                "Skip confirmation prompts. Destructive actions run instantly."))
+
+        # Opt-in explicit-content search gate. Applies on save (read per search,
+        # no restart). JARVIS never refuses — it just asks first when this is on.
+        self._flag_safesearch = ToggleSwitch(getattr(config, "safe_search_confirm", False))
+        panel.add(_section_row("Safe search", self._flag_safesearch,
+                               "Confirm before an explicit/adult web search. Off by "
+                               "default — a speed-bump for shared machines, never a refusal."))
 
         self._flag_dim = ToggleSwitch(getattr(config, "dim_mode", False))
         self._flag_dim.toggled.connect(self.dim_mode_changed.emit)
@@ -943,6 +981,11 @@ class SettingsView(QWidget):
 
     # ── Event handlers ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fmt_settle(v: int) -> str:
+        """Compact slider readout: 'Off' at 0, else the millisecond value."""
+        return "Off" if v <= 0 else str(v)
+
     def _on_swatch_clicked(self, key: str) -> None:
         if key == self._selected_theme:
             return
@@ -966,7 +1009,9 @@ class SettingsView(QWidget):
         self._scan_toggle.toggled.connect(lambda _: self._mark_dirty())
         self._mic_slider.valueChanged.connect(lambda _: self._mark_dirty())
         self._tts_slider.valueChanged.connect(lambda _: self._mark_dirty())
+        self._settle_slider.valueChanged.connect(lambda _: self._mark_dirty())
         self._noise_toggle.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_safesearch.toggled.connect(lambda _: self._mark_dirty())
         self._mic_device_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
 
     def _mark_dirty(self) -> None:
@@ -1014,6 +1059,8 @@ class SettingsView(QWidget):
         config.tts_speed        = self._tts_slider.value()
         config.noise_gate       = self._noise_toggle.isChecked()
         config.mic_device       = self._mic_device_combo.currentData()
+        config.stt_settle_ms    = self._settle_slider.value()
+        config.safe_search_confirm = self._flag_safesearch.isChecked()
         # Session flags snapshot
         config.mic_muted        = self._flag_mic.isChecked()
         config.tts_muted        = self._flag_tts.isChecked()
