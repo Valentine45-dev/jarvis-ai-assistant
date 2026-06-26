@@ -2379,6 +2379,35 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Silence the websockets 'keepalive ping failed' traceback on quit
+-----------------------------------------------------------------------
+Not a functional bug — the app quit cleanly ("Catch you soon" played, read loop
+ended, prompt returned). On shutdown we tear down the persistent Deepgram socket;
+the websockets LIBRARY runs its OWN internal keepalive thread (separate from our
+_keepalive_loop) which, on its next ping after the socket closed, logs a full
+ConnectionClosedError traceback (websockets/sync/connection.py:791,
+logger.error("keepalive ping failed", exc_info=True)). It's swallowed (not
+re-raised) but printed to stderr — looks alarming on every quit.
+
+Fix (core/stt/deepgram.py): a logging.Filter (_SuppressKeepalivePingFailed)
+installed on the "websockets" / "websockets.client" loggers at import drops ONLY
+that record; every other websockets log still passes. The keepalive thread only
+exists because the library sets ping_interval; the SDK's transport shim controls
+that and overriding it is fragile, so filtering the benign record is the surgical
+fix. (Our [stt] layer already reports the connection errors we actually act on.)
+
+Manual test (uv run python main.py, stt_persistent on):
+  Say "okay bye" (or otherwise quit). PASS: JARVIS says goodbye and the app exits
+  with NO "keepalive ping failed" traceback in the console. (The one-line
+  "[stt] Deepgram read loop ended" is normal teardown logging.)
+
+Code-level proof:
+  uv run pytest -q tests/test_stt_streaming.py::test_keepalive_ping_failed_log_is_suppressed
+  -> the filter drops a "keepalive ping failed" record, keeps other websockets
+     records, and is installed on both websockets loggers.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

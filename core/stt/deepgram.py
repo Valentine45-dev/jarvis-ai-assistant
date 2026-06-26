@@ -16,11 +16,39 @@ SDK shape (deepgram-sdk 7.x), all verified by introspection:
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 
 from core.log import debug as _dbg
 from core.stt.base import StreamingSttSession
+
+
+class _SuppressKeepalivePingFailed(logging.Filter):
+    """Drop the websockets library's benign 'keepalive ping failed' ERROR.
+
+    On shutdown we tear down the persistent Deepgram socket; the websockets
+    library runs its OWN internal keepalive thread (separate from our
+    _keepalive_loop) which, on its next ping after the socket has closed, logs a
+    full ConnectionClosedError traceback (websockets/sync/connection.py:791,
+    logger.error(..., exc_info=True)). It's a swallowed, post-close race — our
+    [stt] layer already reports the connection errors we actually act on — so the
+    traceback is pure noise that looks alarming on quit. Suppress only THAT
+    record; every other websockets log still passes through.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "keepalive ping failed" not in record.getMessage()
+
+
+# Install once at import (idempotent — addFilter dedupes by identity isn't
+# guaranteed, so guard with a module flag). The connection logs on
+# "websockets.client"; cover the parent too for version drift.
+_KEEPALIVE_FILTER = _SuppressKeepalivePingFailed()
+for _wsname in ("websockets", "websockets.client"):
+    _wslog = logging.getLogger(_wsname)
+    if not any(isinstance(f, _SuppressKeepalivePingFailed) for f in _wslog.filters):
+        _wslog.addFilter(_KEEPALIVE_FILTER)
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:

@@ -275,3 +275,27 @@ def test_persistent_keepalive_pings_while_idle():
     pings = conn.keepalives
     sess.close()
     assert pings >= 1                                         # pinged while idle
+
+
+# ── websockets keepalive-ping-failed log suppression (shutdown noise) ────────
+
+def test_keepalive_ping_failed_log_is_suppressed():
+    """The benign websockets 'keepalive ping failed' traceback (logged on socket
+    teardown at quit) must be filtered out; all other websockets logs pass."""
+    import logging
+
+    import core.stt.deepgram as dg
+
+    flt = dg._KEEPALIVE_FILTER
+
+    def _rec(msg: str) -> logging.LogRecord:
+        return logging.LogRecord("websockets.client", logging.ERROR,
+                                 __file__, 1, msg, None, None)
+
+    assert flt.filter(_rec("keepalive ping failed")) is False     # suppressed
+    assert flt.filter(_rec("connection handshake failed")) is True  # other logs kept
+
+    # The filter is actually installed on the websockets loggers at import.
+    for name in ("websockets", "websockets.client"):
+        assert any(isinstance(f, dg._SuppressKeepalivePingFailed)
+                   for f in logging.getLogger(name).filters), name
