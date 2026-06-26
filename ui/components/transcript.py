@@ -8,8 +8,9 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from ui.components.design import INTENT_LABEL, intent_label_color
 from ui.components.panels import GlassPanel
-from ui.theme import FM, PRIMARY
+from ui.theme import CYAN, FM, PRIMARY, TEXT_MUTED
 
 
 def _a255(x: float) -> int:
@@ -184,6 +185,118 @@ class TerminalLog(QTextEdit):
         self.moveCursor(self.textCursor().End)
 
 
+# ── SYS_LOG renderer (Variant B: outcome rail + gutters + JARVIS-only chips) ──
+#
+# Pure, Qt-free HTML builder so it's unit-testable. QTextBrowser (Qt rich text)
+# renders bordered/background <td> cells and cell bgcolor, but DROPS border-radius
+# and inline-span borders — so the rail is a 4px bgcolor cell and chips are square
+# bordered <td>s. info rail follows the theme (CYAN token); the rest are SEMANTIC
+# fixed colours. Latency is intentionally NOT rendered (deferred; never faked).
+
+_RAIL_OK        = "#83fba5"    # success — green (semantic, fixed)
+_RAIL_FAIL      = "#ff6b6b"    # failure — red (semantic, fixed)
+_RAIL_INTERRUPT = "#ffd166"    # aborted — amber (semantic, fixed)
+_INTERRUPT_TEXT = "#ffb432"    # the ⛔ line text colour (preserved as-is)
+_CONF_CHIP      = "#849396"    # confidence chip — muted/secondary (solid for td border)
+
+
+def _rail_color(is_you: bool, intent: str, success) -> str:
+    """Per-line left-rail colour: info (themed accent) / ok / fail / interrupt."""
+    if intent == "interrupted":
+        return _RAIL_INTERRUPT
+    if is_you:
+        return CYAN                       # info — themed
+    if success is True:
+        return _RAIL_OK
+    if success is False:
+        return _RAIL_FAIL
+    return CYAN                           # info (no outcome) — themed
+
+
+def _chip(text: str, color: str) -> str:
+    """One square chip as a bordered <td> (QTextBrowser drops border-radius)."""
+    return (
+        f'<td style="border:1px solid {color}; color:{color};">'
+        f"&nbsp;{html.escape(text)}&nbsp;</td>"
+    )
+
+
+def _chip_row(intent: str, conf) -> str:
+    """JARVIS-only chip row: intent chip (+ a confidence chip when conf is known).
+    No latency chip — deferred, never fabricated."""
+    label, color = intent_label_color(intent)
+    chips = [_chip(label.upper(), color)]
+    if conf is not None:
+        chips.append("<td>&nbsp;&nbsp;</td>")          # gap
+        chips.append(_chip(f"{int(conf * 100)}%", _CONF_CHIP))
+    return (
+        '<table cellspacing="0" cellpadding="3" style="margin-top:4px;">'
+        f"<tr>{''.join(chips)}</tr></table>"
+    )
+
+
+def _line_table(rail: str, inner: str) -> str:
+    """One log line: a 4px colour-rail cell + the content cell."""
+    return (
+        '<table width="100%" cellspacing="0" cellpadding="0"><tr>'
+        f'<td width="4" bgcolor="{rail}"></td>'
+        f'<td style="padding-left:8px;">{inner}</td>'
+        "</tr></table>"
+    )
+
+
+def _build_log_html(rows, expanded_rows, preview_chars: int) -> str:
+    """Render SYS_LOG rows to QTextBrowser HTML. Per line: a left outcome rail +
+    time|speaker|message; JARVIS lines also get a chip row (intent · confidence).
+    YOU lines stay one dense line with no chips. Pure (no Qt) → unit-testable."""
+    ts   = f"color:{TEXT_MUTED};"
+    you_ = f"color:{TEXT_MUTED};"
+    jar_ = f"color:{CYAN};"
+    body = f"color:{PRIMARY};"
+    spacer = '<div style="font-size:5px;">&nbsp;</div>'
+    blocks: list[str] = []
+
+    for idx, row in enumerate(rows):
+        you, y_time, jarvis, j_time, intent, conf, success = row
+
+        if you:
+            inner = (
+                f'<span style="{ts}">[{html.escape(str(y_time))}]</span> '
+                f'<span style="{you_}">YOU:</span> '
+                f'<span style="{body}">{html.escape(str(you))}</span>'
+            )
+            blocks.append(_line_table(_rail_color(True, "", None), inner))
+
+        if jarvis and intent == "interrupted":
+            line = html.escape(f"[{j_time}] ⛔ {jarvis}")
+            blocks.append(_line_table(
+                _RAIL_INTERRUPT, f'<span style="color:{_INTERRUPT_TEXT};">{line}</span>'))
+            blocks.append(spacer)
+            continue
+
+        if jarvis:
+            shown = jarvis
+            toggle = ""
+            if len(jarvis) > preview_chars:
+                if idx in expanded_rows:
+                    toggle = f' <a href="jarvis://collapse/{idx}">[show less]</a>'
+                else:
+                    shown = jarvis[:preview_chars].rstrip() + "…"
+                    toggle = f' <a href="jarvis://expand/{idx}">[load more]</a>'
+            shown_html = html.escape(shown).replace("\n", "<br>")
+            inner = (
+                f'<span style="{ts}">[{html.escape(str(j_time))}]</span> '
+                f'<span style="{jar_}">JARVIS:</span> '
+                f'<span style="{body}">{shown_html}</span>{toggle}'
+                + _chip_row(intent, conf)
+            )
+            blocks.append(_line_table(_rail_color(False, intent, success), inner))
+
+        blocks.append(spacer)
+
+    return "".join(blocks)
+
+
 class TranscriptPanel(GlassPanel):
     confirmed = pyqtSignal()
     cancelled = pyqtSignal()
@@ -221,28 +334,31 @@ class TranscriptPanel(GlassPanel):
     def hide_confirm(self) -> None:
         self._confirm_card.hide_confirm()
 
-    def add_exchange(self, you, y_time, jarvis="", j_time="", intent="", conf=None):
-        self._rows.append((you, y_time, jarvis, j_time, intent, conf))
+    def add_exchange(self, you, y_time, jarvis="", j_time="", intent="", conf=None,
+                     success=None):
+        # success: None = info/neutral rail, True = ok (green), False = fail (red).
+        self._rows.append((you, y_time, jarvis, j_time, intent, conf, success))
         self._render()
 
     def append_jarvis_scheduled(
-        self, jarvis: str, j_time: str, intent: str = "", conf: float | None = None
+        self, jarvis: str, j_time: str, intent: str = "", conf: float | None = None,
+        success=None,
     ) -> None:
         """Log line for a background scheduled action (no matching YOU: line)."""
-        self._rows.append(("", "", jarvis, j_time, intent, conf))
+        self._rows.append(("", "", jarvis, j_time, intent, conf, success))
         self._render()
 
     def update_last_you(self, text, y_time=""):
         if not self._rows:
             return
-        _, _, jarvis, j_time, intent, conf = self._rows[-1]
-        self._rows[-1] = (text, y_time, jarvis, j_time, intent, conf)
+        _, _, jarvis, j_time, intent, conf, success = self._rows[-1]
+        self._rows[-1] = (text, y_time, jarvis, j_time, intent, conf, success)
         self._render()
 
-    def update_last_jarvis(self, text, j_time="", intent="", conf=None):
+    def update_last_jarvis(self, text, j_time="", intent="", conf=None, success=None):
         if not self._rows:
             return
-        you, y_time, _, _, old_intent, old_conf = self._rows[-1]
+        you, y_time, _, _, old_intent, old_conf, old_success = self._rows[-1]
         self._rows[-1] = (
             you,
             y_time,
@@ -250,42 +366,14 @@ class TranscriptPanel(GlassPanel):
             j_time,
             intent or old_intent,
             conf if conf is not None else old_conf,
+            success if success is not None else old_success,
         )
         self._render()
 
     def _render(self):
-        blocks: list[str] = []
-        for idx, (you, y_time, jarvis, j_time, intent, conf) in enumerate(self._rows):
-            if you:
-                you_html = html.escape(f"[{y_time}] YOU: {you}")
-                blocks.append(f"<div>{you_html}</div>")
-            if jarvis and intent == "interrupted":
-                # Aborted command — amber marker, no intent/confidence suffix.
-                line_html = html.escape(f"[{j_time}] ⛔ {jarvis}")
-                blocks.append(f'<div style="color:#ffb432;">{line_html}</div>')
-                blocks.append("<div>&nbsp;</div>")
-                continue
-            if jarvis:
-                suffix = f" ({intent}, {int(conf * 100)}%)" if intent and conf is not None else ""
-                body = jarvis
-                load_toggle = ""
-                if len(jarvis) > self._preview_chars:
-                    expanded = idx in self._expanded_jarvis_rows
-                    if expanded:
-                        load_toggle = (
-                            f' <a href="jarvis://collapse/{idx}">[show less]</a>'
-                        )
-                    else:
-                        body = jarvis[: self._preview_chars].rstrip() + "…"
-                        load_toggle = (
-                            f' <a href="jarvis://expand/{idx}">[load more]</a>'
-                        )
-                line = f"[{j_time}] JARVIS: {body}{suffix}"
-                line_html = html.escape(line).replace("\n", "<br>")
-                blocks.append(f"<div>{line_html}{load_toggle}</div>")
-            blocks.append("<div>&nbsp;</div>")
-
-        self._view.setHtml("".join(blocks))
+        self._view.setHtml(
+            _build_log_html(self._rows, self._expanded_jarvis_rows, self._preview_chars)
+        )
         sb = self._view.verticalScrollBar()
         sb.setValue(sb.maximum())
 

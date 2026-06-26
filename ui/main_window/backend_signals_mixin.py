@@ -55,7 +55,7 @@ class _BackendSignalsMixin:
         history_store.save_entry(entry)
         try:
             self._dashboard.left.transcript.append_jarvis_scheduled(
-                spoken, j_time, "reminder_task", 1.0)
+                spoken, j_time, "reminder_task", 1.0, success=True)
         except Exception:
             pass
         try:
@@ -150,7 +150,7 @@ class _BackendSignalsMixin:
         self._history.append(entry)
         history_store.save_entry(entry)
         self._dashboard.left.transcript.append_jarvis_scheduled(
-            display_resp, j_time, intent, hud_conf
+            display_resp, j_time, intent, hud_conf, success=exec_ok
         )
 
         secs = int((datetime.now() - self._session_start).total_seconds())

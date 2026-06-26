@@ -93,6 +93,20 @@ def _mono(size: int, *, bold: bool = False, tracking: float = 0.0) -> QFont:
     return font
 
 
+# ── Intent label/colour resolution (single source for badges + log chips) ────
+
+
+def intent_label_color(intent_or_status: str) -> tuple[str, str]:
+    """Resolve a brain intent (``file_operation``) or status keyword (``fail``)
+    to its (short label, colour). The one place this mapping lives so the
+    IntentBadge widget and the sys-log chip renderer never diverge."""
+    key = (intent_or_status or "unknown").strip().lower()
+    label = INTENT_LABEL.get(key, key)
+    # Try the short label first (most badges key on that), then the raw intent.
+    color = INTENT_COLOR.get(label) or INTENT_COLOR.get(key) or INK_DIM
+    return label, color
+
+
 # ── IntentBadge ──────────────────────────────────────────────────────────────
 
 
@@ -108,12 +122,7 @@ class IntentBadge(QLabel):
         self.set_intent(intent_or_status)
 
     def set_intent(self, intent_or_status: str) -> None:
-        key = (intent_or_status or "unknown").strip().lower()
-        # Map full intent name → short label, else use the input directly.
-        label = INTENT_LABEL.get(key, key)
-        # Color: try the short label first (most badges use that key), then
-        # the raw intent as a fallback.
-        color = INTENT_COLOR.get(label) or INTENT_COLOR.get(key) or INK_DIM
+        label, color = intent_label_color(intent_or_status)
         self.setText(label.upper())
         self.setStyleSheet(
             "QLabel {"
@@ -457,7 +466,7 @@ class PanelCard(QFrame):
 __all__ = [
     "INK", "INK_DIM", "INK_FAINT", "CYAN_SOFT", "CYAN_FAINT", "BG_PANEL",
     "GREEN", "GREEN_DIM", "AMBER", "RED",
-    "INTENT_COLOR", "INTENT_LABEL",
+    "INTENT_COLOR", "INTENT_LABEL", "intent_label_color",
     "IntentBadge", "StatusPip", "HeroMetric", "DivideRow", "ChipFilter",
     "PanelCard",
 ]

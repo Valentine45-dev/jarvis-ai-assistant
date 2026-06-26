@@ -2255,6 +2255,67 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+SYS_LOG_BUFFER redesign — Variant B (rail + gutters) + JARVIS-only chips
+-----------------------------------------------------------------------
+Rebuilt the dashboard sys-log (TranscriptPanel) from a flat
+"[time] YOU/JARVIS: msg (intent, conf%)" stream into Variant B: each line has a
+4px LEFT COLOUR RAIL encoding outcome, time|speaker|message gutters, and JARVIS
+reply lines carry a chip row (intent chip · confidence chip). YOU lines stay one
+dense line with NO chips. Latency is DEFERRED (no latency chip, never faked).
+
+Render path (confirmed): TranscriptPanel._render() builds HTML and setHtml()s a
+QTextBrowser. Chips proved feasible in Qt rich text — bordered/background <td>
+cells render; border-radius is dropped (chips are SQUARE, not rounded). So the
+rail is a 4px bgcolor <td> and chips are square bordered <td>s. No QWidget rewrite.
+The HTML build is a PURE module-level fn `_build_log_html(rows, expanded, preview)`
+(Qt-free → unit-tested).
+
+Rail colours: info = themed CYAN token (follows the active theme, like the theme
+work); ok = #83fba5 (green), fail = #ff6b6b (red), interrupt = #ffd166 (amber) —
+the last three SEMANTIC/fixed. YOU + no-outcome JARVIS rows = info; JARVIS rows
+with success True/False = ok/fail; intent=="interrupted" = amber (⛔ line preserved).
+
+Intent chip: reuses design.py INTENT_COLOR + INTENT_LABEL via the new shared
+`intent_label_color()` helper (also now used by IntentBadge — single source, no
+second map). Confidence chip: muted, "{int(conf*100)}%", omitted when conf is None.
+
+Data plumbing: `success` (bool|None) added as a 7th element of the row tuple and to
+add_exchange/update_last_jarvis/append_jarvis_scheduled (default None → BACK-COMPAT;
+existing callers unchanged). exec_ok is threaded transcript_payload (6th elem) ->
+_on_tts_ready -> _update_transcript_if_current -> update_last_jarvis. Confirmation
+prompts pass None (info). Reminders pass success=True; cron scheduled passes exec_ok.
+
+Width: the panel was widened 340 -> 400px (dashboard.py). Only the center (Expanding)
+reactor zone absorbs the +60 (≈600->540px at the 1280 minimum — still ample); the
+right metrics column is fixed and unaffected; no reflow. Effective text width = 360px;
+a ~50-char reply wraps to ~1-2 lines; the chip row fits on ONE line (no h-scroll);
+≈3 full exchanges visible at once.
+
+Manual test (uv run python main.py):
+  Run a mix of commands and watch the left SYS_LOG:
+  - YOU lines: one dense line, info (themed) rail, NO chips.
+  - JARVIS success (e.g. "open chrome"): GREEN rail + chip row [intent] [conf%].
+  - JARVIS failure (e.g. a search with no network): RED rail, [intent] [0%].
+  - Esc mid-command: amber ⛔ interrupted line, amber rail, no chips.
+  - A pending confirmation prompt: info rail (not green/red) until you answer.
+  - Switch to a non-cyan theme + restart: the info rails + browser/search intent
+    chips follow the accent; ok/fail/interrupt stay green/red/amber.
+  - Long reply still shows [load more]/[show less] and expands inline.
+
+Code-level proof:
+  uv run pytest -q tests/test_syslog_render.py
+  -> rail colours (info themed via CYAN token; ok/fail/interrupt the locked hexes);
+     chips on JARVIS rows only, NONE on YOU rows; conf chip omitted when conf None;
+     NO latency chip ever; intent chip uses design.py maps; interrupt ⛔ + amber
+     preserved; [load more]/[show less] expander preserved; 4px rail cell present.
+  JARVIS_RUN_QT=1 uv run pytest -q tests/test_syslog_render.py::test_transcript_panel_back_compat_and_sethtml
+  -> add_exchange/update_last_jarvis/append_jarvis_scheduled work WITHOUT success
+     (default None), rows carry the 7th slot, setHtml accepts the output (qtgui).
+  Offscreen width measure (manual): 400px panel -> 360px text, 4px rail renders
+  (cyan pixels at x=4-7), no horizontal scrollbar (chip row fits one line).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

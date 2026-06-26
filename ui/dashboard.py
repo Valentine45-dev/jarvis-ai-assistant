@@ -842,7 +842,10 @@ class DashboardView(QWidget):
         cols.setSpacing(16)
 
         log_panel = _SysLogPanel()
-        log_panel.setFixedWidth(340)
+        # 400 (was 340) gives the rail + full YOU/JARVIS gutters + the JARVIS
+        # chip row comfortable room. Only the center (Expanding) reactor zone
+        # absorbs the +60px; the right metrics column is fixed and unaffected.
+        log_panel.setFixedWidth(400)
         log_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         cols.addWidget(log_panel)
 

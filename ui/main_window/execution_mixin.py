@@ -229,7 +229,8 @@ class _ExecutionMixin:
             # Same TTS + typewriter lockstep as _execute_result (do not type before audio).
             self._transcript_update_token += 1
             transcript_token = self._transcript_update_token
-            transcript_payload = (transcript_token, prompt, j_time, intent, conf)
+            # success=None → info rail (this is a pending confirmation prompt).
+            transcript_payload = (transcript_token, prompt, j_time, intent, conf, None)
             self._dashboard.left.typing.hide_typing()
             self._show_confirm_card(prompt)
             self._voice_view.set_pending(intent, result.get("action", ""), conf, prompt)
@@ -553,7 +554,7 @@ class _ExecutionMixin:
                                           "intent": intent, "conf": conf})
             self._transcript_update_token += 1
             transcript_token = self._transcript_update_token
-            transcript_payload = (transcript_token, display_resp, j_time, intent, conf)
+            transcript_payload = (transcript_token, display_resp, j_time, intent, conf, None)
             self._show_confirm_card(display_resp)
             self._dashboard.toast.show_toast(display_resp, "warning")
             try:
@@ -613,7 +614,7 @@ class _ExecutionMixin:
             # (same as voice_engine.say → _tts_ready → update_last_jarvis).
             self._transcript_update_token += 1
             transcript_token = self._transcript_update_token
-            transcript_payload = (transcript_token, display_resp, j_time, intent, conf)
+            transcript_payload = (transcript_token, display_resp, j_time, intent, conf, None)
             self._show_confirm_card(display_resp)
             self._dashboard.toast.show_toast(display_resp, "warning")
             try:
@@ -699,7 +700,8 @@ class _ExecutionMixin:
 
         self._transcript_update_token += 1
         transcript_token = self._transcript_update_token
-        transcript_payload = (transcript_token, tts_line, j_time, intent, hud_conf)
+        # 6th element = success → drives the SYS_LOG outcome rail (ok/fail).
+        transcript_payload = (transcript_token, tts_line, j_time, intent, hud_conf, exec_ok)
 
         has_follow = bool(follow and intent in self._ACTION_INTENTS)
         tok = transcript_token
@@ -796,9 +798,12 @@ class _ExecutionMixin:
         self._dashboard.toast.show_toast(toast_msg, kind)
 
     def _on_tts_ready(self, payload: object):
-        token, text, j_time, intent, conf = payload
+        # 6th element (success) drives the SYS_LOG outcome rail. Tolerate a
+        # 5-tuple defensively so any unmigrated emitter still works (success=None).
+        token, text, j_time, intent, conf, *rest = payload
+        success = rest[0] if rest else None
         self._set_state_if_current(token, "speaking")
-        self._update_transcript_if_current(token, text, j_time, intent, conf)
+        self._update_transcript_if_current(token, text, j_time, intent, conf, success)
         # After the speaking animation window, lock in awaiting_confirmation if
         # a confirm card is still active; otherwise stay in "speaking" until
         # on_done fires the _tts_done_signal which drives the actual transition.
@@ -844,12 +849,13 @@ class _ExecutionMixin:
             self._tts_done_signal.emit(tok)
 
     def _update_transcript_if_current(
-        self, token: int, text: str, j_time: str, intent: str, conf: float
+        self, token: int, text: str, j_time: str, intent: str, conf: float, success=None
     ):
         """Ignore transcript updates after a newer command/response."""
         if token != self._transcript_update_token:
             return
-        self._dashboard.left.transcript.update_last_jarvis(text, j_time, intent, conf)
+        self._dashboard.left.transcript.update_last_jarvis(
+            text, j_time, intent, conf, success)
         # Mirror the reply into the redesigned Terminal page so a command typed
         # there gets JARVIS's response inline. No-op unless an awaiting terminal
         # block exists (i.e. the command actually originated in the terminal).
