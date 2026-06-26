@@ -148,8 +148,8 @@ class _TagHighlighter(QSyntaxHighlighter):
     Valid tag   → cyan + bold  (confirms the shortcut is active)
     Invalid tag → gold         (warns the user before they submit)
     """
-    _CYAN = QColor("#00E5FF")
-    _GOLD = QColor("#FFE16D")
+    _CYAN = QColor(*ACCENT_RGB)   # valid-@tag highlight = accent (== #00E5FF on cyan)
+    _GOLD = QColor("#FFE16D")     # invalid-@tag = SEMANTIC warning, fixed across themes
 
     def __init__(self, document, valid_tags: frozenset):
         super().__init__(document)

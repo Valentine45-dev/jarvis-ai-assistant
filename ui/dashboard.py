@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
 
 from core.brain import TAG_INTENT_MAP
 from ui.components.typewriter import _TypewriterProxy
-from ui.theme import ACCENT_RGB, BG, CYAN, FM, TEXT_MUTED
+from ui.theme import ACCENT_HEX, ACCENT_RGB, BG, CYAN, FM, TEXT_MUTED
 from ui.widgets import (
     ArcReactorWidget,
     CommandBar as _MainCommandBar,
@@ -64,12 +64,15 @@ EMERALD_DIM = "#66dd8b"
 
 
 STATES = {
-    "idle": ("STANDBY", "#00e5ff"),
-    "listening": ("LISTENING", "#00e5ff"),
-    "thinking": ("PROCESSING", "#00e5ff"),
+    # idle/listening/thinking/wake glow is the resting HUD accent → follows the
+    # theme (ACCENT_HEX == "#00e5ff" on the default cyan theme, byte-identical).
+    # speaking/error are SEMANTIC (success/error) and stay fixed across themes.
+    "idle": ("STANDBY", ACCENT_HEX),
+    "listening": ("LISTENING", ACCENT_HEX),
+    "thinking": ("PROCESSING", ACCENT_HEX),
     "speaking": ("SPEAKING", "#83fba5"),
     "error": ("SYS ERROR", "#ffb4ab"),
-    "wake": ("WAKE DETECTED", "#00e5ff"),
+    "wake": ("WAKE DETECTED", ACCENT_HEX),
 }
 
 

@@ -17,7 +17,7 @@ from PyQt5.QtGui import QPainter
 from PyQt5.QtWidgets import QLabel, QStyle, QStyleOption, QVBoxLayout, QWidget
 
 from ui.bars import draw_glow_right_edge, draw_glow_underline
-from ui.theme import CYAN, FM, SIDEBAR_W
+from ui.theme import CYAN, FM, IDLE_CYAN, PRIMARY, SIDEBAR_W
 from ui.widgets import _mono
 
 
@@ -38,9 +38,12 @@ FOOTER_ITEMS = [
 
 
 # State -> icon tint colors. Kept in one place so the look stays consistent.
-_ICON_COLOR_ACTIVE = CYAN                      # "#00E5FF"
-_ICON_COLOR_HOVER  = "#C3F5FF"
-_ICON_COLOR_IDLE   = "rgba(0,229,255,0.35)"    # qtawesome accepts rgba strings
+# All three are ACCENT (qtawesome icon tints) → follow the theme. On the default
+# cyan theme these resolve byte-identically: CYAN == "#00e5ff", PRIMARY ==
+# "#c3f5ff", IDLE_CYAN == "rgba(0,229,255,0.35)".
+_ICON_COLOR_ACTIVE = CYAN
+_ICON_COLOR_HOVER  = PRIMARY                    # themed light tint (was "#C3F5FF")
+_ICON_COLOR_IDLE   = IDLE_CYAN                  # themed; qtawesome accepts rgba strings
 
 
 class _BrandZone(QWidget):

@@ -2207,6 +2207,54 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Theme accent completeness — the painted/icon/asset leaks (restart model)
+-----------------------------------------------------------------------
+Follow-up to the theme system: a few widgets expressed the accent as a literal
+that bypassed BOTH theming mechanisms (the apply_accent QSS hook AND the
+QColor(*ACCENT_RGB) sweep), so they stayed cyan under a non-cyan theme. Audit
+classified each accent-vs-semantic; the ACCENT ones now read the token. Semantic
+colours (success green, error red, warning amber) deliberately stay fixed.
+
+Fixed (all byte-identical under the default cyan theme):
+  - dashboard.py STATES: idle/listening/thinking/wake glow -> ACCENT_HEX
+    (== "#00e5ff" on cyan). speaking="#83fba5" / error="#ffb4ab" left SEMANTIC.
+  - widgets/visuals.py ArcReactorWidget._state_colors: listening/thinking/wake ->
+    QColor(*ACCENT_RGB). speaking/error left SEMANTIC.
+  - widgets/inputs.py _TagHighlighter._CYAN (valid-@tag highlight) ->
+    QColor(*ACCENT_RGB). _GOLD (invalid-@tag warning) left SEMANTIC.
+  - sidebar.py icon tints: _ICON_COLOR_IDLE -> IDLE_CYAN token, _ICON_COLOR_HOVER
+    -> PRIMARY (themed light tint), _ICON_COLOR_ACTIVE stays CYAN (already themed).
+  - theme.py jarvis_logo_pixmap(): the logo SVG bakes the accent in 8 places that
+    no token can reach; on a non-cyan theme recolor_logo_svg() replaces #00E5FF
+    (case-insensitive) with ACCENT_HEX before QSvgRenderer. No-op on cyan (the
+    file is read unchanged -> byte-identical).
+Left untouched (confirmed SEMANTIC): StatusPip (design.py + primitives.py,
+green/amber/red), _TagHighlighter._GOLD, the interrupted ⛔ amber #ffb432, the
+CANCEL red button, the CONFIRM button (it's QSS -> already follows the theme).
+
+Manual test (uv run python main.py):
+  Settings -> pick a non-cyan swatch (Amber/Matrix) -> APPLY_CFG -> restart.
+  PASS: the "STANDBY" badge, the arc-reactor rings, the valid-@tag highlight in
+  the command bar, the sidebar icons (idle + active + hover), and the brand logo
+  are ALL the new accent — no cyan left on them. The status pips next to panels
+  stay green/amber/red; a failed command's reactor/error text stays red; the
+  CANCEL button stays red. Switch back to Stark (cyan) + restart -> identical to
+  the original look.
+
+Code-level proof:
+  uv run pytest -q tests/test_theme.py
+  -> apply_accent no-op on base / substitutes on non-base; STATES glow == ACCENT_HEX
+     with speaking/error semantic; _TagHighlighter._CYAN == ACCENT_RGB, _GOLD fixed;
+     sidebar idle/active/hover == IDLE_CYAN/CYAN/PRIMARY; recolor_logo_svg no-op on
+     base + swaps on non-base (incl. the real shipped SVG). AMBIENT-INDEPENDENT
+     (tests don't assume the saved theme).
+  JARVIS_RUN_QT=1 uv run pytest -q tests/test_theme.py::test_visuals_state_colours_route_to_accent
+  -> reactor listening/thinking/wake == ACCENT_RGB, speaking/error semantic (qtgui).
+  Offscreen amber straggler smoke (manual): builds StateLabel/reactor/_InputBlock/
+  sidebar + logo under amber -> all amber, zero "0,229,255" in their QSS.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

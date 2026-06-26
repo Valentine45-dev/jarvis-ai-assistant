@@ -171,12 +171,15 @@ class ArcReactorWidget(QWidget):
         self._pulse = 0.0
         self._state = "idle"
         self._state_colors = {
+            # idle/listening/thinking/wake = resting HUD accent → follows the theme
+            # (QColor(*ACCENT_RGB) == QColor("#00e5ff") on the default cyan theme).
+            # speaking/error are SEMANTIC and stay fixed across themes.
             "idle": QColor(*ACCENT_RGB, 89),   # IDLE_CYAN — unified with Voice mic idle
-            "listening": QColor("#00e5ff"),
-            "thinking": QColor("#00e5ff"),
+            "listening": QColor(*ACCENT_RGB),
+            "thinking": QColor(*ACCENT_RGB),
             "speaking": QColor("#83fba5"),
             "error": QColor("#ffb4ab"),
-            "wake": QColor("#00e5ff"),
+            "wake": QColor(*ACCENT_RGB),
         }
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)

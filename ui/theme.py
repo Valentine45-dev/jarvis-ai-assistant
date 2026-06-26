@@ -186,8 +186,26 @@ def jarvis_logo_svg_path() -> Path:
     return _project_root() / "assets" / "jarvis_logo.svg"
 
 
+def recolor_logo_svg(svg_text: str) -> str:
+    """Swap the logo's baked accent (#00E5FF, any case) for ACCENT_HEX.
+
+    A no-op on the cyan theme (THEME_IS_BASE) so the original SVG bytes are
+    preserved exactly. Split out from jarvis_logo_pixmap so it's unit-testable
+    without rendering."""
+    if THEME_IS_BASE:
+        return svg_text
+    import re
+    return re.sub(r"#00e5ff", ACCENT_HEX, svg_text, flags=re.IGNORECASE)
+
+
 def jarvis_logo_pixmap(side: int = 32) -> "QPixmap | None":
-    """Rasterise the logo SVG to a square pixmap, or None if unavailable."""
+    """Rasterise the logo SVG to a square pixmap, or None if unavailable.
+
+    The logo SVG bakes the accent (#00E5FF, 8 places) into its gradients/strokes,
+    which no token can reach. On a non-cyan theme we read the SVG text and replace
+    that accent with ACCENT_HEX (case-insensitive) before rendering, so the brand
+    mark matches the active theme. On cyan (THEME_IS_BASE) the file is read
+    unchanged — byte-identical to the original path-based load."""
     path = jarvis_logo_svg_path()
     if not path.is_file():
         return None
@@ -197,7 +215,12 @@ def jarvis_logo_pixmap(side: int = 32) -> "QPixmap | None":
         from PyQt5.QtSvg import QSvgRenderer
     except Exception:
         return None
-    renderer = QSvgRenderer(str(path))
+    if THEME_IS_BASE:
+        renderer = QSvgRenderer(str(path))
+    else:
+        from PyQt5.QtCore import QByteArray
+        svg = recolor_logo_svg(path.read_text(encoding="utf-8"))
+        renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
     if not renderer.isValid():
         return None
     pm = QPixmap(side, side)
