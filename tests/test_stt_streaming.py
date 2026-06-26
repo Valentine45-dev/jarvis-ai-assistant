@@ -299,3 +299,50 @@ def test_keepalive_ping_failed_log_is_suppressed():
     for name in ("websockets", "websockets.client"):
         assert any(isinstance(f, dg._SuppressKeepalivePingFailed)
                    for f in logging.getLogger(name).filters), name
+
+
+# ── broken-socket handling: abandon + stop the send-flood ────────────────────
+
+def test_send_failure_abandons_socket_and_stops_flood():
+    """A failing send (dead connection) must abandon the socket: set _stop so the
+    threads wind down, is_alive() -> False (next turn reopens fresh), the error is
+    reported ONCE, and further sends short-circuit (no per-frame 'send failed' flood)."""
+    class _FailingConn:
+        def __init__(self):
+            self.send_attempts = 0
+            self.closed = False
+
+        def recv(self):
+            time.sleep(0.2)
+            return None
+
+        def send_media(self, b):
+            self.send_attempts += 1
+            raise OSError("connection dead")
+
+        def send_finalize(self):
+            pass
+
+        def send_close_stream(self):
+            self.closed = True
+
+    conn = _FailingConn()
+    errs: list[str] = []
+    sess = DeepgramSttSession(api_key="x", _connect=lambda: _FakeCM(conn))
+    sess.start(on_partial=lambda t: None, on_final=lambda t: None,
+               on_utterance_end=lambda: None, on_error=errs.append)
+    sess.feed(b"\x01\x02")                       # writer picks it up -> send raises
+    for _ in range(100):
+        if sess._stop.is_set():
+            break
+        time.sleep(0.01)
+
+    assert sess._stop.is_set(), "broken socket must be abandoned (_stop set)"
+    assert sess.is_alive() is False, "dead socket must report not-alive (reopen fresh)"
+    assert errs and "send failed" in errs[0].lower(), "the failure is surfaced once"
+
+    before = conn.send_attempts
+    # Further sends short-circuit at the guard (no flood): fn never runs.
+    assert sess._locked_send(lambda c: c.send_media(b"x")) is False
+    assert conn.send_attempts == before, "post-abandon sends must NOT hit the socket"
+    sess.finish()

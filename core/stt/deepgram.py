@@ -55,6 +55,22 @@ def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, value))
 
 
+def _pingless_ws_factory(url, headers):
+    """Deepgram SDK transport factory: open the websocket with the library's own
+    ping keepalive DISABLED (ping_interval=None) so a slow pong on a laggy network
+    can't self-close the socket with a 1011 'keepalive ping timeout' mid-utterance.
+    We keep the connection warm with our OWN app-level KeepAlive (send_keep_alive),
+    so Deepgram won't idle-close us. Returns the same websockets ClientConnection
+    the SDK would otherwise build (it drives .send()/.recv()/iteration on it), so
+    the contract is identical apart from the disabled ping. Module-level (stable
+    identity) because the SDK's transport install is global + must be idempotent."""
+    from websockets.sync.client import connect as _ws_connect
+    return _ws_connect(
+        url, additional_headers=headers,
+        ping_interval=None, open_timeout=8, close_timeout=2,
+    )
+
+
 class DeepgramSttSession(StreamingSttSession):
     def __init__(
         self,
@@ -209,7 +225,15 @@ class DeepgramSttSession(StreamingSttSession):
                 fn(conn)
                 return True
             except Exception as exc:
+                # The connection is broken (e.g. the network died / the socket was
+                # closed by a keepalive timeout). Abandon it: set _stop so the
+                # writer/keepalive/reader threads wind down and EVERY subsequent
+                # send short-circuits at the guard above — otherwise each queued
+                # frame + each keepalive tick logs its own "send failed", flooding
+                # the console. is_alive() now returns False, so the next turn
+                # reopens a fresh socket. Log only this first failure.
                 self._fail(f"Deepgram send failed: {exc}")
+                self._stop.set()
                 return False
 
     def _drain(self, timeout: float = 2.0) -> None:
@@ -272,7 +296,18 @@ class DeepgramSttSession(StreamingSttSession):
         if self._connect_override is not None:
             return self._connect_override()
         from deepgram import DeepgramClient  # lazy — keeps SDK off the import path
-        client = DeepgramClient(api_key=self._api_key)
+        # Open the socket with the websockets library's OWN ping keepalive DISABLED
+        # (transport_factory → ping_interval=None). On a laggy network the library
+        # otherwise self-closes the socket with 1011 "keepalive ping timeout"
+        # mid-utterance, losing the rest of the speech; we run our own app-level
+        # KeepAlive (send_keep_alive) so Deepgram never idle-closes us. Defensive:
+        # if this SDK build doesn't accept transport_factory, fall back to defaults
+        # (library ping on) — streaming still works, just less resilient to lag.
+        try:
+            client = DeepgramClient(
+                api_key=self._api_key, transport_factory=_pingless_ws_factory)
+        except TypeError:
+            client = DeepgramClient(api_key=self._api_key)
         return client.listen.v1.connect(**self._connect_params())
 
     def _read_loop(self) -> None:

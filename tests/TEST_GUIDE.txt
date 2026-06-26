@@ -2408,6 +2408,51 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+STT resilience on a laggy network (1011 deaths, dead-socket reuse, flood)
+-----------------------------------------------------------------------
+Symptoms from a flaky-network run: a persistent Deepgram socket died mid-utterance
+with "1011 (internal error) keepalive ping timeout" (only "Could you please tell me
+the" was captured), then the DEAD warm socket was reused next turn ("no speech
+within timeout"), and the console flooded with dozens of identical "Deepgram send
+failed" lines. Three fixes:
+
+1) Disable the websockets LIBRARY ping (core/stt/deepgram.py _pingless_ws_factory +
+   DeepgramClient(transport_factory=...)). On a laggy network the library self-closes
+   the socket with 1011 when a pong is slow; we run our OWN app-level KeepAlive
+   (send_keep_alive every 5 s) so Deepgram won't idle-close us, making the library
+   ping pure downside. The factory returns the SAME websockets ClientConnection the
+   SDK would build (identical .send/.recv/iterate contract) with ping_interval=None
+   + open_timeout=8. Defensive: if the SDK build doesn't accept transport_factory
+   (TypeError), fall back to defaults (ping on) — streaming still works.
+
+2) Abandon a broken socket instead of flooding (deepgram.py _locked_send). On the
+   first send failure we now set _stop, so the writer/keepalive/reader wind down and
+   every subsequent send short-circuits at the guard — the failure is logged ONCE,
+   not once per queued frame + keepalive tick. is_alive() then returns False.
+
+3) Never reuse a dead warm socket (core/voice.py _run_streaming_stt). After each
+   persistent turn, if session.is_alive() is False we _discard_persistent(), so the
+   NEXT turn opens a fresh socket instead of retrying a corpse (which caused the "no
+   speech" stall).
+
+Manual test (uv run python main.py, stt_persistent on):
+  Use it over several turns (ideally on a slightly flaky connection). PASS: if a
+  socket dies, you see at most ONE "send failed" line (not a flood), the next turn
+  opens a fresh "Deepgram persistent socket open" instead of stalling on "no speech",
+  and you should no longer see "1011 keepalive ping timeout" closing the socket
+  mid-utterance. If your network is very unstable, stt_persistent=false (fresh socket
+  per turn) is still the most robust.
+
+Code-level proof:
+  uv run pytest -q tests/test_stt_streaming.py
+  -> test_send_failure_abandons_socket_and_stops_flood: a failing send sets _stop,
+     is_alive() -> False, the error is surfaced once, and further sends short-circuit
+     without hitting the socket (no flood).
+  (The transport_factory / ping-disable is exercised live — it needs a real Deepgram
+  socket; the factory is contract-identical to the SDK default apart from ping.)
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

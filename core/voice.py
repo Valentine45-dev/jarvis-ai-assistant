@@ -649,6 +649,17 @@ class VoiceEngine:
         if self._listen_cancel.is_set():
             return True
 
+        # A warm socket that died mid-turn (e.g. a 1011 keepalive-ping timeout on
+        # a laggy network, or any send failure) must NOT be reused next turn — that
+        # caused "no speech within timeout" on the dead socket. Drop it so the next
+        # turn reopens fresh. (Healthy sockets stay warm.)
+        if persistent:
+            try:
+                if not session.is_alive():
+                    self._discard_persistent()
+            except Exception:
+                self._discard_persistent()
+
         text = _interim() or (last_partial["text"] or "").strip()
         if not text and err["msg"]:
             _dbg("voice", f"streaming errored before any text ({err['msg']}) — falling back")
