@@ -3,6 +3,8 @@ from __future__ import annotations
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import QWidget
 
+from ui.theme import ACCENT_RGB
+
 
 class GlassPanel(QWidget):
     """Semi-transparent panel with corner brackets."""
@@ -43,10 +45,10 @@ class GlassPanel(QWidget):
             p.fillRect(0, 0, w, h, self._fill_color)
         if self._show_brackets:
             # subtle full-rect border, alpha 35 cyan
-            p.setPen(QPen(QColor(0, 229, 255, 35), 1))
+            p.setPen(QPen(QColor(*ACCENT_RGB, 35), 1))
             p.drawRect(0, 0, w - 1, h - 1)
             # corner brackets, alpha 180 cyan, 10px
-            p.setPen(QPen(QColor(0, 229, 255, 180), 1))
+            p.setPen(QPen(QColor(*ACCENT_RGB, 180), 1))
             b = 10
             p.drawLine(0, 0, b, 0)
             p.drawLine(0, 0, 0, b)

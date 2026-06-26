@@ -60,7 +60,7 @@ from ui.components.design import (
     PanelCard,
     StatusPip,
 )
-from ui.theme import BG, CYAN, FM
+from ui.theme import ACCENT_RGB, BG, CYAN, FM
 # WaveformStrip dropped — the OrbMic carries the state visual now.
 
 
@@ -95,7 +95,7 @@ class _OrbMic(QWidget):
 
     # Color stops re-used across paint() — keeping them as class attrs makes
     # tweaks easy and avoids reallocating QColor on every frame.
-    _C_CYAN      = QColor(0, 229, 255)
+    _C_CYAN      = QColor(*ACCENT_RGB)
     _C_MAGENTA   = QColor(255, 155, 214)
     _C_PURPLE    = QColor(199, 146, 234)
     _C_AMBER     = QColor(255, 209, 102)
@@ -177,9 +177,9 @@ class _OrbMic(QWidget):
         # The orb itself starts with a fully-saturated cyan core fading to
         # ~40% at the midpoint and to transparent at the edge.
         base = QRadialGradient(QPointF(cx, cy), r)
-        base.setColorAt(0.0,  QColor(0, 229, 255, 242))
-        base.setColorAt(0.50, QColor(0, 229, 255, 100))
-        base.setColorAt(0.80, QColor(0, 229, 255, 0))
+        base.setColorAt(0.0,  QColor(*ACCENT_RGB, 242))
+        base.setColorAt(0.50, QColor(*ACCENT_RGB, 100))
+        base.setColorAt(0.80, QColor(*ACCENT_RGB, 0))
         p.setBrush(QBrush(base))
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(cx, cy), r, r)
@@ -919,7 +919,7 @@ class VoiceView(QWidget):
         p = QPainter(px)
         p.fillRect(0, 0, w, h, QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 18))
+        p.setBrush(QColor(*ACCENT_RGB, 18))
         for x in range(0, w + 28, 28):
             for y in range(0, h + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)

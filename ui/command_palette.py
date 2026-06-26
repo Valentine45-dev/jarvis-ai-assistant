@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-from ui.theme import CYAN, FM, PRIMARY
+from ui.theme import ACCENT_RGB, CYAN, FM, PRIMARY
 from ui.widgets import _TagLineEdit, _mono
 
 
@@ -131,7 +131,7 @@ class CommandPalette(QWidget):
         # Must be set AFTER setStyleSheet — stylesheet rebuilds the palette and
         # would otherwise override this.
         _ph_pal = self._input.palette()
-        _ph_pal.setColor(QPalette.PlaceholderText, QColor(0, 229, 255, 150))
+        _ph_pal.setColor(QPalette.PlaceholderText, QColor(*ACCENT_RGB, 150))
         self._input.setPalette(_ph_pal)
         self._input.returnPressed.connect(self._submit)
         outer.addWidget(self._input)
@@ -245,11 +245,11 @@ class CommandPalette(QWidget):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(10, 17, 19, 248))
         p.drawRect(rect)
-        p.setPen(QPen(QColor(0, 229, 255, 130), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 130), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(rect)
         # Top accent line — subtle "live surface" cue
-        p.setPen(QPen(QColor(0, 229, 255, 200), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 200), 1))
         p.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
 
     # ── Recents UI ───────────────────────────────────────────────────────────

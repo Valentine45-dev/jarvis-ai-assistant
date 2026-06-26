@@ -51,7 +51,7 @@ from ui.components.design import (
     PanelCard,
     StatusPip,
 )
-from ui.theme import BG, CYAN, FM
+from ui.theme import ACCENT_RGB, BG, CYAN, FM
 
 
 # ── Sparkline ────────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ class _Sparkline(QWidget):
             return
         if not any(self._bins):
             # Faint baseline + "no data" hint
-            pen = QPen(QColor(0, 229, 255, 40))
+            pen = QPen(QColor(*ACCENT_RGB, 40))
             pen.setWidthF(1.0)
             p.setPen(pen)
             p.drawLine(0, h - 4, w, h - 4)
@@ -144,7 +144,7 @@ class _Sparkline(QWidget):
         fill_path.lineTo(w, baseline)
         fill_path.lineTo(0, baseline)
         fill_path.closeSubpath()
-        p.fillPath(fill_path, QColor(0, 229, 255, 22))
+        p.fillPath(fill_path, QColor(*ACCENT_RGB, 22))
 
         # Stroke the line
         pen = QPen(QColor(CYAN))
@@ -681,7 +681,7 @@ class HistoryView(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 18))
+        p.setBrush(QColor(*ACCENT_RGB, 18))
         for x in range(0, self.width() + 28, 28):
             for y in range(0, self.height() + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)

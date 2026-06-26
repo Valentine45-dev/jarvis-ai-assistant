@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
 )
 import qtawesome as qta
 
-from ui.theme import CYAN, PRIMARY
+from ui.theme import ACCENT_RGB, CYAN, PRIMARY
 
 
 class ToggleSwitch(QWidget):
@@ -84,14 +84,14 @@ class ToggleSwitch(QWidget):
         track = QRectF(1, 1, 42, 20)
         hover_boost = 20 if self._hovered else 0
         p.setPen(QPen(QColor(CYAN if self._checked else "#3b494c"), 1))
-        p.setBrush(QColor(0, 229, 255, (40 if self._checked else 20) + hover_boost))
+        p.setBrush(QColor(*ACCENT_RGB, (40 if self._checked else 20) + hover_boost))
         p.drawRoundedRect(track, 10, 10)
         knob_x = 24 if self._checked else 2
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(CYAN if self._checked else "#849396"))
         p.drawEllipse(knob_x, 2, 18, 18)
         if self.hasFocus():
-            p.setPen(QPen(QColor(0, 229, 255, 180), 1, Qt.DashLine))
+            p.setPen(QPen(QColor(*ACCENT_RGB, 180), 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(QRectF(0.5, 0.5, 43, 21), 11, 11)
 
@@ -131,10 +131,10 @@ class MicButton(QPushButton):
         bg_alpha = 180 if self._hovered else 120
         p.fillRect(self.rect(), QColor(8, 15, 17, bg_alpha))
         border_alpha = 200 if (self._hovered or focused) else 120
-        p.setPen(QPen(QColor(0, 229, 255, border_alpha), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, border_alpha), 1))
         p.drawRect(self.rect().adjusted(0, 0, -1, -1))
         if focused:
-            p.setPen(QPen(QColor(0, 229, 255, 140), 1, Qt.DashLine))
+            p.setPen(QPen(QColor(*ACCENT_RGB, 140), 1, Qt.DashLine))
             p.setBrush(Qt.NoBrush)
             p.drawRect(self.rect().adjusted(2, 2, -3, -3))
         icon_color = CYAN if (self._listening or self._hovered or focused) else PRIMARY

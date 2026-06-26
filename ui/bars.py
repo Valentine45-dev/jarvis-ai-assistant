@@ -28,7 +28,7 @@ from core.net_telemetry import (
     smooth_rtt_ema,
     ThroughputSampler,
 )
-from ui.theme import CYAN, FM, TOPBAR_H, BOTBAR_H, jarvis_logo_pixmap
+from ui.theme import ACCENT_RGB, CYAN, FM, TOPBAR_H, BOTBAR_H, jarvis_logo_pixmap
 
 
 # Topbar height matches the sidebar's brand zone so the two horizontal
@@ -246,11 +246,11 @@ def draw_glow_underline(widget: QWidget, painter: QPainter,
     w, h = widget.width(), widget.height()
     # Glow halo: gradient from transparent (top) to soft cyan (bottom).
     grad = QLinearGradient(0, h - glow_height, 0, h)
-    grad.setColorAt(0.0, QColor(0, 229, 255, 0))
-    grad.setColorAt(1.0, QColor(0, 229, 255, glow_alpha))
+    grad.setColorAt(0.0, QColor(*ACCENT_RGB, 0))
+    grad.setColorAt(1.0, QColor(*ACCENT_RGB, glow_alpha))
     painter.fillRect(0, h - glow_height, w, glow_height, grad)
     # Sharp 1px line at the bottom edge.
-    painter.setPen(QPen(QColor(0, 229, 255, line_alpha), 1))
+    painter.setPen(QPen(QColor(*ACCENT_RGB, line_alpha), 1))
     painter.drawLine(0, h - 1, w, h - 1)
 
 
@@ -262,10 +262,10 @@ def draw_glow_right_edge(widget: QWidget, painter: QPainter,
     so the two read as one continuous glowing border."""
     w, h = widget.width(), widget.height()
     grad = QLinearGradient(w - glow_width, 0, w, 0)
-    grad.setColorAt(0.0, QColor(0, 229, 255, 0))
-    grad.setColorAt(1.0, QColor(0, 229, 255, glow_alpha))
+    grad.setColorAt(0.0, QColor(*ACCENT_RGB, 0))
+    grad.setColorAt(1.0, QColor(*ACCENT_RGB, glow_alpha))
     painter.fillRect(w - glow_width, 0, glow_width, h, grad)
-    painter.setPen(QPen(QColor(0, 229, 255, line_alpha), 1))
+    painter.setPen(QPen(QColor(*ACCENT_RGB, line_alpha), 1))
     painter.drawLine(w - 1, 0, w - 1, h)
 
 
@@ -625,5 +625,5 @@ class BottomBar(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(7, 16, 18, 240))
-        p.setPen(QPen(QColor(0, 229, 255, 46), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 46), 1))
         p.drawLine(0, 0, self.width(), 0)

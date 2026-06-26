@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-from ui.theme import CYAN, FM, GREEN, RED, WARNING
+from ui.theme import ACCENT_RGB, CYAN, FM, GREEN, RED, WARNING
 from ui.widgets import StatusPip, ToggleSwitch, _mono
 
 
@@ -244,11 +244,11 @@ class QuickSettingsPopover(QFrame):
         p.setBrush(QColor(10, 17, 19, 245))
         p.drawRect(rect)
         # Border
-        p.setPen(QPen(QColor(0, 229, 255, 110), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 110), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(rect)
         # Top accent — slightly brighter line to suggest "anchored to topbar"
-        p.setPen(QPen(QColor(0, 229, 255, 180), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 180), 1))
         p.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
 
 
@@ -524,10 +524,10 @@ class SystemStatusPopover(QFrame):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(10, 17, 19, 245))
         p.drawRect(rect)
-        p.setPen(QPen(QColor(0, 229, 255, 110), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 110), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(rect)
-        p.setPen(QPen(QColor(0, 229, 255, 180), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 180), 1))
         p.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
 
 

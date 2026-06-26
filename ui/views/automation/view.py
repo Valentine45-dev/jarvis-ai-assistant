@@ -43,7 +43,7 @@ from ui.components.design import (
     HeroMetric,
     PanelCard,
 )
-from ui.theme import BG, CYAN, FM
+from ui.theme import ACCENT_RGB, BG, CYAN, FM
 from ui.views.automation.components import StepBreakdown, WorkflowRow
 from ui.views.automation.dialogs import ConfirmDeleteDialog, NewWorkflowDialog
 
@@ -499,7 +499,7 @@ class AutomationView(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 18))
+        p.setBrush(QColor(*ACCENT_RGB, 18))
         for x in range(0, self.width() + 28, 28):
             for y in range(0, self.height() + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)

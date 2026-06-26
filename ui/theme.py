@@ -61,6 +61,66 @@ FONTS: Dict[str, Tuple[str, int, int]] = {
 
 
 # ---------------------------------------------------------------------------
+# Theme palette — accent + background per theme key (matches the Settings
+# swatches). The whole HUD was authored in the cyan accent rgb(0,229,255); a
+# non-cyan theme swaps that accent everywhere via (a) the constants/helpers
+# below and (b) apply_accent() installed over setStyleSheet (see install_theme).
+# Resolved once at import from config.theme; switching themes needs an app
+# restart (the wake-word convention). The "cyan" branch reproduces the original
+# constants byte-for-byte, so the default path is unchanged.
+# ---------------------------------------------------------------------------
+
+_BASE_ACCENT_RGB: Tuple[int, int, int] = (0, 229, 255)   # the authored cyan accent
+_BASE_BG = "#080A0A"
+
+_THEME_PALETTES: Dict[str, Dict[str, object]] = {
+    # key:      accent rgb,            bg hex
+    "cyan":   {"accent": (0, 229, 255),   "bg": "#080A0A"},
+    "teal":   {"accent": (61, 199, 214),  "bg": "#0A1010"},
+    "amber":  {"accent": (255, 170, 0),   "bg": "#0D0A04"},
+    "indigo": {"accent": (129, 140, 248), "bg": "#060912"},
+    "matrix": {"accent": (0, 255, 102),   "bg": "#050A06"},
+}
+
+
+def _resolve_theme_key() -> str:
+    """Active theme key from config (default 'cyan'); never raises at import."""
+    try:
+        from config.settings import config
+        key = (getattr(config, "theme", "cyan") or "cyan").strip().lower()
+        return key if key in _THEME_PALETTES else "cyan"
+    except Exception:
+        return "cyan"
+
+
+def _hexrgb(rgb: Tuple[int, int, int]) -> str:
+    return "#%02x%02x%02x" % rgb
+
+
+def _tint(rgb: Tuple[int, int, int], f: float) -> Tuple[int, int, int]:
+    """Blend *rgb* toward white by fraction f (0 = rgb, 1 = white)."""
+    return tuple(int(round(c + (255 - c) * f)) for c in rgb)  # type: ignore[return-value]
+
+
+THEME_KEY = _resolve_theme_key()
+ACCENT_RGB: Tuple[int, int, int] = _THEME_PALETTES[THEME_KEY]["accent"]  # type: ignore[assignment]
+ACCENT_HEX = _hexrgb(ACCENT_RGB)
+_ACTIVE_BG = str(_THEME_PALETTES[THEME_KEY]["bg"])
+# True when the active theme is the authored cyan — lets apply_accent() short
+# circuit to a guaranteed no-op so the default path is byte-identical.
+THEME_IS_BASE = ACCENT_RGB == _BASE_ACCENT_RGB
+
+# Re-point the accent-bearing palette entries at the active accent so anything
+# reading COLORS / the aliases below is themed. Light foreground cyan (#c3f5ff)
+# becomes a matching light tint of the active accent.
+COLORS["primary"] = _hexrgb(_tint(ACCENT_RGB, 0.62)) if not THEME_IS_BASE else COLORS["primary"]
+COLORS["primary_container"] = ACCENT_HEX
+COLORS["primary_fixed_dim"] = ACCENT_HEX if not THEME_IS_BASE else COLORS["primary_fixed_dim"]
+COLORS["background"] = _ACTIVE_BG
+COLORS["surface"] = _ACTIVE_BG
+
+
+# ---------------------------------------------------------------------------
 # Compatibility aliases expected by current app/main.py
 # ---------------------------------------------------------------------------
 
@@ -72,13 +132,13 @@ CYAN = COLORS["primary_container"]
 RED = COLORS["error"]
 GREEN = COLORS["tertiary_fixed"]
 WARNING = COLORS["secondary_fixed"]
-BG = "#080A0A"
+BG = _ACTIVE_BG
 
 # Existing modules still import these while the UI migration is in progress.
 PANEL_CLR = (12, 14, 14, 140)
 CARD_CLR = (14, 16, 16, 130)
-BORDER_A = (0, 229, 255, 40)
-BORDER_B = (0, 229, 255, 95)
+BORDER_A = (*ACCENT_RGB, 40)
+BORDER_B = (*ACCENT_RGB, 95)
 
 FN = "Inter"
 FM = "Roboto Mono"
@@ -97,7 +157,7 @@ TEXT_MUTED     = "rgba(186,201,204,0.75)"   # hint/label/secondary text
 TEXT_SECONDARY = "rgba(186,201,204,0.88)"   # supporting body text
 
 # Unified idle state — same color on Dashboard reactor and Voice mic strip
-IDLE_CYAN = "rgba(0,229,255,0.35)"
+IDLE_CYAN = f"rgba({ACCENT_RGB[0]},{ACCENT_RGB[1]},{ACCENT_RGB[2]},0.35)"
 
 # Glass panel fill — replaces QColor(10,17,19,220) hardcoded in 15+ places
 BG_PANEL = "rgba(10,17,19,220)"
@@ -329,11 +389,11 @@ def _c(r: int, g: int, b: int, a: int = 255) -> QColor:
 
 
 def _primary(a: int = 255) -> QColor:
-    return QColor(0, 229, 255, a)
+    return QColor(*ACCENT_RGB, a)
 
 
 def _cyan(a: int = 255) -> QColor:
-    return QColor(0, 229, 255, a)
+    return QColor(*ACCENT_RGB, a)
 
 
 def _border() -> QColor:
@@ -342,3 +402,52 @@ def _border() -> QColor:
 
 def _border_b() -> QColor:
     return _c(*BORDER_B)
+
+
+# ---------------------------------------------------------------------------
+# Accent substitution for inline QSS — the centralized half of theming
+# ---------------------------------------------------------------------------
+#
+# The HUD has ~93 inline `rgba(0,229,255,a)` / `#00e5ff` literals baked into
+# per-widget stylesheets (and every f-string that interpolates {CYAN}). Rather
+# than rewrite each call site, apply_accent() rewrites the authored cyan to the
+# active accent in any stylesheet string, and install_theme() runs it over every
+# QWidget/QApplication.setStyleSheet call. For the cyan theme it's a guaranteed
+# no-op, so the default path is byte-identical.
+
+def apply_accent(qss: str) -> str:
+    """Swap the authored cyan accent for the active accent in a QSS string."""
+    if THEME_IS_BASE or not qss:
+        return qss
+    r, g, b = ACCENT_RGB
+    out = qss.replace("0, 229, 255", f"{r}, {g}, {b}").replace("0,229,255", f"{r},{g},{b}")
+    out = out.replace("#00e5ff", ACCENT_HEX).replace("#00E5FF", ACCENT_HEX)
+    if _ACTIVE_BG.lower() != _BASE_BG.lower():
+        out = out.replace(_BASE_BG, _ACTIVE_BG).replace(_BASE_BG.lower(), _ACTIVE_BG)
+    return out
+
+
+_THEME_INSTALLED = False
+
+
+def install_theme() -> None:
+    """Route every setStyleSheet through apply_accent so inline QSS literals get
+    the active accent. Idempotent; a no-op for the cyan theme. Call once at
+    startup, before widgets are built. Painted widgets (QColor literals) are
+    themed separately via ACCENT_RGB at their call sites."""
+    global _THEME_INSTALLED
+    if _THEME_INSTALLED or THEME_IS_BASE:
+        _THEME_INSTALLED = True
+        return
+    try:
+        from PyQt5.QtWidgets import QApplication, QWidget
+    except Exception:
+        return
+    for cls in (QWidget, QApplication):
+        orig = cls.setStyleSheet
+
+        def _patched(self, qss, _orig=orig):
+            return _orig(self, apply_accent(qss))
+
+        cls.setStyleSheet = _patched
+    _THEME_INSTALLED = True

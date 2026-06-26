@@ -48,7 +48,7 @@ from ui.components.design import (
     PanelCard,
     StatusPip,
 )
-from ui.theme import BG, CYAN, FM
+from ui.theme import ACCENT_RGB, BG, CYAN, FM
 from ui.widgets import ToggleSwitch, _mono
 
 
@@ -961,10 +961,13 @@ class SettingsView(QWidget):
             swatch_grid.addWidget(sw, 1)
         panel.body().addLayout(swatch_grid)
 
-        # Hidden field — tracks the selected theme for _apply_cfg to read
+        # Hidden field — tracks the selected theme for _apply_cfg to read.
+        # _initial_theme is the value at load so _apply_cfg can detect a change
+        # and prompt for the restart that actually applies it.
         self._selected_theme = current_theme
+        self._initial_theme = current_theme
 
-        theme_helper = QLabel("5 variants. Stark Cyan is default.")
+        theme_helper = QLabel("5 variants. Stark Cyan is default. Applies on restart.")
         theme_helper.setStyleSheet(
             "QLabel {"
             f"color: {INK_FAINT};"
@@ -1075,6 +1078,15 @@ class SettingsView(QWidget):
             self._health.refresh()
             if voice_err:
                 signals.error_occurred.emit(voice_err)
+            # Theme resolves at startup (ui.theme import), so a change only shows
+            # after a restart — tell the user instead of leaving it looking broken.
+            if self._selected_theme != self._initial_theme:
+                self._initial_theme = self._selected_theme
+                try:
+                    signals.notice.emit(
+                        "Theme saved — restart JARVIS to apply it.", "info")
+                except Exception:
+                    pass
         except Exception:
             self._apply_btn.setText("SAVE ERROR")
 
@@ -1125,7 +1137,7 @@ class SettingsView(QWidget):
         p = QPainter(px)
         p.fillRect(0, 0, w, h, QColor(BG))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 18))
+        p.setBrush(QColor(*ACCENT_RGB, 18))
         for x in range(0, w + 28, 28):
             for y in range(0, h + 28, 28):
                 p.drawEllipse(x - 1, y - 1, 2, 2)

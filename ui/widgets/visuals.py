@@ -32,7 +32,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QWidget
 
-from ui.theme import CYAN, FM, GREEN, PRIMARY, WARNING
+from ui.theme import ACCENT_RGB, CYAN, FM, GREEN, PRIMARY, WARNING
 
 
 class SegmentedBar(QWidget):
@@ -82,9 +82,9 @@ class ScanLineOverlay(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         grad = QLinearGradient(0, self._y - 1, 0, self._y + 1)
-        grad.setColorAt(0, QColor(0, 229, 255, 0))
-        grad.setColorAt(0.5, QColor(0, 229, 255, 76))
-        grad.setColorAt(1, QColor(0, 229, 255, 0))
+        grad.setColorAt(0, QColor(*ACCENT_RGB, 0))
+        grad.setColorAt(0.5, QColor(*ACCENT_RGB, 76))
+        grad.setColorAt(1, QColor(*ACCENT_RGB, 0))
         p.fillRect(0, self._y - 1, self.width(), 2, grad)
 
 
@@ -171,7 +171,7 @@ class ArcReactorWidget(QWidget):
         self._pulse = 0.0
         self._state = "idle"
         self._state_colors = {
-            "idle": QColor(0, 229, 255, 89),   # IDLE_CYAN — unified with Voice mic idle
+            "idle": QColor(*ACCENT_RGB, 89),   # IDLE_CYAN — unified with Voice mic idle
             "listening": QColor("#00e5ff"),
             "thinking": QColor("#00e5ff"),
             "speaking": QColor("#83fba5"),
@@ -210,14 +210,14 @@ class ArcReactorWidget(QWidget):
         center = QPointF(cx, cy)
         base = min(w, h) * 0.42  # outermost reachable radius
 
-        cyan = QColor(0, 229, 255)
+        cyan = QColor(*ACCENT_RGB)
         state_color = QColor(self._state_colors.get(self._state, cyan))
 
         # ── 1. Ambient halo (soft cyan bloom behind the rings) ──────────────
         halo = QRadialGradient(center, base * 1.35)
-        halo.setColorAt(0.00, QColor(0, 229, 255, 70))
-        halo.setColorAt(0.55, QColor(0, 229, 255, 22))
-        halo.setColorAt(1.00, QColor(0, 229, 255, 0))
+        halo.setColorAt(0.00, QColor(*ACCENT_RGB, 70))
+        halo.setColorAt(0.55, QColor(*ACCENT_RGB, 22))
+        halo.setColorAt(1.00, QColor(*ACCENT_RGB, 0))
         p.setPen(Qt.NoPen)
         p.setBrush(halo)
         p.drawEllipse(center, base * 1.35, base * 1.35)
@@ -227,7 +227,7 @@ class ArcReactorWidget(QWidget):
         p.save()
         p.translate(center)
         p.rotate(self._angle)
-        pen = QPen(QColor(0, 229, 255, 130), 1)
+        pen = QPen(QColor(*ACCENT_RGB, 130), 1)
         pen.setDashPattern([4, 5])
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
@@ -236,7 +236,7 @@ class ArcReactorWidget(QWidget):
 
         # Triangle markers at 12, 3, 6, 9 o'clock (fixed, not rotating)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 229, 255, 200))
+        p.setBrush(QColor(*ACCENT_RGB, 200))
         tri_r  = r_dash          # radius where tip sits
         tri_sz = base * 0.045    # triangle half-base
         for deg in (270, 0, 90, 180):   # 12, 3, 6, 9 o'clock
@@ -259,7 +259,7 @@ class ArcReactorWidget(QWidget):
         r_mid_i = base * 0.82   # inner edge of armor band
         N_SEG   = 12
         gap_deg = 3.0            # gap between panels in degrees
-        p.setPen(QPen(QColor(0, 229, 255, 160), 1.0))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 160), 1.0))
         for i in range(N_SEG):
             start_deg = i * (360 / N_SEG) + gap_deg / 2
             span_deg  = (360 / N_SEG) - gap_deg
@@ -279,15 +279,15 @@ class ArcReactorWidget(QWidget):
             p.drawPolygon(poly)
 
         # Bright outer ring border over the armor band
-        p.setPen(QPen(QColor(0, 229, 255, 235), 2.0))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 235), 2.0))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(center, r_outer, r_outer)
-        p.setPen(QPen(QColor(0, 229, 255, 60), 1))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 60), 1))
         p.drawEllipse(center, r_outer - 4, r_outer - 4)
 
         # ── 4. Eight radial spokes between inner and outer bright rings ──────
         r_inner = base * 0.50
-        spoke_pen = QPen(QColor(0, 229, 255, 175), 1.2)
+        spoke_pen = QPen(QColor(*ACCENT_RGB, 175), 1.2)
         p.setPen(spoke_pen)
         for i in range(8):
             ang = math.radians(i * 45)
@@ -298,7 +298,7 @@ class ArcReactorWidget(QWidget):
             p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
 
         # ── 5. Bright inner ring ─────────────────────────────────────────────
-        p.setPen(QPen(QColor(0, 229, 255, 235), 2.0))
+        p.setPen(QPen(QColor(*ACCENT_RGB, 235), 2.0))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(center, r_inner, r_inner)
 

@@ -2164,6 +2164,49 @@ the default suite.
 
 
 -----------------------------------------------------------------------
+Theme switching actually works (full proper fix)
+-----------------------------------------------------------------------
+Before: the Settings theme swatches saved config.theme but NOTHING applied it.
+ui/theme.py was a single static cyan palette; config.theme was never read to
+restyle anything; signals.theme_changed was declared but never wired; and the
+accent was hardcoded as ~162 literals (93 QSS rgba(0,229,255,a) + 55 paint
+QColor(0,229,255,a) + ~14 #00e5ff) across 19 ui/ files. Picking Amber/Matrix/etc.
+did nothing, even after restart.
+
+After (applies at startup — like the wake word; switching needs a restart):
+  - ui/theme.py has a palette table (_THEME_PALETTES) keyed off config.theme,
+    resolved once at import -> ACCENT_RGB / ACCENT_HEX / BG + all accent-bearing
+    constants & QColor helpers (CYAN, PRIMARY*, BORDER_A/B, IDLE_CYAN, _cyan(),
+    _primary(), COLORS). The "cyan" branch reproduces the original values
+    byte-for-byte (THEME_IS_BASE), so the default path is unchanged.
+  - QSS literals (and every f-string that interpolates {CYAN}) are themed
+    centrally by apply_accent(), installed over QWidget/QApplication.setStyleSheet
+    by install_theme() (called once in app.py main, before widgets build). No-op
+    for cyan.
+  - Paint-code QColor(0, 229, 255, a) literals were rewritten to
+    QColor(*ACCENT_RGB, a) across 12 files.
+  - Settings: theme_helper says "Applies on restart."; APPLY_CFG emits a
+    "Theme saved — restart JARVIS to apply it." notice when the theme changed.
+
+Manual test (uv run python main.py -> Settings):
+  Pick a non-cyan swatch (e.g. Amber or Matrix) -> APPLY_CFG -> you get the
+  "restart to apply" toast. Restart JARVIS. PASS: the WHOLE HUD is recoloured —
+  arc reactor, sys-log/transcript, bars, mic, borders, buttons, sliders, badges —
+  in the new accent; no cyan left bleeding through the main surfaces. Switch back
+  to Stark (cyan) + restart -> identical to the original look.
+
+Code-level proof:
+  uv run pytest -q tests/test_theme.py
+  -> default theme is cyan + apply_accent is a no-op (base path unchanged);
+     palette covers all 5 swatches; _resolve_theme_key falls back to cyan;
+     _hexrgb/_tint correct; apply_accent substitutes rgb (both spacings)+hex+bg
+     for a non-base theme; install_theme idempotent + no-op on base.
+  Offscreen full-window smoke (manual): force config.theme="amber", install_theme(),
+  build JarvisWindow -> a real QLabel's "rgba(0,229,255,0.5)" becomes
+  "rgba(255,170,0,0.5)" and the window builds/closes cleanly.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

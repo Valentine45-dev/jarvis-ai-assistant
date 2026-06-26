@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
 
 from core.brain import TAG_INTENT_MAP
 from ui.components.typewriter import _TypewriterProxy
-from ui.theme import BG, CYAN, FM, TEXT_MUTED
+from ui.theme import ACCENT_RGB, BG, CYAN, FM, TEXT_MUTED
 from ui.widgets import (
     ArcReactorWidget,
     CommandBar as _MainCommandBar,
@@ -693,9 +693,9 @@ class _InputBlock(QWidget):
         radius = max(self.width() * 0.45, 200.0)
 
         grad = QRadialGradient(cx, self.INPUT_H, radius)
-        grad.setColorAt(0.00, QColor(0, 229, 255, 110))
-        grad.setColorAt(0.35, QColor(0, 229, 255, 45))
-        grad.setColorAt(1.00, QColor(0, 229, 255, 0))
+        grad.setColorAt(0.00, QColor(*ACCENT_RGB, 110))
+        grad.setColorAt(0.35, QColor(*ACCENT_RGB, 45))
+        grad.setColorAt(1.00, QColor(*ACCENT_RGB, 0))
         p.fillRect(0, self.INPUT_H, self.width(), self.GLOW_H, grad)
 
 
@@ -877,9 +877,9 @@ class DashboardView(QWidget):
         cx = w * 0.52
         cy = h * 0.56
         grad = QRadialGradient(cx, cy, max(w, h) * 0.58)
-        grad.setColorAt(0.00, QColor(0, 229, 255, 22))
-        grad.setColorAt(0.38, QColor(0, 229, 255, 8))
-        grad.setColorAt(1.00, QColor(0, 229, 255, 0))
+        grad.setColorAt(0.00, QColor(*ACCENT_RGB, 22))
+        grad.setColorAt(0.38, QColor(*ACCENT_RGB, 8))
+        grad.setColorAt(1.00, QColor(*ACCENT_RGB, 0))
         p.fillRect(0, 0, w, h, QBrush(grad))
 
         dot_step = 18
@@ -890,7 +890,7 @@ class DashboardView(QWidget):
                 dy = abs(y - cy) / max(h, 1)
                 fade = min(1.0, (dx + dy) * 0.9)
                 alpha = int(28 - (fade * 14))
-                p.fillRect(int(x), int(y), 2, 2, QColor(0, 229, 255, max(10, alpha)))
+                p.fillRect(int(x), int(y), 2, 2, QColor(*ACCENT_RGB, max(10, alpha)))
 
         vignette = QRadialGradient(w * 0.5, h * 0.55, w * 0.95)
         vignette.setColorAt(0.65, QColor(8, 10, 10, 0))

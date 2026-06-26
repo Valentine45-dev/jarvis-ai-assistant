@@ -17,6 +17,7 @@ from ui.theme import (
     BG,
     _c,
     _primary,
+    install_theme,
     load_jarvis_fonts,
     jarvis_logo_icon,
     tooltip_qss,
@@ -114,6 +115,9 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    # Route every setStyleSheet through the active-theme accent substitution
+    # BEFORE any widget is built. No-op for the default cyan theme.
+    install_theme()
     app.setWindowIcon(jarvis_logo_icon())
 
     # Register bundled .ttf files (Roboto Mono, etc.) into Qt's font database
