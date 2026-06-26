@@ -51,7 +51,7 @@ class _TypewriterProxy(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(self._JARVIS_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
-        self._pending = None   # (full_text, j_time, intent, conf)
+        self._pending = None   # (full_text, j_time, intent, conf, success)
         self._pos = 0
 
         # ── Thinking dots ────────────────────────────────────────────────────
@@ -78,7 +78,8 @@ class _TypewriterProxy(QObject):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def add_exchange(self, you, time="", jarvis="", j_time="", intent="", conf=None):
+    def add_exchange(self, you, time="", jarvis="", j_time="", intent="", conf=None,
+                     success=None):
         self._stop_thinking()
         self._timer.stop()
         self._pending = None
@@ -86,11 +87,11 @@ class _TypewriterProxy(QObject):
 
         # History / mock entries already have a JARVIS response — render instantly.
         if jarvis:
-            self._panel.add_exchange(you, time, jarvis, j_time, intent, conf)
+            self._panel.add_exchange(you, time, jarvis, j_time, intent, conf, success)
             return
 
         # New live command: create the row with an empty you slot, then type it in.
-        self._panel.add_exchange("", time, "", "", None, None)
+        self._panel.add_exchange("", time, "", "", None, None, None)
         if you:
             self._you_pending = (you, time)
             self._you_pos = 0
@@ -114,15 +115,15 @@ class _TypewriterProxy(QObject):
         self.stop_animations()
         self._panel.update_last_jarvis("Interrupted", j_time, "interrupted", None)
 
-    def update_last_jarvis(self, text, j_time="", intent="", conf=None):
+    def update_last_jarvis(self, text, j_time="", intent="", conf=None, success=None):
         self._stop_thinking()
         self._timer.stop()
         # If user text is still animating, snap it to completion first.
         self._flush_you()
         if not text:
-            self._panel.update_last_jarvis(text, j_time, intent, conf)
+            self._panel.update_last_jarvis(text, j_time, intent, conf, success)
             return
-        self._pending = (text, j_time, intent, conf)
+        self._pending = (text, j_time, intent, conf, success)
         self._pos = 0
         # Seed with empty text so _tick() has a row to update.
         self._panel.update_last_jarvis("", j_time, None, None)
@@ -134,12 +135,12 @@ class _TypewriterProxy(QObject):
         if not self._pending:
             self._timer.stop()
             return
-        full_text, j_time, intent, conf = self._pending
+        full_text, j_time, intent, conf, success = self._pending
         self._pos += 1
         if self._pos >= len(full_text):
             self._timer.stop()
             self._pending = None
-            self._panel.update_last_jarvis(full_text, j_time, intent, conf)
+            self._panel.update_last_jarvis(full_text, j_time, intent, conf, success)
         else:
             self._panel.update_last_jarvis(full_text[: self._pos], j_time, None, None)
 

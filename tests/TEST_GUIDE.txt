@@ -2316,6 +2316,39 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+HOTFIX: _TypewriterProxy crashed on the success plumbing (6-arg call)
+-----------------------------------------------------------------------
+Bug (prod crash): running any command crashed with
+  TypeError: _TypewriterProxy.update_last_jarvis() takes from 2 to 5 positional
+  arguments but 6 were given   (execution_mixin.py _update_transcript_if_current)
+The SYS_LOG redesign added `success` (6th arg) to TranscriptPanel.update_last_jarvis
+and add_exchange, but the LIVE call path goes through _TypewriterProxy (the
+typewriter wrapper, ui/components/typewriter.py) which has its OWN
+update_last_jarvis / add_exchange — those were not updated, so the extra arg blew
+up. The pure _build_log_html tests never exercised the proxy → 461 green missed it.
+
+Fix: _TypewriterProxy.update_last_jarvis and add_exchange now accept + forward
+success (and _pending carries it through the typewriter ticks). append_jarvis_scheduled
+/ update_last_you are NOT overridden on the proxy — they fall through __getattr__ to
+the panel (already correct). Full end-to-end arg-count audit done: every def + call
+of the four methods matches (core/brain.py + tests use the unrelated
+ConversationMemory.add_exchange).
+
+Manual test (uv run python main.py):
+  Speak/type any command (e.g. "what's the time") → JARVIS replies and the line
+  renders in the SYS_LOG with NO crash (this was the prod traceback). The reply
+  types in, then shows its rail + intent/conf chips.
+
+Code-level proof (runs in the DEFAULT suite — closes the proxy coverage gap):
+  uv run pytest -q tests/test_syslog_render.py::test_typewriter_proxy_forwards_success_through_to_panel
+  -> drives the REAL _TypewriterProxy with the exact 5-positional-arg crash
+     signature; asserts success reaches the (stub) panel through the typewriter
+     ticks, through the instant add_exchange path, and through the __getattr__
+     fall-through (append_jarvis_scheduled). No QApplication (manual _tick) so it
+     can't leak Qt singleton state into later tests.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
