@@ -59,3 +59,21 @@ def test_apply_writes_new_knobs_to_config(_app, isolated_settings, monkeypatch):
 def test_settle_readout_shows_off_at_zero(_app):
     assert SettingsView._fmt_settle(0) == "Off"
     assert SettingsView._fmt_settle(350) == "350"
+
+
+def test_theme_swatch_fill_is_own_palette_not_active_accent(_app):
+    # Each HUD-THEME swatch must paint its OWN palette colour regardless of the
+    # active theme. The fill is a PAINTED _SwatchBar (not setStyleSheet), so the
+    # global accent hook can't recolour STARK's cyan to the active accent.
+    from ui.settings import _SwatchBar, _ThemeSwatch
+    from ui.theme import _THEME_PALETTES
+
+    for key in ("cyan", "teal", "amber", "indigo", "matrix"):
+        sw = _ThemeSwatch(key, key.title(), "#000000", "#000000")
+        try:
+            bars = sw.findChildren(_SwatchBar)
+            assert bars, f"{key}: swatch must paint its preview (not setStyleSheet)"
+            # first bar = accent fill; must equal THIS palette's accent, not the token
+            assert bars[0]._color.getRgb()[:3] == _THEME_PALETTES[key]["accent"], key
+        finally:
+            sw.deleteLater()

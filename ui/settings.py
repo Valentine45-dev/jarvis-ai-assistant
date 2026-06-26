@@ -48,7 +48,7 @@ from ui.components.design import (
     PanelCard,
     StatusPip,
 )
-from ui.theme import ACCENT_RGB, BG, CYAN, FM
+from ui.theme import _THEME_PALETTES, ACCENT_RGB, BG, CYAN, FM
 from ui.widgets import ToggleSwitch, _mono
 
 
@@ -282,6 +282,27 @@ class ApiKeyField(QWidget):
 # ── Theme swatch picker ──────────────────────────────────────────────────────
 
 
+class _SwatchBar(QWidget):
+    """A solid colour preview, PAINTED directly (not via setStyleSheet) so the
+    global accent-substitution hook can't recolour a swatch to the active theme.
+    This is the fix for "STARK shows the active accent": its #00e5ff fill used to
+    be rewritten by apply_accent; a painted QColor is immune."""
+
+    def __init__(self, color: QColor, *, outline: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self._outline = outline
+        self.setFixedHeight(16)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.fillRect(self.rect(), self._color)
+        if self._outline:
+            p.setPen(QColor(255, 255, 255, 26))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+
 class _ThemeSwatch(QFrame):
     """Single theme tile: accent + bg swatches and a label. Click to select."""
 
@@ -302,22 +323,19 @@ class _ThemeSwatch(QFrame):
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(4)
 
-        # Swatch row: two coloured bars side by side
+        # Swatch row: two coloured bars side by side. PAINTED (not setStyleSheet)
+        # with THIS palette's OWN fixed colours, sourced from the canonical
+        # _THEME_PALETTES — so the global accent hook can never recolour them to
+        # the active theme (each swatch always shows its own colour).
+        pal = _THEME_PALETTES.get(key, {})
+        acc_rgb = pal.get("accent")
+        acc_color = QColor(*acc_rgb) if acc_rgb else QColor(accent)
+        bg_color = QColor(str(pal.get("bg", bg)))
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        accent_bar = QFrame()
-        accent_bar.setStyleSheet(
-            f"QFrame {{ background: {accent}; border: none; }}"
-        )
-        accent_bar.setFixedHeight(16)
-        bg_bar = QFrame()
-        bg_bar.setStyleSheet(
-            f"QFrame {{ background: {bg}; border: 1px solid rgba(255,255,255,0.10); }}"
-        )
-        bg_bar.setFixedHeight(16)
-        row.addWidget(accent_bar)
-        row.addWidget(bg_bar)
+        row.addWidget(_SwatchBar(acc_color))
+        row.addWidget(_SwatchBar(bg_color, outline=True))
         lay.addLayout(row)
 
         self._name_lbl = QLabel(name.upper())

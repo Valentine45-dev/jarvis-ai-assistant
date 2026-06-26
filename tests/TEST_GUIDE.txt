@@ -2349,6 +2349,36 @@ Code-level proof (runs in the DEFAULT suite — closes the proxy coverage gap):
 
 
 -----------------------------------------------------------------------
+Theme swatches show their OWN palette colour (not the active accent)
+-----------------------------------------------------------------------
+Bug: in CONFIG → HUD THEME, the STARK swatch rendered in the ACTIVE accent (e.g.
+green under matrix) instead of cyan. Root cause: the swatch source was already the
+per-palette literal, but the fill was applied via setStyleSheet ("background:#00e5ff"),
+and the global apply_accent hook (installed under a non-cyan theme) rewrote that
+#00e5ff to the active accent. Only STARK matched the base-cyan literal, so only it
+was wrong.
+
+Fix (ui/settings.py): the swatch preview bars are now a PAINTED _SwatchBar widget
+(QColor via paintEvent, NOT setStyleSheet) sourced from the canonical
+_THEME_PALETTES[key]["accent"] — immune to the accent hook. So every swatch fill is
+fixed to its own palette. The active-selection indicator (the container border/glow)
+is left on the QSS path and MAY follow the active theme — that's the intended "active"
+signal.
+
+Manual test (uv run python main.py, on a non-cyan theme e.g. matrix):
+  Open CONFIG → HUD THEME. PASS: all five swatches show their OWN colours —
+  STARK=cyan, TEAL=teal, AMBER=amber, INDIGO=indigo, MATRIX=green — regardless of
+  the active theme. The selected tile's border/glow may be the active accent.
+
+Code-level proof:
+  JARVIS_RUN_QT=1 uv run pytest -q tests/test_settings_knobs.py::test_theme_swatch_fill_is_own_palette_not_active_accent
+  -> every swatch paints a _SwatchBar whose accent colour == _THEME_PALETTES[key]
+     ["accent"] (not the active token). [qtgui — needs a QApplication]
+  Amber pixel smoke (manual): with config.theme=amber + install_theme(), the STARK
+  swatch's accent bar renders #00e5ff (cyan), proving hook-immunity.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
