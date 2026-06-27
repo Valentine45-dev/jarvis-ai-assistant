@@ -73,6 +73,13 @@ class AppConfig:
     # a speed-bump for a shared/family machine, never a refusal (JARVIS stays a
     # controller, not a safety filter). See core/content_gate.py.
     safe_search_confirm: bool = False
+    # Max wait (ms) for a browser navigation to reach DOMContentLoaded before it's
+    # treated as a timeout. Read at call time (Settings change applies without a
+    # restart); shared by navigate / go_back / go_forward / refresh / hard_refresh.
+    # On a timeout JARVIS still salvages a slow-but-loaded page (see
+    # core/browser/interaction.py _salvage_after_timeout). Locator ops (clicks) keep
+    # their own shorter 15 s timeout.
+    browser_nav_timeout_ms: int = 30000
     # Extra terms to bias Deepgram nova-3 recognition toward (keyterm prompting).
     # The wake word + your name + a small built-in JARVIS vocabulary (browser
     # engines, app/brand names) are ALWAYS included automatically; add your own

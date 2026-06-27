@@ -2490,6 +2490,52 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Navigation: salvage a slow-but-loaded page (no more false FAIL on slow nav)
+-----------------------------------------------------------------------
+Bug: a navigation to a heavy/slow page (e.g. github.com on a laggy connection)
+was marked FAIL when it took >15 s to reach DOMContentLoaded — even though the
+page DID load moments later. The success bar was already the lenient
+"domcontentloaded" (NOT full "load"), so the real causes were (a) a 15 s ceiling
+too short for a slow network and (b) a hard-fail on timeout with no salvage.
+
+Fix (core/browser/interaction.py + config/settings.py):
+1) Configurable timeout — new config.browser_nav_timeout_ms (default 30000),
+   read at CALL TIME via _nav_timeout() (Settings change applies without restart),
+   shared by navigate / go_back / go_forward / refresh / hard_refresh. Locator ops
+   (clicks, inner_text) keep their own shorter 15 s _TIMEOUT.
+2) Salvage on timeout — _salvage_after_timeout(url): when goto() times out, DON'T
+   blind-fail. Return success ONLY when ALL hold: the navigation committed to the
+   TARGET host (registrable-domain match, so a www. redirect is fine but an off-host
+   redirect is not), document.readyState is "interactive"/"complete", AND there's
+   real content (a non-empty <title> OR body text). Logs a distinct
+   "✓ loaded slowly (salvaged after timeout)". Any check raising/uncertain → fail
+   (conservative). NOTE: no HTTP status is available after a goto timeout, so a
+   slow-but-rendered 4xx from the right host counts as "loaded" — an accepted,
+   vanishingly-rare edge (a >30 s page that's ALSO an error page); deliberately not
+   guarded (no status listener).
+
+Scope: navigate() is the single path for "open <site>", search_web, open_url, AND
+workflow navigate steps — one fix covers all. (Pairs with the earlier confidence
+decouple: a salvaged-slow nav is now a real success, and even a true failure shows
+the real routing % not 0%.)
+
+Manual test (uv run python main.py):
+  Navigate to a heavy/slow site (or throttle your connection). PASS: if the page
+  loads even after the old 15 s, JARVIS reports SUCCESS — you'll see
+  "✓ loaded slowly (salvaged after timeout)" in the log — instead of a false
+  "Page took too long". A genuinely dead/blank URL still fails (after the 30 s
+  ceiling). Tune config.browser_nav_timeout_ms in config/jarvis.json if needed.
+
+Code-level proof:
+  uv run pytest -q tests/test_browser_navigate.py
+  -> clean load = success (unchanged); timeout+committed+interactive+title = SUCCESS
+     (salvage); timeout+complete+body-only = SUCCESS; www-redirect same domain =
+     SUCCESS; timeout+blank = FAIL; timeout+readyState=loading = FAIL; timeout+wrong
+     host = FAIL; _nav_timeout() reads config (+ default on garbage); navigate passes
+     the configured timeout to goto().
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

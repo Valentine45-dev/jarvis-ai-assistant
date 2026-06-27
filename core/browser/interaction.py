@@ -9,7 +9,9 @@ monolithic ``core/browser.py``.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
+from config.settings import config
 from core.browser.session import (
     _SEARCH_INPUT_SELECTORS,
     _SEARCH_SUBMIT_SELECTORS,
@@ -19,11 +21,64 @@ from core.browser.session import (
 from core.handlers.shared import _err, _ok, _redact_value, _tlog
 
 
+def _reg_domain(host: str) -> str:
+    """Registrable-ish domain (last two labels) for loose same-site comparison —
+    so github.com and a www.github.com redirect compare equal, but an off-host
+    redirect (e.g. an SSO domain) does not."""
+    parts = (host or "").lower().split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "").lower()
+
+
 class _InteractionMixin:
     # ── Phase 1: Navigation ───────────────────────────────────────────────────
 
+    def _nav_timeout(self) -> int:
+        """Per-navigation timeout (ms), config-tunable at call time (no restart).
+        Shared by navigate / go_back / go_forward / refresh / hard_refresh. Locator
+        ops (clicks) keep the shorter module-level _TIMEOUT."""
+        try:
+            return int(getattr(config, "browser_nav_timeout_ms", 30_000))
+        except Exception:
+            return 30_000
+
+    def _salvage_after_timeout(self, url: str) -> dict | None:
+        """After a navigation TIMEOUT, decide if the page actually loaded slowly.
+
+        Returns _ok(...) ONLY when ALL hold: the navigation committed to the target
+        host, the DOM is at least ``interactive``, and there's real content (a title
+        or body text). Any check raising or uncertain → None, so the caller hard
+        fails (conservative — the salvage is for "a beat too slow", not "something is
+        on the right URL"). No HTTP status is available after a goto timeout, so a
+        slow-but-rendered 4xx from the right host counts as loaded — an accepted,
+        vanishingly-rare edge (a >30 s page that is also an error page)."""
+        try:
+            target = urlparse(url).hostname or ""
+            current = urlparse(self._page.url).hostname or ""
+            if not target or not current or _reg_domain(target) != _reg_domain(current):
+                return None                      # not on the target host / stuck
+            state = self._page.evaluate("document.readyState")
+            if state not in ("interactive", "complete"):
+                return None                      # DOM not usable yet
+            title = (self._page.title() or "").strip()
+            body = ""
+            if not title:
+                try:
+                    body = (self._page.evaluate(
+                        "document.body ? document.body.innerText : ''") or "").strip()
+                except Exception:
+                    body = ""
+            if not title and not body:
+                return None                      # committed but blank / hung
+            label = title or "(no title)"
+            _tlog(f"✓ loaded slowly (salvaged after timeout) — \"{label}\"")
+            return _ok(f"Navigated to {url!r} (loaded slowly) — {label}")
+        except Exception:
+            return None                          # any doubt → fail (conservative)
+
     def navigate(self, url: str) -> dict:
-        """Go to url and wait for DOM content to load (max 15 s)."""
+        """Go to url and wait for DOM content to load (up to browser_nav_timeout_ms,
+        default 30 s). On timeout, salvage a slow-but-loaded page (see
+        _salvage_after_timeout) instead of blind-failing."""
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
@@ -35,7 +90,7 @@ class _InteractionMixin:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
-                self._page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT)
+                self._page.goto(url, wait_until="domcontentloaded", timeout=self._nav_timeout())
                 title = self._page.title()
                 _tlog(f"✓ loaded \"{title}\"")
                 return _ok(f"Navigated to {url!r} — {title}")
@@ -45,7 +100,7 @@ class _InteractionMixin:
                     self._ready = False
                     if self._recover():
                         try:
-                            self._page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT)
+                            self._page.goto(url, wait_until="domcontentloaded", timeout=self._nav_timeout())
                             _tlog(f"✓ loaded \"{self._page.title()}\"")
                             return _ok(f"Navigated to {url!r} — {self._page.title()}")
                         except Exception as exc2:
@@ -54,8 +109,13 @@ class _InteractionMixin:
                     _tlog("✗ browser session lost — Chrome was closed externally")
                     return _err("Browser session lost — Chrome was closed externally")
                 if "timeout" in msg.lower():
-                    _tlog(f"✗ timed out (>15 s): {url}")
-                    return _err(f"Page took too long to load (>15 s): {url}")
+                    # Don't blind-fail: the page may have loaded a beat too slowly.
+                    salvaged = self._salvage_after_timeout(url)
+                    if salvaged is not None:
+                        return salvaged
+                    secs = self._nav_timeout() // 1000
+                    _tlog(f"✗ timed out (>{secs} s): {url}")
+                    return _err(f"Page took too long to load (>{secs} s): {url}")
                 _tlog(f"✗ {msg}")
                 return _err(msg)
 
@@ -68,7 +128,7 @@ class _InteractionMixin:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
-                response = self._page.go_back(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                response = self._page.go_back(wait_until="domcontentloaded", timeout=self._nav_timeout())
                 if response is None:
                     _tlog("✗ no previous page in history")
                     return _err("No previous page in this tab's history.")
@@ -92,7 +152,7 @@ class _InteractionMixin:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
-                response = self._page.go_forward(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                response = self._page.go_forward(wait_until="domcontentloaded", timeout=self._nav_timeout())
                 if response is None:
                     _tlog("✗ no forward page in history")
                     return _err("No forward page in this tab's history.")
@@ -116,7 +176,7 @@ class _InteractionMixin:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
             try:
-                self._page.reload(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                self._page.reload(wait_until="domcontentloaded", timeout=self._nav_timeout())
                 title = self._page.title()
                 _tlog(f"✓ reloaded — {title!r}")
                 return _ok(f"Reloaded — {title}")
@@ -147,7 +207,7 @@ class _InteractionMixin:
                 except Exception:
                     # CDP unavailable — fall back to a regular reload so the
                     # action at least does *something* useful.
-                    self._page.reload(wait_until="domcontentloaded", timeout=_TIMEOUT)
+                    self._page.reload(wait_until="domcontentloaded", timeout=self._nav_timeout())
                     title = self._page.title()
                     _tlog(f"✓ reloaded (fallback, cache not bypassed) — {title!r}")
                     return _ok(f"Reloaded (cache not bypassed — CDP unavailable) — {title}")
@@ -159,7 +219,7 @@ class _InteractionMixin:
                     except Exception:
                         pass
                 try:
-                    self._page.wait_for_load_state("domcontentloaded", timeout=_TIMEOUT)
+                    self._page.wait_for_load_state("domcontentloaded", timeout=self._nav_timeout())
                 except Exception:
                     # Don't fail the whole op just because load-state wait timed out;
                     # the reload was issued.
