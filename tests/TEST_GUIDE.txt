@@ -2453,6 +2453,43 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+Decouple confidence from outcome (no more 0% on a failed run)
+-----------------------------------------------------------------------
+Bug (semantics): when a command/step failed, the HUD zeroed the confidence to 0%
+(execution_mixin.py: `hud_conf = 0.0 if not exec_ok else conf`). That conflates two
+different axes — "did JARVIS understand you" (routing confidence) vs "did the action
+succeed". A github.com page that loaded too slowly, or a 3-step workflow where 2/3
+steps ran, would show 0% even though JARVIS understood perfectly (97%). 0% reads as
+"nothing worked".
+
+Fix: confidence ALWAYS shows the real routing confidence; success/failure is carried
+ONLY by the dedicated outcome channels — the sys-log colour rail (red), the gauge's
+FAIL label, the red error toast, the voice page "err" status. So a failed run reads
+"97% — FAIL" (understood you, but it failed), never "0%". Applies to ALL intents.
+- `hud_conf = conf` (no longer zeroed) → feeds the gauge %, the sys-log conf chip,
+  history conf, last-action, and the voice page with the REAL value.
+- The gauge band/FAIL label is computed by a new pure helper
+  `_ExecutionMixin._confidence_display(conf, exec_ok)` → (pct, label): pct is the
+  real %; label is "FAIL" on failure else HIGH/MED/LOW.
+Audit confirmed NO code infers failure from conf==0: the gauge FAIL reads exec_ok,
+the sys-log rail reads success, history reads status=="error", the voice row reads
+its own is_fail. Decoupling is safe.
+
+Manual test (uv run python main.py):
+  Run a command that FAILS — e.g. a browser step whose page is very slow (times out),
+  or any failing action. PASS: the right-panel gauge shows the REAL confidence
+  (e.g. 97%) with a FAIL label — NOT 0%; the sys-log row is a red rail with the real
+  % in its conf chip; the toast is the red error. A SUCCESSFUL command is unchanged
+  (real % + HIGH/MED/LOW + green). A 3-step workflow where the last step fails still
+  shows the real routing confidence, not 0%.
+
+Code-level proof:
+  uv run pytest -q tests/test_workflow_offthread.py::test_confidence_display_never_zeroed_on_failure
+  -> _confidence_display(0.97, False) == (97, "FAIL")  (was the bug: (0, "FAIL"));
+     success still maps to HIGH/MED/LOW; bounds clamped.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

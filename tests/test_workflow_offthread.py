@@ -355,3 +355,27 @@ def test_yield_ui_pumps_on_main_thread(monkeypatch):
     ah._yield_ui()  # pytest's main thread
 
     assert pumped["n"] == 1, "processEvents should pump once on the main thread"
+
+
+# ── confidence vs outcome decoupling (HUD must never show 0% on a failure) ────
+
+def test_confidence_display_never_zeroed_on_failure():
+    """Confidence is the routing confidence (did JARVIS understand you) — it must
+    stay the REAL value even when execution fails; failure shows via the 'FAIL'
+    label, not by zeroing the number. Regression guard for the old
+    `hud_conf = 0.0 if not exec_ok` behaviour."""
+    disp = _ExecutionMixin._confidence_display
+
+    # Success: real % + confidence band.
+    assert disp(0.97, True) == (97, "HIGH")
+    assert disp(0.80, True) == (80, "MED")
+    assert disp(0.50, True) == (50, "LOW")
+
+    # Failure: SAME real % (not 0!) + FAIL label.
+    assert disp(0.97, False) == (97, "FAIL")    # the bug: used to be (0, "FAIL")
+    assert disp(0.97, False)[0] == 97           # explicit: percentage preserved
+    assert disp(0.50, False) == (50, "FAIL")
+
+    # Bounds are clamped; None-ish conf is safe.
+    assert disp(1.0, True) == (100, "HIGH")
+    assert disp(0.0, True) == (0, "LOW")

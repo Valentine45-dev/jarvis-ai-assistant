@@ -582,6 +582,21 @@ class _ExecutionMixin:
             self._last_result = result
         self._finish_execute(result, intent, conf, resp, hud, exec_out)
 
+    @staticmethod
+    def _confidence_display(conf: float, exec_ok: bool) -> tuple[int, str]:
+        """HUD confidence gauge value + band label.
+
+        Confidence and outcome are SEPARATE axes. The percentage is ALWAYS the real
+        routing confidence (how well JARVIS understood the command) — it is NOT
+        zeroed when the action later fails. Failure is carried by the LABEL ("FAIL")
+        and the other outcome channels (sys-log rail, toast, voice status). So a
+        failed run reads e.g. "97% — FAIL", never a misleading "0%".
+        """
+        pct = round(max(0.0, min(1.0, float(conf or 0.0))) * 100)
+        if not exec_ok:
+            return pct, "FAIL"
+        return pct, ("HIGH" if pct > 90 else "MED" if pct > 70 else "LOW")
+
     def _finish_execute(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         exec_out: dict) -> None:
         """Update all HUD surfaces after dispatch completes (must run on main thread)."""
@@ -656,9 +671,15 @@ class _ExecutionMixin:
         if tts_line and len(tts_line) > _TTS_MAX_CHARS:
             tts_line = tts_line[:_TTS_MAX_CHARS].rstrip() + "…"
 
-        # Gauge + transcript: `conf` is Claude's routing confidence, not run success.
-        # When the executor fails, show 0% / FAIL so the HUD does not read "95% HIGH" for a failed run.
-        hud_conf = 0.0 if not exec_ok else conf
+        # Confidence and outcome are SEPARATE axes. `conf` is Claude's routing
+        # confidence — "did JARVIS understand you" — which does NOT drop to 0 just
+        # because the action later failed (e.g. a page that loaded too slowly, or
+        # 2 of 3 workflow steps succeeding). So always show the REAL confidence;
+        # success/failure is surfaced through its OWN channels — the sys-log outcome
+        # rail, the FAIL label below (driven by exec_ok), the red toast, and the
+        # voice execution status — never by zeroing the number. A failed run reads
+        # "97% — FAIL" (understood you, but it failed), not a misleading "0%".
+        hud_conf = conf
 
         if self._history:
             self._history[-1].update({
@@ -668,14 +689,9 @@ class _ExecutionMixin:
             })
             history_store.save_entry(self._history[-1])
 
-        self._confidence = round(hud_conf * 100)
+        self._confidence, _conf_label = self._confidence_display(conf, exec_ok)
         self._dashboard.right.gauge.set_value(self._confidence)
-        v = self._confidence
-        if not exec_ok:
-            self._dashboard.right.conf_label.setText("FAIL")
-        else:
-            self._dashboard.right.conf_label.setText(
-                "HIGH" if v > 90 else "MED" if v > 70 else "LOW")
+        self._dashboard.right.conf_label.setText(_conf_label)
 
         self._dashboard.left.hud_status.set_status(hud)
         self._dashboard.left.last_action.set_action(intent, hud_conf)
