@@ -2601,6 +2601,42 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§30 — Failure-narration rail + honest _reg_domain docstring (audit #2/#3)
+-----------------------------------------------------------------------
+Two small audit fixes that ride together:
+
+#3 (cosmetic, sys-log rail) — the post-execution narration line (on a FAILURE, the
+"couldn't reach X — try Y" explanation spoken after the primary reply) was appended
+WITHOUT a success arg, so it defaulted to a neutral/info (cyan) rail even when the
+action failed — while the primary line above it correctly showed the red FAIL rail.
+The action's real outcome is now threaded through the _action_followup_tts signal
+(5→6 args: +success) so the explanatory line gets the SAME rail as the primary line:
+red on failure, green on a success suggestion.
+
+  Manual check: cause an action to fail (e.g. navigate to a dead domain) so JARVIS
+  speaks a follow-up suggestion. PASS: both the primary reply line AND the follow-up
+  suggestion line under it show the RED outcome rail (previously the follow-up was
+  cyan/info). A successful action's continuation suggestion shows the GREEN rail.
+
+#2 (docstring only, no behaviour change) — _reg_domain (core/browser/interaction.py)
+is a plain LAST-TWO-LABELS heuristic, NOT a true registrable domain; it's wrong for
+multi-label public suffixes (bbc.co.uk and example.co.uk both collapse to co.uk). The
+docstrings (the helper + the salvage that calls it) used to imply "registrable-domain"
+precision; they now state honestly what it does and note the bounded failure mode (a
+timed-out nav that also redirected to a different second-level site under the same
+multi-label TLD could be salvaged — vanishingly rare). No public-suffix dependency
+added by design.
+
+Code-level proof:
+  uv run pytest -q tests/test_workflow_offthread.py
+  -> test_followup_failure_line_gets_fail_rail (success=False reaches the rail),
+     test_followup_success_line_gets_ok_rail (success=True), and
+     test_followup_default_success_is_backcompat (the slot keeps a default so an
+     un-migrated 5-arg emit still renders). #2 is docstring-only — no test needed
+     (the salvage host-match behaviour is already covered in §27/§29's matrix).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

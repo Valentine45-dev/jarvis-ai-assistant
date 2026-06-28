@@ -22,9 +22,19 @@ from core.handlers.shared import _err, _ok, _redact_value, _tlog
 
 
 def _reg_domain(host: str) -> str:
-    """Registrable-ish domain (last two labels) for loose same-site comparison —
-    so github.com and a www.github.com redirect compare equal, but an off-host
-    redirect (e.g. an SSO domain) does not."""
+    """The LAST TWO LABELS of a host, for a loose same-site comparison — so
+    ``github.com`` and a ``www.github.com`` redirect compare equal, but an off-host
+    redirect (e.g. an SSO domain) does not.
+
+    NOT a true registrable domain: this is a plain last-two-labels heuristic, NOT
+    public-suffix-aware. It is WRONG for multi-label public suffixes — ``bbc.co.uk``
+    and ``example.co.uk`` both collapse to ``co.uk`` and so compare equal. The only
+    caller is the navigation-timeout salvage (a conservative "did this commit to the
+    expected host" check), where the failure mode is bounded: at worst a navigation
+    that timed out AND redirected to a different second-level site under the same
+    multi-label TLD could be salvaged as success — vanishingly rare, and never worse
+    than the pre-salvage behaviour. A real registrable-domain check would need a
+    public-suffix list (e.g. ``tldextract``); deliberately not pulled in for this."""
     parts = (host or "").lower().split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "").lower()
 
@@ -51,8 +61,9 @@ class _InteractionMixin:
         commit check below passes:
 
         * ``target`` given (navigate / refresh): the nav must have committed to the
-          target host — same registrable-ish domain (``_reg_domain``: last two
-          labels), so a ``www.`` redirect is fine but an off-host redirect is not.
+          target host — same host by ``_reg_domain`` (last two labels; NOT public-
+          suffix-aware — see its docstring), so a ``www.`` redirect is fine but an
+          off-host redirect is not.
         * ``moved_from`` given (go_back / go_forward): there is NO destination URL to
           host-match (it's whatever history entry we land on), so instead require the
           URL actually MOVED off the pre-nav page — a salvage can't pass for a history

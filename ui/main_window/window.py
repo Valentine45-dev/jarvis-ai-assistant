@@ -91,7 +91,7 @@ class JarvisWindow(
     _tts_ready           = pyqtSignal(object)        # transcript payload after TTS is ready
     _tts_done_signal     = pyqtSignal(int)           # fires (with token) when TTS audio ends
     _wake_word_signal    = pyqtSignal()              # wake word detected on detector thread
-    _action_followup_tts = pyqtSignal(str, str, str, float, int)  # follow, jTime, intent, conf, token
+    _action_followup_tts = pyqtSignal(str, str, str, float, int, bool)  # follow, jTime, intent, conf, token, success
     _RUN_WORKFLOW_PREFIX = "__run_workflow_id__:"
 
     def __init__(self):

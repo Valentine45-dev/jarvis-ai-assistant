@@ -727,7 +727,7 @@ class _ExecutionMixin:
                 return
             follow_intent = str(exec_out.get("last_step_intent") or intent)
             self._action_followup_tts.emit(
-                follow, j_time, follow_intent, float(hud_conf), transcript_token
+                follow, j_time, follow_intent, float(hud_conf), transcript_token, exec_ok
             )
 
         def _on_primary_done() -> None:
@@ -799,7 +799,7 @@ class _ExecutionMixin:
                 )
                 if narration:
                     self._action_followup_tts.emit(
-                        narration, _j_time, _intent, _conf, _tok
+                        narration, _j_time, _intent, _conf, _tok, _success
                     )
 
             threading.Thread(target=_async_narration, daemon=True).start()
@@ -838,15 +838,20 @@ class _ExecutionMixin:
         follow_intent: str,
         conf: float,
         token: int,
+        success: bool = True,
     ) -> None:
-        """After the primary line finishes, append the compact done line + speak it."""
+        """After the primary line finishes, append the compact done line + speak it.
+
+        ``success`` is the action's real outcome (carried from _finish_execute), so
+        this explanatory line gets the SAME outcome rail as the primary line — a
+        failure-narration line reads red, not the neutral/info rail it used to."""
         if token != self._transcript_update_token:
             return
         if self._history:
             prev = (self._history[-1].get("jarvis") or "").strip()
             self._history[-1]["jarvis"] = f"{prev}\n{follow}" if prev else follow
         self._dashboard.left.transcript.append_jarvis_scheduled(
-            follow, j_time, follow_intent, conf
+            follow, j_time, follow_intent, conf, success=success
         )
         self._dashboard.left.status_lbl.setText(follow[:200])
         secs = int((datetime.now() - self._session_start).total_seconds())

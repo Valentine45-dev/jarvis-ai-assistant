@@ -379,3 +379,77 @@ def test_confidence_display_never_zeroed_on_failure():
     # Bounds are clamped; None-ish conf is safe.
     assert disp(1.0, True) == (100, "HIGH")
     assert disp(0.0, True) == (0, "LOW")
+
+
+# ── follow-up narration line inherits the action's outcome rail ──────────────
+#
+# The post-execution narration (on a FAILURE, the "couldn't reach X — try Y" line)
+# is appended via _on_action_followup_tts. It used to omit success → None → a
+# neutral/info (cyan) rail even when the action failed, while the primary line above
+# it showed red. success is now threaded through the signal so the explanatory line
+# matches the primary line's rail.
+
+def _followup_stub(token=11):
+    import types
+    from datetime import datetime
+    from unittest.mock import MagicMock
+
+    stub = types.SimpleNamespace()
+    stub._transcript_update_token = token
+    stub._history = [{"you": "open github", "jarvis": "On it."}]
+    stub._session_start = datetime.now()
+    stub._set_state = MagicMock()
+    stub._tts_done_signal = types.SimpleNamespace(emit=MagicMock())
+    stub._dashboard = types.SimpleNamespace(
+        left=types.SimpleNamespace(
+            transcript=types.SimpleNamespace(append_jarvis_scheduled=MagicMock()),
+            status_lbl=types.SimpleNamespace(setText=MagicMock()),
+        ),
+    )
+    stub._history_view = types.SimpleNamespace(refresh_history=MagicMock())
+    stub._voice_view = types.SimpleNamespace(append_jarvis_continuation=MagicMock())
+    return stub
+
+
+def _run_followup(monkeypatch, *, success):
+    import types
+    import core.voice as cv
+    monkeypatch.setattr(cv, "voice_engine",
+                        types.SimpleNamespace(say=lambda *a, **k: None))
+    stub = _followup_stub()
+    _ExecutionMixin._on_action_followup_tts(
+        stub, "Couldn't reach GitHub — check your connection.", "15:04",
+        "browser_automation", 0.95, stub._transcript_update_token, success,
+    )
+    return stub
+
+
+def test_followup_failure_line_gets_fail_rail(monkeypatch):
+    stub = _run_followup(monkeypatch, success=False)
+    kwargs = stub._dashboard.left.transcript.append_jarvis_scheduled.call_args.kwargs
+    assert kwargs.get("success") is False     # red rail, matching the failed primary line
+
+
+def test_followup_success_line_gets_ok_rail(monkeypatch):
+    stub = _run_followup(monkeypatch, success=True)
+    kwargs = stub._dashboard.left.transcript.append_jarvis_scheduled.call_args.kwargs
+    assert kwargs.get("success") is True
+
+
+def test_followup_default_success_is_backcompat():
+    # The slot keeps a default so an un-migrated 5-arg emit still renders (success=True).
+    import types
+    from datetime import datetime
+    from unittest.mock import MagicMock
+    stub = _followup_stub()
+    import core.voice as cv
+    cv_saved = cv.voice_engine
+    cv.voice_engine = types.SimpleNamespace(say=lambda *a, **k: None)
+    try:
+        _ExecutionMixin._on_action_followup_tts(
+            stub, "Done.", "15:04", "open_app", 0.9, stub._transcript_update_token,
+        )
+        kwargs = stub._dashboard.left.transcript.append_jarvis_scheduled.call_args.kwargs
+        assert kwargs.get("success") is True
+    finally:
+        cv.voice_engine = cv_saved
