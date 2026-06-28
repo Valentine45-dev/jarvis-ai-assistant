@@ -104,65 +104,200 @@ def test_rail_table_present_per_line():
     assert "bgcolor=" in html and 'width="4"' in html   # the 4px rail cell
 
 
-# ── live path through _TypewriterProxy (the gap that crashed in prod) ────────
-# The proxy overrides add_exchange/update_last_jarvis with its OWN signatures;
-# the success plumbing must reach the panel THROUGH it. A stub panel + a
-# lightweight QCoreApplication keeps this in the default suite (no GUI), so this
-# whole class of missed-proxy-signature bug can't pass green again.
+# ── live path through _TypewriterProxy (Option B: row-id anchoring) ──────────
+# The proxy targets each animation's OWN row by id (never "the last row"), so a
+# concurrent append (narration / follow / reminder) mid-animation can't cross the
+# in-flight reply onto another row. _IdPanel is a faithful by-id stand-in for
+# TranscriptPanel (add_exchange/append return ids; update_jarvis/update_you edit by
+# id with the same merge semantics) so we can assert WHICH row each write lands on.
+# No QApplication: the proxy's QTimers construct fine without one and we drive _tick
+# manually, keeping this in the default suite.
 
-class _StubPanel:
+class _IdPanel:
     def __init__(self):
-        self.calls: list = []          # uniform (name, args, kwargs)
+        self.rows: list[dict] = []
+        self._by_id: dict[int, dict] = {}
+        self._next = 0
 
-    def add_exchange(self, *a, **k):
-        self.calls.append(("add_exchange", a, k))
+    def _add(self, you, y_time, jarvis, j_time, intent, conf, success) -> int:
+        rid = self._next
+        self._next += 1
+        row = {"id": rid, "you": you, "y_time": y_time, "jarvis": jarvis,
+               "j_time": j_time, "intent": intent, "conf": conf, "success": success}
+        self.rows.append(row)
+        self._by_id[rid] = row
+        return rid
 
-    def update_last_jarvis(self, *a, **k):
-        self.calls.append(("update_last_jarvis", a, k))
+    def add_exchange(self, you, y_time, jarvis="", j_time="", intent="", conf=None,
+                     success=None) -> int:
+        return self._add(you, y_time, jarvis, j_time, intent, conf, success)
 
-    def update_last_you(self, *a, **k):
-        self.calls.append(("update_last_you", a, k))
+    def append_jarvis_scheduled(self, jarvis, j_time, intent="", conf=None,
+                                success=None) -> int:
+        return self._add("", "", jarvis, j_time, intent, conf, success)
 
-    def append_jarvis_scheduled(self, *a, **k):
-        self.calls.append(("append_jarvis_scheduled", a, k))
+    def update_jarvis(self, rid, text, j_time="", intent="", conf=None, success=None):
+        r = self._by_id.get(rid)
+        if r is None:
+            return
+        r["jarvis"] = text
+        if j_time:
+            r["j_time"] = j_time
+        if intent:
+            r["intent"] = intent
+        if conf is not None:
+            r["conf"] = conf
+        if success is not None:
+            r["success"] = success
+
+    def update_you(self, rid, text, y_time=""):
+        r = self._by_id.get(rid)
+        if r is None:
+            return
+        r["you"] = text
+        if y_time:
+            r["y_time"] = y_time
 
 
-def test_typewriter_proxy_forwards_success_through_to_panel():
-    # No QApplication: the proxy's QTimers construct fine without one, and we drive
-    # _tick() manually — so this stays a plain default-suite test (creating a Qt app
-    # here would leak singleton state into later tests). Timers are stopped in finally.
+def _drain(proxy):
+    for _ in range(2000):
+        if proxy._pending is None:
+            return
+        proxy._tick()
+
+
+def test_typewriter_proxy_forwards_success_to_its_own_row():
     from ui.components.typewriter import _TypewriterProxy
 
-    stub = _StubPanel()
-    proxy = _TypewriterProxy(stub)
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
     try:
-        # THE exact prod crash signature: 5 positional args incl. success. Before the
-        # hotfix this raised TypeError on the proxy.
+        proxy.add_exchange("", "15:04")        # live command row (no you text)
+        # THE prod crash signature: 5 positional args incl. success. Lands on the
+        # command row by id with the real intent/conf/success after typing.
         proxy.update_last_jarvis("Chrome up.", "15:04", "open_app", 0.97, False)
-        for _ in range(500):                   # drive the typewriter to completion
-            if proxy._pending is None:
-                break
-            proxy._tick()
-        finals = [a for (n, a, _k) in stub.calls
-                  if n == "update_last_jarvis" and a and a[0] == "Chrome up."]
-        assert finals, "final JARVIS text never reached the panel"
-        assert finals[-1] == ("Chrome up.", "15:04", "open_app", 0.97, False)  # success forwarded
+        _drain(proxy)
+        cmd = panel.rows[0]
+        assert cmd["jarvis"] == "Chrome up."
+        assert cmd["intent"] == "open_app" and cmd["conf"] == 0.97
+        assert cmd["success"] is False          # success forwarded to the right row
 
         # Instant (history) add_exchange path forwards success too.
         proxy.add_exchange("y", "15:05", "Done.", "15:05", "file_operation", 0.9, True)
-        adds = [a for (n, a, _k) in stub.calls
-                if n == "add_exchange" and len(a) >= 3 and a[2] == "Done."]
-        assert adds and adds[-1] == ("y", "15:05", "Done.", "15:05", "file_operation", 0.9, True)
+        inst = panel.rows[-1]
+        assert inst["jarvis"] == "Done." and inst["success"] is True
 
-        # Fall-through method (not overridden on the proxy) still reaches the panel
-        # with success via __getattr__.
+        # append_jarvis_scheduled falls through to the panel as an INDEPENDENT row.
         proxy.append_jarvis_scheduled("Reminder.", "15:06", "reminder_task", 1.0, success=True)
-        sched = [(a, k) for (n, a, k) in stub.calls if n == "append_jarvis_scheduled"]
-        assert sched and sched[-1][1].get("success") is True
+        assert panel.rows[-1]["jarvis"] == "Reminder." and panel.rows[-1]["success"] is True
     finally:
         proxy.stop_animations()
         for _t in (proxy._timer, proxy._thinking_timer, proxy._you_timer):
             _t.stop()
+
+
+def test_proxy_append_mid_typewriter_keeps_reply_on_its_own_row():
+    """THE bug B fixes, forced deterministically: a narration row appends WHILE the
+    primary reply is mid-typewriter. Before B the typewriter's remaining ticks
+    targeted rows[-1] = the narration row, so the reply's tail + final chip crossed
+    onto it and the command row froze as a partial-text / UNKNOWN orphan. With B the
+    reply is bound to its own row id, so it finishes on the command row regardless."""
+    from ui.components.typewriter import _TypewriterProxy
+
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("open the website http://dead.example", "18:29")
+        cmd_id = proxy._active_row_id
+        reply = "Couldn't load dead.example. net::ERR_NAME_NOT_RESOLVED"
+        proxy.update_last_jarvis(reply, "18:29", "browser_automation", 0.97, False)
+
+        # Type a few chars, THEN append the narration row mid-animation.
+        for _ in range(10):
+            proxy._tick()
+        partial_cmd = panel.rows[0]["jarvis"]
+        assert 0 < len(partial_cmd) < len(reply)          # genuinely mid-typewriter
+        narration_id = proxy.append_jarvis_scheduled(
+            "DNS miss — check the address.", "18:29", "browser_automation", 0.97,
+            success=False)
+        assert narration_id != cmd_id and len(panel.rows) == 2
+
+        # Finish typing. The remaining ticks must STILL land on the command row.
+        _drain(proxy)
+
+        cmd = panel._by_id[cmd_id]
+        narration = panel._by_id[narration_id]
+        # Command row: the FULL reply + the real final chip — not truncated, not UNKNOWN.
+        assert cmd["jarvis"] == reply
+        assert cmd["intent"] == "browser_automation" and cmd["conf"] == 0.97
+        assert cmd["you"].startswith("open the website")
+        # Narration stayed on its OWN row, untouched by the typewriter.
+        assert narration["jarvis"] == "DNS miss — check the address."
+        assert narration["you"] == ""
+        # No orphan: exactly two rows, neither is a partial of the other.
+        assert len(panel.rows) == 2
+    finally:
+        proxy.stop_animations()
+        for _t in (proxy._timer, proxy._thinking_timer, proxy._you_timer):
+            _t.stop()
+
+
+def test_proxy_narration_before_primary_lands_on_command_row():
+    """The earlier manifestation: narration appends while only the thinking
+    placeholder is showing, BEFORE the primary starts typing. The primary must still
+    land on the command row; the narration stays its own row below."""
+    from ui.components.typewriter import _TypewriterProxy
+
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("", "18:30")          # command row, thinking starts
+        cmd_id = proxy._active_row_id
+        # Narration beats the primary entirely → its own row appended first.
+        narration_id = proxy.append_jarvis_scheduled(
+            "Heads up — that domain looks wrong.", "18:30", "browser_automation", 0.97,
+            success=False)
+        assert narration_id != cmd_id
+
+        # Now the primary arrives and types onto the COMMAND row (by id), not rows[-1].
+        proxy.update_last_jarvis("Couldn't load it.", "18:30", "browser_automation", 0.97, False)
+        _drain(proxy)
+
+        assert panel._by_id[cmd_id]["jarvis"] == "Couldn't load it."
+        assert panel._by_id[cmd_id]["intent"] == "browser_automation"
+        assert panel._by_id[narration_id]["jarvis"] == "Heads up — that domain looks wrong."
+        # Command row stays ABOVE the narration row (created first).
+        assert panel.rows[0]["id"] == cmd_id and panel.rows[1]["id"] == narration_id
+    finally:
+        proxy.stop_animations()
+        for _t in (proxy._timer, proxy._thinking_timer, proxy._you_timer):
+            _t.stop()
+
+
+@pytest.mark.qtgui
+def test_panel_by_id_update_targets_correct_row_after_append():
+    """Panel-level: update_jarvis(id) edits its row even after another row appended;
+    back-compat update_last_* still hits the last row. Needs a real QWidget panel →
+    qtgui-gated (a bare QApplication in the default suite segfaults — see conftest)."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt5.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    from ui.components.transcript import TranscriptPanel
+
+    p = TranscriptPanel()
+    a = p.add_exchange("cmd", "t1")
+    b = p.append_jarvis_scheduled("bg", "t2")
+    assert a != b
+    # Editing the OLDER row by id must not touch the newer one.
+    p.update_jarvis(a, "reply on a", "t1", "open_app", 0.9, True)
+    assert p._rows[p._id_index[a]][2] == "reply on a"
+    assert p._rows[p._id_index[b]][2] == "bg"
+    # Back-compat: update_last_jarvis edits the LAST row (b).
+    p.update_last_jarvis("reply on b", "t2", "weather", 0.8, True)
+    assert p._rows[p._id_index[b]][2] == "reply on b"
+    assert p._rows[p._id_index[a]][2] == "reply on a"
 
 
 # ── back-compat + setHtml acceptance (needs QApplication) ───────────────────

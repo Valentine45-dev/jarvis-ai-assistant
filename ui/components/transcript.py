@@ -304,6 +304,17 @@ class TranscriptPanel(GlassPanel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows = []
+        # Row-id model (Option B): every row gets a stable id at creation so the
+        # typewriter and any concurrent appender (narration / follow / reminder /
+        # scheduled) target their OWN row by id — never "the last row", which
+        # crosses when a row appends mid-animation. Rows are APPEND-ONLY (never
+        # removed/reordered), so id→index stays valid for the life of the panel;
+        # _id_index is kept O(1) and consistent with _rows/_row_ids on every append.
+        self._row_ids: list[int] = []
+        self._id_index: dict[int, int] = {}
+        self._next_row_id = 0
+        # Expand/collapse is keyed by row INDEX — also safe under the append-only
+        # assumption above (index == position never shifts).
         self._expanded_jarvis_rows: set[int] = set()
         self._preview_chars = 260
         self._view = QTextBrowser(self)
@@ -334,32 +345,52 @@ class TranscriptPanel(GlassPanel):
     def hide_confirm(self) -> None:
         self._confirm_card.hide_confirm()
 
+    def _append_row(self, row: tuple) -> int:
+        """Append a row, allocate its stable id, keep _row_ids/_id_index in lockstep
+        with _rows, and return the id. The single place rows are born."""
+        rid = self._next_row_id
+        self._next_row_id += 1
+        self._id_index[rid] = len(self._rows)
+        self._rows.append(row)
+        self._row_ids.append(rid)
+        return rid
+
     def add_exchange(self, you, y_time, jarvis="", j_time="", intent="", conf=None,
-                     success=None):
+                     success=None) -> int:
         # success: None = info/neutral rail, True = ok (green), False = fail (red).
-        self._rows.append((you, y_time, jarvis, j_time, intent, conf, success))
+        # Returns the new row's stable id (Option B: the typewriter binds to it).
+        rid = self._append_row((you, y_time, jarvis, j_time, intent, conf, success))
         self._render()
+        return rid
 
     def append_jarvis_scheduled(
         self, jarvis: str, j_time: str, intent: str = "", conf: float | None = None,
         success=None,
-    ) -> None:
-        """Log line for a background scheduled action (no matching YOU: line)."""
-        self._rows.append(("", "", jarvis, j_time, intent, conf, success))
+    ) -> int:
+        """Log line for a background scheduled action (no matching YOU: line).
+        Returns its own stable id; it is an INDEPENDENT row that never disturbs a
+        typewriter animating a different (command) row."""
+        rid = self._append_row(("", "", jarvis, j_time, intent, conf, success))
+        self._render()
+        return rid
+
+    # ── by-id mutators (Option B — the live targeting path) ───────────────────
+
+    def update_you(self, row_id: int, text, y_time=""):
+        idx = self._id_index.get(row_id)
+        if idx is None:
+            return
+        _, _, jarvis, j_time, intent, conf, success = self._rows[idx]
+        self._rows[idx] = (text, y_time, jarvis, j_time, intent, conf, success)
         self._render()
 
-    def update_last_you(self, text, y_time=""):
-        if not self._rows:
+    def update_jarvis(self, row_id: int, text, j_time="", intent="", conf=None,
+                      success=None):
+        idx = self._id_index.get(row_id)
+        if idx is None:
             return
-        _, _, jarvis, j_time, intent, conf, success = self._rows[-1]
-        self._rows[-1] = (text, y_time, jarvis, j_time, intent, conf, success)
-        self._render()
-
-    def update_last_jarvis(self, text, j_time="", intent="", conf=None, success=None):
-        if not self._rows:
-            return
-        you, y_time, _, _, old_intent, old_conf, old_success = self._rows[-1]
-        self._rows[-1] = (
+        you, y_time, _, _, old_intent, old_conf, old_success = self._rows[idx]
+        self._rows[idx] = (
             you,
             y_time,
             text,
@@ -369,6 +400,20 @@ class TranscriptPanel(GlassPanel):
             success if success is not None else old_success,
         )
         self._render()
+
+    # ── back-compat wrappers (resolve the LAST row's id) ──────────────────────
+    # Kept for any caller/test still using "last row" semantics; the live proxy
+    # path now targets a specific row id via update_you/update_jarvis above.
+
+    def update_last_you(self, text, y_time=""):
+        if not self._row_ids:
+            return
+        self.update_you(self._row_ids[-1], text, y_time)
+
+    def update_last_jarvis(self, text, j_time="", intent="", conf=None, success=None):
+        if not self._row_ids:
+            return
+        self.update_jarvis(self._row_ids[-1], text, j_time, intent, conf, success)
 
     def _render(self):
         self._view.setHtml(
