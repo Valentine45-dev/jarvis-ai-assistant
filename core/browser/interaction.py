@@ -41,21 +41,37 @@ class _InteractionMixin:
         except Exception:
             return 30_000
 
-    def _salvage_after_timeout(self, url: str) -> dict | None:
+    def _salvage_after_timeout(self, *, target: str | None = None,
+                               moved_from: str | None = None) -> dict | None:
         """After a navigation TIMEOUT, decide if the page actually loaded slowly.
 
-        Returns _ok(...) ONLY when ALL hold: the navigation committed to the target
-        host, the DOM is at least ``interactive``, and there's real content (a title
-        or body text). Any check raising or uncertain → None, so the caller hard
-        fails (conservative — the salvage is for "a beat too slow", not "something is
-        on the right URL"). No HTTP status is available after a goto timeout, so a
-        slow-but-rendered 4xx from the right host counts as loaded — an accepted,
-        vanishingly-rare edge (a >30 s page that is also an error page)."""
+        Shared by navigate / refresh (explicit target) and go_back / go_forward (no
+        explicit target). Returns _ok(...) ONLY when the DOM is at least
+        ``interactive`` AND there's real content (a title or body text) AND the
+        commit check below passes:
+
+        * ``target`` given (navigate / refresh): the nav must have committed to the
+          target host — same registrable-ish domain (``_reg_domain``: last two
+          labels), so a ``www.`` redirect is fine but an off-host redirect is not.
+        * ``moved_from`` given (go_back / go_forward): there is NO destination URL to
+          host-match (it's whatever history entry we land on), so instead require the
+          URL actually MOVED off the pre-nav page — a salvage can't pass for a history
+          nav that never committed.
+
+        Any check raising or uncertain → None, so the caller hard fails (conservative
+        — the salvage is for "a beat too slow", not "something is on a usable URL").
+        No HTTP status is available after a goto timeout, so a slow-but-rendered 4xx
+        from the right host counts as loaded — an accepted, vanishingly-rare edge."""
         try:
-            target = urlparse(url).hostname or ""
             current = urlparse(self._page.url).hostname or ""
-            if not target or not current or _reg_domain(target) != _reg_domain(current):
-                return None                      # not on the target host / stuck
+            if not current:
+                return None                      # no usable current URL
+            if target is not None:
+                target_host = urlparse(target).hostname or ""
+                if not target_host or _reg_domain(target_host) != _reg_domain(current):
+                    return None                  # not on the target host / stuck
+            if moved_from is not None and self._page.url == moved_from:
+                return None                      # history nav never committed
             state = self._page.evaluate("document.readyState")
             if state not in ("interactive", "complete"):
                 return None                      # DOM not usable yet
@@ -71,7 +87,7 @@ class _InteractionMixin:
                 return None                      # committed but blank / hung
             label = title or "(no title)"
             _tlog(f"✓ loaded slowly (salvaged after timeout) — \"{label}\"")
-            return _ok(f"Navigated to {url!r} (loaded slowly) — {label}")
+            return _ok(f"Page loaded slowly (salvaged after timeout) — {label}")
         except Exception:
             return None                          # any doubt → fail (conservative)
 
@@ -110,7 +126,7 @@ class _InteractionMixin:
                     return _err("Browser session lost — Chrome was closed externally")
                 if "timeout" in msg.lower():
                     # Don't blind-fail: the page may have loaded a beat too slowly.
-                    salvaged = self._salvage_after_timeout(url)
+                    salvaged = self._salvage_after_timeout(target=url)
                     if salvaged is not None:
                         return salvaged
                     secs = self._nav_timeout() // 1000
@@ -127,6 +143,7 @@ class _InteractionMixin:
             if guard:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
+            url_before = self._page.url
             try:
                 response = self._page.go_back(wait_until="domcontentloaded", timeout=self._nav_timeout())
                 if response is None:
@@ -138,6 +155,12 @@ class _InteractionMixin:
             except Exception as exc:
                 msg = str(exc)
                 if "timeout" in msg.lower():
+                    # Same salvage as navigate(): a slow history nav that committed +
+                    # rendered is a success, not a FAIL. No target URL to host-match
+                    # here, so require the URL moved off the pre-nav page instead.
+                    salvaged = self._salvage_after_timeout(moved_from=url_before)
+                    if salvaged is not None:
+                        return salvaged
                     _tlog(f"✗ go_back timed out: {msg}")
                     return _err(f"go_back timed out: {msg}")
                 _tlog(f"✗ {msg}")
@@ -151,6 +174,7 @@ class _InteractionMixin:
             if guard:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
+            url_before = self._page.url
             try:
                 response = self._page.go_forward(wait_until="domcontentloaded", timeout=self._nav_timeout())
                 if response is None:
@@ -162,6 +186,10 @@ class _InteractionMixin:
             except Exception as exc:
                 msg = str(exc)
                 if "timeout" in msg.lower():
+                    # Salvage a slow-but-committed forward nav (see go_back).
+                    salvaged = self._salvage_after_timeout(moved_from=url_before)
+                    if salvaged is not None:
+                        return salvaged
                     _tlog(f"✗ go_forward timed out: {msg}")
                     return _err(f"go_forward timed out: {msg}")
                 _tlog(f"✗ {msg}")
@@ -175,6 +203,7 @@ class _InteractionMixin:
             if guard:
                 _tlog(f"✗ {guard.get('error') or 'browser not ready'}")
                 return guard
+            url_before = self._page.url
             try:
                 self._page.reload(wait_until="domcontentloaded", timeout=self._nav_timeout())
                 title = self._page.title()
@@ -183,6 +212,11 @@ class _InteractionMixin:
             except Exception as exc:
                 msg = str(exc)
                 if "timeout" in msg.lower():
+                    # A reload targets the SAME URL, so host-match it (a redirect to
+                    # another host on reload → conservative fail).
+                    salvaged = self._salvage_after_timeout(target=url_before)
+                    if salvaged is not None:
+                        return salvaged
                     _tlog(f"✗ refresh timed out: {msg}")
                     return _err(f"refresh timed out: {msg}")
                 _tlog(f"✗ {msg}")
