@@ -2743,6 +2743,47 @@ Code-level proof (forces the bad ordering — drives _tick manually, appends mid
 
 
 -----------------------------------------------------------------------
+§33 — Narration (2nd response) types out AFTER the primary (sequential)
+-----------------------------------------------------------------------
+Background: after §32 (row-id anchoring) the narration/follow line stopped animating
+— it popped in instantly while the primary was still typing. (It only LOOKED animated
+before, as an artifact of the old cross-row bug.) Now the narration TYPES OUT on its
+own row, sequenced to start only after the primary finishes — mirroring the audio,
+which already plays primary-then-narration via the single TTS queue.
+
+How: the proxy's append_jarvis_scheduled gained an `animate` flag. The narration/follow
+path passes animate=True → the row is reserved (empty, invisible) immediately for
+correct order, and its type-out is QUEUED to run after the primary's animation
+completes (one animation at a time). Reminders + scheduled-workflow lines keep the
+default animate=False → they append INSTANTLY and never enter the queue (async
+notifications must appear at once and can't collide with a command's in-flight reply).
+Option B holds throughout: each animation writes only to its own captured row id.
+
+PHYSICAL TEST (repeat a few times each):
+  1. Failing command with a narration, e.g. "open the website http://vlaneine12345.com":
+     PASS: the primary reply ("Couldn't load…") types out fully on the command row,
+     THEN the spoken follow-up types out on its OWN row below it. Never both at once,
+     never an instant pop-in of the second line, never a split/partial-UNKNOWN orphan.
+  2. Success with a continuation, e.g. "open chrome":
+     PASS: the reply types out, then the suggestion line types out after it.
+  3. Esc mid-reply (while the primary is typing): PASS: clean abort, the row shows
+     Interrupted, and the queued narration does NOT ghost-type in afterward.
+  4. Reminder mid-command: set a 5-second reminder, then issue a command; when the
+     reminder fires PASS: it POPS IN instantly (not typed out) and does not disturb the
+     command's in-flight typing.
+
+Code-level proof (deterministic — drives _tick manually, forces narration-early):
+  uv run pytest -q tests/test_syslog_render.py
+  -> test_sequential_animation_resp1_then_resp2: resp 2 appended mid-resp-1 is RESERVED
+     + queued (not animating); resp 1 finishes on its row; THEN resp 2 animates on its
+     own row — neither crosses.
+     test_narration_during_thinking_waits_for_primary (queued through thinking),
+     test_no_narration_primary_animates_alone, test_interrupt_clears_pending_animation_
+     queue (no ghost-type), test_reminder_append_stays_instant_and_unqueued (animate=
+     False isolation), test_new_command_finalizes_pending_animations (snap-to-full).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

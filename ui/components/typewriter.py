@@ -69,6 +69,13 @@ class _TypewriterProxy(QObject):
         self._timer.timeout.connect(self._tick)
         self._pending = None   # (full_text, j_time, intent, conf, success, row_id)
         self._pos = 0
+        # Follow-up animations (narration / responder follow) waiting their turn so
+        # they type out AFTER the primary, one at a time. Each entry is the same
+        # 6-tuple shape as _pending and carries its OWN reserved row id, so starting
+        # one just assigns _pending — the typewriter still writes only to that id
+        # (Option B invariant). Async appends (reminders/scheduled) do NOT use this;
+        # they append instantly via append_jarvis_scheduled(animate=False).
+        self._anim_queue: list = []
 
         # ── Thinking dots ────────────────────────────────────────────────────
         self._thinking_timer = QTimer(self)
@@ -95,11 +102,34 @@ class _TypewriterProxy(QObject):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def append_jarvis_scheduled(self, jarvis, j_time, intent="", conf=None,
+                                success=None, animate=False):
+        """A JARVIS-only row with no matching YOU line.
+
+        animate=False (default — reminders, scheduled-workflow lines): append
+        instantly as a static row. Async notifications must appear immediately and
+        must never enter the type-out queue, so they can't collide with a command's
+        in-flight animation.
+
+        animate=True (post-execution narration / responder follow): reserve the row
+        now (so its position below the command row is fixed), then queue its type-out
+        to run AFTER the primary reply finishes animating — one animation at a time.
+        The reserved row is empty until it types, which renders as nothing, so there's
+        no empty-row flicker."""
+        if not animate:
+            return self._panel.append_jarvis_scheduled(jarvis, j_time, intent, conf, success)
+        rid = self._panel.append_jarvis_scheduled("", j_time, "", None, None)
+        self._anim_queue.append((jarvis, j_time, intent, conf, success, rid))
+        self._maybe_start_next()
+        return rid
+
     def add_exchange(self, you, time="", jarvis="", j_time="", intent="", conf=None,
                      success=None):
         self._stop_thinking()
-        self._timer.stop()
-        self._pending = None
+        # A new command supersedes any in-flight / queued follow-up animation: snap
+        # them to their final text on their OWN rows (don't drop a partial reply, and
+        # don't let a prior narration animate after this command's reply).
+        self._finalize_all_animations()
         self._flush_you()   # snap any in-progress user text (on its OWN row) to final
 
         # History / mock entries already have a JARVIS response — render instantly.
@@ -121,10 +151,13 @@ class _TypewriterProxy(QObject):
         """Halt every in-progress animation (you / jarvis / thinking dots) so a
         running timer can't keep mutating a row after it's finalized — e.g. on
         Esc-interrupt, where the 'thinking' dots would otherwise clobber the
-        Interrupted marker."""
+        Interrupted marker. Also drops any QUEUED follow-up animation so a narration
+        can't ghost-type after the user interrupted the turn (its audio is cancelled
+        by the interrupt path too)."""
         self._stop_thinking()
         self._timer.stop()
         self._pending = None
+        self._anim_queue.clear()
         self._flush_you()   # snap in-progress user text to FULL, not truncated
 
     def mark_interrupted(self, j_time=""):
@@ -142,6 +175,9 @@ class _TypewriterProxy(QObject):
         rid = self._active_row_id
         if not text:
             self._panel.update_jarvis(rid, text, j_time, intent, conf, success)
+            # Primary was instant/empty → it's not animating, so let a queued
+            # narration start instead of waiting forever behind it.
+            self._maybe_start_next()
             return
         self._pending = (text, j_time, intent, conf, success, rid)
         self._pos = 0
@@ -161,8 +197,44 @@ class _TypewriterProxy(QObject):
             self._timer.stop()
             self._pending = None
             self._panel.update_jarvis(rid, full_text, j_time, intent, conf, success)
+            # This animation finished → start the next queued follow-up (if any).
+            self._maybe_start_next()
         else:
             self._panel.update_jarvis(rid, full_text[: self._pos], j_time, None, None)
+
+    # ── follow-up animation queue (narration / follow type out AFTER the primary) ─
+
+    def _maybe_start_next(self):
+        """Start the next queued follow-up animation, but ONLY when the proxy is fully
+        idle — the command row has finished its user-text, thinking, and primary-reply
+        work. So a narration reserved while the primary is still typing waits its turn;
+        exactly one animation runs at a time."""
+        if self._pending is not None:
+            return
+        if self._thinking_timer.isActive() or self._you_timer.isActive():
+            return
+        if not self._anim_queue:
+            return
+        entry = self._anim_queue.pop(0)
+        _full, j_time, _intent, _conf, _success, rid = entry
+        self._pending = entry
+        self._pos = 0
+        self._panel.update_jarvis(rid, "", j_time, None, None)
+        self._timer.start()
+
+    def _finalize_all_animations(self):
+        """Snap the in-flight animation AND every queued follow-up to their final text
+        on their OWN rows, then clear the queue. Used when a new command supersedes the
+        turn: nothing is dropped or left half-typed, and order is preserved (each lands
+        on its own reserved row id — the Option B invariant holds)."""
+        if self._pending is not None:
+            full_text, j_time, intent, conf, success, rid = self._pending
+            self._timer.stop()
+            self._pending = None
+            self._panel.update_jarvis(rid, full_text, j_time, intent, conf, success)
+        for full_text, j_time, intent, conf, success, rid in self._anim_queue:
+            self._panel.update_jarvis(rid, full_text, j_time, intent, conf, success)
+        self._anim_queue.clear()
 
     # ── User speech typewriter ticks ─────────────────────────────────────────
 

@@ -856,8 +856,10 @@ class _ExecutionMixin:
         if self._history:
             prev = (self._history[-1].get("jarvis") or "").strip()
             self._history[-1]["jarvis"] = f"{prev}\n{follow}" if prev else follow
+        # animate=True: the narration/follow types out (after the primary) on its own
+        # row, instead of popping in instantly — see _TypewriterProxy.append_jarvis_scheduled.
         self._dashboard.left.transcript.append_jarvis_scheduled(
-            follow, j_time, follow_intent, conf, success=success
+            follow, j_time, follow_intent, conf, success=success, animate=True
         )
         self._dashboard.left.status_lbl.setText(follow[:200])
         secs = int((datetime.now() - self._session_start).total_seconds())

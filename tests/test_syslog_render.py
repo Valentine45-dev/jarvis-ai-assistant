@@ -274,6 +274,186 @@ def test_proxy_narration_before_primary_lands_on_command_row():
             _t.stop()
 
 
+# ── sequential follow-up animation (narration types out AFTER the primary) ───
+# The narration/follow now ANIMATES (animate=True) on its own row, queued to type
+# out only after the primary reply finishes — mirroring the FIFO audio. Reminders/
+# scheduled (animate=False) stay instant and never enter the queue. Option B's
+# row-id guarantee must hold throughout: each animation writes only to its own
+# captured row id, never crossing.
+
+def _close(proxy):
+    proxy.stop_animations()
+    for _t in (proxy._timer, proxy._thinking_timer, proxy._you_timer):
+        _t.stop()
+
+
+def test_sequential_animation_resp1_then_resp2():
+    """resp 1 types fully on its row, THEN resp 2 (animate=True) types on ITS row —
+    never two at once, never crossing."""
+    from ui.components.typewriter import _TypewriterProxy
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("open the website http://dead.example", "18:29")
+        cmd_id = proxy._active_row_id
+        resp1 = "Couldn't load dead.example. net::ERR_NAME_NOT_RESOLVED"
+        proxy.update_last_jarvis(resp1, "18:29", "browser_automation", 0.97, False)
+
+        # Type resp 1 partway, THEN the narration arrives (fast HTTP).
+        for _ in range(8):
+            proxy._tick()
+        assert proxy._pending[5] == cmd_id          # still animating resp 1
+        resp2_id = proxy.append_jarvis_scheduled(
+            "DNS miss — check the address.", "18:29", "browser_automation", 0.97,
+            success=False, animate=True)
+        # resp 2 is RESERVED + QUEUED but NOT animating yet (resp 1 still busy).
+        assert resp2_id != cmd_id
+        assert proxy._pending[5] == cmd_id          # resp 1 still the active animation
+        assert len(proxy._anim_queue) == 1
+        assert panel._by_id[resp2_id]["jarvis"] == ""   # reserved empty, invisible
+
+        # Finish resp 1 → it lands fully on the command row, THEN resp 2 starts.
+        while proxy._pending is not None and proxy._pending[5] == cmd_id:
+            proxy._tick()
+        assert panel._by_id[cmd_id]["jarvis"] == resp1
+        assert panel._by_id[cmd_id]["intent"] == "browser_automation"
+        assert proxy._pending is not None and proxy._pending[5] == resp2_id  # resp 2 now animating
+        assert proxy._anim_queue == []
+
+        # Finish resp 2 on its own row.
+        _drain(proxy)
+        assert panel._by_id[resp2_id]["jarvis"] == "DNS miss — check the address."
+        assert panel._by_id[resp2_id]["success"] is False
+        # Neither crossed: command row still holds resp 1, exactly two rows.
+        assert panel._by_id[cmd_id]["jarvis"] == resp1
+        assert len(panel.rows) == 2
+    finally:
+        _close(proxy)
+
+
+def test_narration_during_thinking_waits_for_primary():
+    """Narration appended while the command row is still THINKING (primary not yet
+    arrived) must wait, then type after the primary — correct order, own rows."""
+    from ui.components.typewriter import _TypewriterProxy
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("", "18:30")             # no you-text → thinking starts
+        cmd_id = proxy._active_row_id
+        resp2_id = proxy.append_jarvis_scheduled(
+            "Heads up — that domain looks wrong.", "18:30", "browser_automation", 0.97,
+            success=False, animate=True)
+        # Thinking is active → queued, not animating.
+        assert proxy._pending is None and len(proxy._anim_queue) == 1
+        assert resp2_id != cmd_id
+
+        proxy.update_last_jarvis("Couldn't load it.", "18:30", "browser_automation", 0.97, False)
+        assert proxy._pending[5] == cmd_id          # primary animates first
+        _drain(proxy)                                # drains resp 1 then resp 2
+
+        assert panel._by_id[cmd_id]["jarvis"] == "Couldn't load it."
+        assert panel._by_id[resp2_id]["jarvis"] == "Heads up — that domain looks wrong."
+        assert panel.rows[0]["id"] == cmd_id and panel.rows[1]["id"] == resp2_id
+    finally:
+        _close(proxy)
+
+
+def test_no_narration_primary_animates_alone():
+    from ui.components.typewriter import _TypewriterProxy
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("open chrome", "18:31")
+        cmd_id = proxy._active_row_id
+        proxy.update_last_jarvis("Chrome's up.", "18:31", "open_app", 0.98, True)
+        _drain(proxy)
+        assert panel._by_id[cmd_id]["jarvis"] == "Chrome's up."
+        assert proxy._pending is None and proxy._anim_queue == []
+        assert len(panel.rows) == 1
+    finally:
+        _close(proxy)
+
+
+def test_interrupt_clears_pending_animation_queue():
+    """Esc mid-resp-1 with resp 2 queued: the queue is dropped so resp 2 does NOT
+    ghost-type afterward."""
+    from ui.components.typewriter import _TypewriterProxy
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("open the website http://dead.example", "18:32")
+        proxy.update_last_jarvis("Couldn't load it, here is why…", "18:32",
+                                 "browser_automation", 0.97, False)
+        for _ in range(5):
+            proxy._tick()
+        resp2_id = proxy.append_jarvis_scheduled(
+            "ghost narration", "18:32", "browser_automation", 0.97,
+            success=False, animate=True)
+
+        proxy.stop_animations()                     # Esc
+        assert proxy._anim_queue == [] and proxy._pending is None
+
+        # Draining must NOT type the dropped narration onto its (or any) row.
+        _drain(proxy)
+        assert panel._by_id[resp2_id]["jarvis"] == ""   # never animated
+    finally:
+        _close(proxy)
+
+
+def test_reminder_append_stays_instant_and_unqueued():
+    """A reminder (animate=False) fired mid-command appends instantly as a full static
+    row, never enters the animation queue, and doesn't disturb the in-flight reply."""
+    from ui.components.typewriter import _TypewriterProxy
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("open chrome", "18:33")
+        cmd_id = proxy._active_row_id
+        proxy.update_last_jarvis("Chrome's coming up nice and slow…", "18:33",
+                                 "open_app", 0.98, True)
+        for _ in range(6):
+            proxy._tick()                            # resp 1 mid-animation
+
+        rem_id = proxy.append_jarvis_scheduled(
+            "Reminder — stretch.", "18:33", "reminder_task", 1.0, success=True)  # animate=False
+        # Instant: full text immediately, NOT queued, primary still animating.
+        assert panel._by_id[rem_id]["jarvis"] == "Reminder — stretch."
+        assert proxy._anim_queue == []
+        assert proxy._pending[5] == cmd_id
+
+        _drain(proxy)
+        assert panel._by_id[cmd_id]["jarvis"] == "Chrome's coming up nice and slow…"
+        assert panel._by_id[rem_id]["jarvis"] == "Reminder — stretch."   # untouched
+    finally:
+        _close(proxy)
+
+
+def test_new_command_finalizes_pending_animations():
+    """A new command snaps the in-flight reply AND a queued narration to full on their
+    own rows (no dropped partial, no late interleaving), then starts fresh."""
+    from ui.components.typewriter import _TypewriterProxy
+    panel = _IdPanel()
+    proxy = _TypewriterProxy(panel)
+    try:
+        proxy.add_exchange("first command", "18:34")
+        c1 = proxy._active_row_id
+        proxy.update_last_jarvis("First reply in progress…", "18:34", "open_app", 0.9, True)
+        for _ in range(4):
+            proxy._tick()
+        n1 = proxy.append_jarvis_scheduled(
+            "First narration.", "18:34", "open_app", 0.9, success=True, animate=True)
+
+        # New command supersedes → finalize pending + queued onto their own rows.
+        proxy.add_exchange("second command", "18:35")
+        c2 = proxy._active_row_id
+        assert panel._by_id[c1]["jarvis"] == "First reply in progress…"   # snapped to full
+        assert panel._by_id[n1]["jarvis"] == "First narration."           # snapped to full
+        assert proxy._anim_queue == [] and c2 not in (c1, n1)
+        assert panel.rows[-1]["id"] == c2
+    finally:
+        _close(proxy)
+
+
 @pytest.mark.qtgui
 def test_panel_by_id_update_targets_correct_row_after_append():
     """Panel-level: update_jarvis(id) edits its row even after another row appended;
