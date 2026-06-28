@@ -2784,6 +2784,50 @@ Code-level proof (deterministic — drives _tick manually, forces narration-earl
 
 
 -----------------------------------------------------------------------
+§34 — create_file no longer writes the redacted "<N chars>" placeholder
+-----------------------------------------------------------------------
+Background: asking JARVIS to write a file (esp. the 2nd+ create_file in a session)
+could land the literal text "<4921 chars>" in the file instead of the real content.
+Root cause: privacy redaction (R3-13) stores dictated content/text/value/code in
+conversation memory as "<N chars>". That history is replayed to the model, and the
+model COPIES the placeholder into a new create_file's content → it gets written to
+disk. Data loss. (The redaction protects disk/privacy but poisoned the model's replay.)
+
+Fix — two layers:
+  Layer 1 (root cause): memory.get_prompt_messages() — the MODEL-FACING replay — drops
+    any redacted "<N chars>" param from assistant turns (the model sees the action +
+    path but no content to copy, so it generates real content). The stored/persisted
+    form still keeps "<N chars>" (privacy/R3-13 unchanged). brain.ask_claude uses
+    get_prompt_messages() for both the primary call and the JSON-retry path.
+  Layer 2 (backstop): create_file / append_file / replace_in_file refuse content that
+    is EXACTLY a "<N chars>" placeholder (re.fullmatch), so it can never reach disk
+    even if the model emits it. Returns a clear error asking the user to re-issue.
+
+PHYSICAL TEST — the key one is TWO create_file commands in ONE session:
+  1. "create a python file in tests/ that prints hello world"  -> confirm -> open the
+     file. PASS: it has REAL code, not "<N chars>".
+  2. WITHOUT restarting, ask for a SECOND, bigger file, e.g. "write a python file in
+     tests/ that builds a small CLI calculator"  -> confirm -> open it.
+     PASS (fixed): the SECOND file also has REAL content. (This is the case that used
+     to fail — the first create_file entered memory as "<N chars>" and the model
+     copied it into the second.)
+  3. Backstop sanity (optional): if a "<N chars>" ever slips through, the file is NOT
+     written — JARVIS says it looks like a redacted placeholder, re-issue. Nothing
+     lands on disk.
+  Cleanup: delete the test files you created. (Note: tests/file_search_engine.py is the
+  old corrupted artifact from this bug — it contains just "<4921 chars>"; safe to delete.)
+
+Code-level proof:
+  uv run pytest -q tests/test_memory_redaction.py tests/test_file_ops_package.py
+  -> Layer 1: get_prompt_messages drops the redacted content key while get_messages/
+     disk keep "<N chars>"; handles the inject_outcome "[Result: …]" suffix; fail-soft
+     on non-JSON; non-secret params untouched. Existing R3-13 redaction tests still
+     green (disk format unchanged).
+     Layer 2: _is_redacted_placeholder exact-match; create/append/replace refuse
+     "<N chars>" (nothing written) while normal content still writes.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

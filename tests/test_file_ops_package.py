@@ -136,3 +136,53 @@ def test_replace_in_file_confirm_closure(tmp_path: Path) -> None:
     out = resolve_confirmation("yes")            # runs the moved _do_replace closure
     assert out["success"] is True
     assert "baz" in f.read_text(encoding="utf-8") and "foo" not in f.read_text(encoding="utf-8")
+
+
+# ── data-loss backstop: never write a redacted `<N chars>` placeholder ────────
+# The model can copy a redacted prior turn ("<4921 chars>") into a write op; the
+# content-writing ops refuse it (no confirmation, nothing written) so it can't land
+# on disk. The root-cause fix is memory.get_prompt_messages(); this is the backstop.
+
+def test_is_redacted_placeholder_helper() -> None:
+    assert _common._is_redacted_placeholder("<4921 chars>") is True
+    assert _common._is_redacted_placeholder("  <12 chars>  ") is True   # whitespace tolerated
+    assert _common._is_redacted_placeholder("<4921 chars> and more") is False  # only EXACT match
+    assert _common._is_redacted_placeholder("real file content") is False
+    assert _common._is_redacted_placeholder("") is False
+    assert _common._is_redacted_placeholder(None) is False
+
+
+def test_create_file_refuses_redacted_placeholder(tmp_path: Path) -> None:
+    target = tmp_path / "file_search_engine.py"
+    r = _handle_file_operation("create_file", {"path": str(target), "content": "<4921 chars>"})
+    assert r["success"] is False
+    assert not r.get("needs_confirmation"), "must refuse outright, not ask to confirm"
+    assert "placeholder" in (r.get("error") or "").lower()
+    assert not target.exists(), "the placeholder must NOT be written to disk"
+
+
+def test_create_file_normal_content_still_writes(tmp_path: Path) -> None:
+    # The guard is exact-match only — real content that merely mentions chars works.
+    target = tmp_path / "ok.txt"
+    r = _handle_file_operation("create_file", {"path": str(target), "content": "about 50 chars here"})
+    assert r.get("needs_confirmation")
+    out = resolve_confirmation("yes")
+    assert out["success"] is True
+    assert target.read_text(encoding="utf-8") == "about 50 chars here"
+
+
+def test_append_file_refuses_redacted_placeholder(tmp_path: Path) -> None:
+    f = tmp_path / "log.txt"
+    f.write_text("existing\n", encoding="utf-8")
+    r = _handle_file_operation("append_file", {"path": str(f), "content": "<88 chars>"})
+    assert r["success"] is False and "placeholder" in (r.get("error") or "").lower()
+    assert f.read_text(encoding="utf-8") == "existing\n", "file must be untouched"
+
+
+def test_replace_in_file_refuses_redacted_placeholder(tmp_path: Path) -> None:
+    f = tmp_path / "edit.txt"
+    f.write_text("foo bar\n", encoding="utf-8")
+    r = _handle_file_operation("replace_in_file",
+                               {"path": str(f), "find": "foo", "replace": "<300 chars>"})
+    assert r["success"] is False and "placeholder" in (r.get("error") or "").lower()
+    assert f.read_text(encoding="utf-8") == "foo bar\n", "file must be untouched"

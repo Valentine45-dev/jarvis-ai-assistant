@@ -79,6 +79,50 @@ def _redact_assistant_json(assistant_json: str) -> str:
     return assistant_json
 
 
+# Matches EXACTLY a redaction placeholder produced by brain._redact_params
+# (`<{len} chars>`), e.g. "<4921 chars>".
+_REDACTED_PLACEHOLDER_RE = re.compile(r"<\d+ chars>")
+
+
+def _strip_redacted_params(assistant_json: str) -> str:
+    """Return the assistant turn with redacted parameter placeholders (`<N chars>`)
+    DROPPED, for the MODEL-FACING replay only.
+
+    Why: memory persists `content`/`text`/`value`/`code` as `<N chars>` for privacy
+    (R3-13). When that history is replayed to the model, the model can COPY the
+    placeholder into a new `create_file`'s `content`, writing `<N chars>` to disk
+    (data loss). Dropping the key leaves nothing to copy, so the model produces real
+    content. The stored/persisted form is untouched — only this prompt-facing copy is
+    sanitized. Preserves the `\\n[Result: …]` suffix inject_outcome appends. Fail-soft:
+    any parse issue returns the input unchanged (never drops or corrupts a turn)."""
+    try:
+        from core.brain import _REDACT_PARAM_KEYS
+        # Split off the inject_outcome suffix so json.loads sees pure JSON.
+        suffix = ""
+        json_part = assistant_json
+        idx = assistant_json.find("\n[Result:")
+        if idx != -1:
+            json_part = assistant_json[:idx]
+            suffix = assistant_json[idx:]
+        obj = json.loads(json_part)
+        if not isinstance(obj, dict):
+            return assistant_json
+        params = obj.get("parameters")
+        if not isinstance(params, dict):
+            return assistant_json
+        cleaned = {
+            k: v for k, v in params.items()
+            if not (k in _REDACT_PARAM_KEYS and isinstance(v, str)
+                    and _REDACTED_PLACEHOLDER_RE.fullmatch(v.strip()))
+        }
+        if cleaned == params:
+            return assistant_json
+        obj["parameters"] = cleaned
+        return json.dumps(obj) + suffix
+    except Exception:
+        return assistant_json
+
+
 class ConversationMemory:
     """Rolling conversation history for the Claude API messages[] parameter.
 
@@ -106,9 +150,28 @@ class ConversationMemory:
             self._save_locked()
 
     def get_messages(self) -> list[dict[str, str]]:
-        """Return a thread-safe snapshot of the current history."""
+        """Return a thread-safe snapshot of the current history (stored form, which
+        keeps `<N chars>` redaction placeholders)."""
         with self._lock:
             return list(self._messages)
+
+    def get_prompt_messages(self) -> list[dict[str, str]]:
+        """The MODEL-FACING history: same as get_messages() but with redacted
+        parameter placeholders (`<N chars>`) dropped from assistant turns, so the
+        model can't copy a placeholder into a new create_file's content (data loss).
+        The stored/persisted form is unchanged — privacy redaction (R3-13) stays."""
+        with self._lock:
+            msgs = list(self._messages)
+        out: list[dict[str, str]] = []
+        for m in msgs:
+            if m.get("role") == "assistant":
+                out.append({
+                    "role": "assistant",
+                    "content": _strip_redacted_params(m.get("content", "")),
+                })
+            else:
+                out.append(m)
+        return out
 
     def inject_outcome(
         self,

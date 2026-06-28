@@ -67,6 +67,56 @@ def test_non_secret_params_preserved(mem: memory.ConversationMemory) -> None:
     assert '"browser": "chrome"' in mem.get_messages()[1]["content"]
 
 
+# ── prompt-facing replay drops the placeholder (data-loss root-cause fix) ────
+# Privacy redaction stores `<N chars>` (disk + in-memory). But replaying that to the
+# model let it COPY the placeholder into a new create_file's content → `<N chars>`
+# written to disk. get_prompt_messages() drops the redacted key for the model only;
+# get_messages()/disk keep `<N chars>`.
+
+def test_prompt_messages_drops_redacted_content_key(mem: memory.ConversationMemory) -> None:
+    secret = "x" * 200
+    mem.add_exchange("write a big file", _assistant(secret))
+
+    stored = mem.get_messages()[1]["content"]
+    prompt = mem.get_prompt_messages()[1]["content"]
+
+    # Stored form keeps the placeholder (privacy/R3-13 unchanged)…
+    assert "chars>" in stored
+    # …but the model-facing form has NO placeholder to copy, and drops the key.
+    assert "chars>" not in prompt
+    obj = json.loads(prompt)
+    assert "content" not in obj["parameters"]       # key dropped, not replaced
+    assert obj["parameters"]["path"] == "secret.txt"  # other params kept
+    assert obj["action"] == "create_file"
+
+
+def test_prompt_messages_non_secret_params_preserved(mem: memory.ConversationMemory) -> None:
+    asst = json.dumps({"intent": "open_app", "action": "open_browser",
+                       "parameters": {"browser": "chrome"}})
+    mem.add_exchange("open chrome", asst)
+    prompt = mem.get_prompt_messages()[1]["content"]
+    assert '"browser": "chrome"' in prompt           # nothing redacted → untouched
+
+
+def test_prompt_messages_handles_result_suffix(mem: memory.ConversationMemory) -> None:
+    # inject_outcome appends a "\n[Result: …]" suffix to the last assistant turn —
+    # get_prompt_messages must strip the placeholder WITHOUT choking on the suffix.
+    mem.add_exchange("write a big file", _assistant("y" * 200))
+    mem.inject_outcome("file_operation", "create_file", success=True, output="Created: secret.txt")
+
+    prompt = mem.get_prompt_messages()[1]["content"]
+    assert "[Result:" in prompt                      # suffix preserved
+    assert "chars>" not in prompt                    # placeholder still dropped
+    json_part = prompt.split("\n[Result:", 1)[0]
+    assert "content" not in json.loads(json_part)["parameters"]
+
+
+def test_prompt_messages_failsoft_on_non_json(mem: memory.ConversationMemory) -> None:
+    mem.add_exchange("hello", "just a plain response, not json")
+    # Non-JSON assistant turn is returned unchanged (never dropped/corrupted).
+    assert mem.get_prompt_messages()[1]["content"] == "just a plain response, not json"
+
+
 def test_load_redacts_legacy_plaintext(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "memory.jsonl"
     secret = "p@ssw0rd-very-long-secret-value-here"

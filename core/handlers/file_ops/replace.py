@@ -29,6 +29,7 @@ from core.handlers.file_ops._common import (
     _find_existing_item,
     _format_human_size,
     _is_probably_binary,
+    _is_redacted_placeholder,
     _locate_file,
     _parse_size_spec,
     _raw_path_is_bare_filename,
@@ -51,6 +52,12 @@ def _op_replace_in_file(params, *, path, raw_path, confirmed):
     if not isinstance(replace_text, str):
         _tlog("✗ missing 'replace' text")
         return _err("Missing 'replace' text")
+    if _is_redacted_placeholder(replace_text):
+        _tlog("✗ refusing to write a redacted placeholder as replacement text")
+        return _err(
+            "The replacement looks like a redacted placeholder ('<N chars>'), not real "
+            "text — please re-issue the command."
+        )
 
     if not path.exists():
         found = _locate_file(path.name) if _raw_path_is_bare_filename(raw_path) else None

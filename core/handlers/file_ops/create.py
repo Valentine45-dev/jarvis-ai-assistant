@@ -29,6 +29,7 @@ from core.handlers.file_ops._common import (
     _find_existing_item,
     _format_human_size,
     _is_probably_binary,
+    _is_redacted_placeholder,
     _locate_file,
     _parse_size_spec,
     _raw_path_is_bare_filename,
@@ -73,6 +74,14 @@ def _op_create_directory(params, *, path=None, raw_path="", confirmed=False):
 def _op_create_file(params, *, path, raw_path, confirmed):
     path = _strip_llm_path_placeholders(path)
     content = params.get("content", "")
+    # Data-loss backstop: the model occasionally copies a redacted `<N chars>`
+    # placeholder from replayed history into `content` — refuse to write it.
+    if _is_redacted_placeholder(content):
+        _tlog("✗ refusing to write a redacted placeholder as file content")
+        return _err(
+            "That content looks like a redacted placeholder ('<N chars>'), not the "
+            "real file content — please re-issue the command."
+        )
     content_stripped = (content or "").strip() if isinstance(content, str) else ""
     raw_n = (raw_path or "").replace("\\", "/")
     has_trailing = len(raw_n) > 0 and raw_n.rstrip().endswith("/")

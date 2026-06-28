@@ -27,6 +27,7 @@ from core.handlers.file_ops._common import (
     _emit_line,
     _emit_to_terminal,
     _find_existing_item,
+    _is_redacted_placeholder,
     _format_human_size,
     _is_probably_binary,
     _locate_file,
@@ -129,6 +130,12 @@ def _op_append_file(params, *, path, raw_path, confirmed):
     if not isinstance(content, str) or content == "":
         _tlog("✗ missing 'content' to append")
         return _err("Missing 'content' to append")
+    if _is_redacted_placeholder(content):
+        _tlog("✗ refusing to append a redacted placeholder")
+        return _err(
+            "That content looks like a redacted placeholder ('<N chars>'), not real "
+            "text — please re-issue the command."
+        )
     use_timestamp = bool(params.get("timestamp", False))
 
     if not path.exists():

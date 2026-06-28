@@ -376,7 +376,10 @@ def ask_claude(
     max_out = _infer_max_output_tokens(user_msg)
     raw = ""
     try:
-        prior_messages = memory.get_messages() if use_memory else []
+        # get_prompt_messages() (not get_messages()) drops redacted `<N chars>`
+        # placeholders from replayed assistant turns, so the model can't copy one into
+        # a new create_file's content and write the placeholder to disk (data loss).
+        prior_messages = memory.get_prompt_messages() if use_memory else []
         msg = _get_client().messages.create(
             model=config.claude_model,
             max_tokens=max_out,

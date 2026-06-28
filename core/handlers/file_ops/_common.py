@@ -130,6 +130,24 @@ def _is_probably_binary(path: Path) -> bool:
 
 
 # ── Path helpers (file_ops-local; resolution lives in core.handlers.paths) ────
+# Matches EXACTLY a memory-redaction placeholder (brain._redact_params emits
+# `<{len} chars>`), e.g. "<4921 chars>".
+_REDACTED_CONTENT_RE = re.compile(r"<\d+ chars>")
+
+
+def _is_redacted_placeholder(text) -> bool:
+    """True when *text* is, in its entirety, a redaction placeholder (`<N chars>`).
+
+    Defense-in-depth against a data-loss path: memory persists long `content`/`text`/
+    `value`/`code` as `<N chars>` for privacy (R3-13); if the model copies that
+    placeholder from replayed history into a new write, the content-writing ops would
+    otherwise put `<N chars>` on disk. They reject it instead. A real file whose ENTIRE
+    body is exactly `<N chars>` is effectively impossible, so the full-match keeps the
+    false-positive rate ~0. (The root-cause fix is memory.get_prompt_messages(), which
+    drops the placeholder from the model's replay; this is the backstop.)"""
+    return isinstance(text, str) and bool(_REDACTED_CONTENT_RE.fullmatch(text.strip()))
+
+
 def _strip_llm_path_placeholders(p: Path) -> Path:
     try:
         parts = list(p.parts)
