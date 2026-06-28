@@ -2637,6 +2637,61 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§31 — SYS_LOG no longer writes the reply twice (narration/primary race)
+-----------------------------------------------------------------------
+Background: the SYS_LOG showed a command's reply TWICE — row 1 stuck on the
+"Computing." thinking placeholder (empty [] timestamp + UNKNOWN chip), and a
+SECOND JARVIS-only row with the real reply (BROWSER 97%). Seen on a failing
+command (dead URL → ERR_NAME_NOT_RESOLVED).
+
+Root cause (NOT an empty primary — the primary text is correct): the
+post-execution narration daemon ("name the cause, suggest a next step") runs
+CONCURRENTLY with the primary TTS and appended its transcript row WITHOUT waiting
+for the primary. When the narration's HTTP won the race against the primary's TTS
+on_ready, it took the rows[-1] slot first; the primary's on_ready update then
+landed on the narration row instead of replacing "Computing." on the command row —
+so the command row was orphaned and the reply looked written twice.
+
+Fix (Option A — sequencing, NOT row-id anchoring): the narration is now BUFFERED
+and only appended AFTER the primary for that command finishes (its on_done), which
+is the SAME sequencing the responder data-follow line already uses. The narration
+HTTP still fires early (its latency overlaps TTS); only the APPEND waits. A fallback
+timer (12 s) force-flushes the narration if the primary never signals done (e.g. the
+say() exception path), so it's never lost. The muted/skip-TTS paths fire on_done
+synchronously, so they flush immediately — unchanged.
+
+Scope: this covers EVERY narration-triggering command, not just failed browser navs
+— every failed action-intent, every run_workflow, and suggest-on-success — because
+the sequencing is at the narration-append site (general by construction).
+
+PHYSICAL TEST (a race fix can't be trusted on ONE green run — repeat it):
+  1. Keep AUTO_CONFIRM as-is. Run a FAILING command that triggers narration, e.g.:
+        "open the website http://vlaneine12345.com"   (a dead/unresolvable URL)
+     Do this 5-6 TIMES IN A ROW (same or different dead URLs).
+  PASS (fixed): EVERY time you get ONE clean primary row on the command line
+     (real timestamp, BROWSER + conf chips, red outcome rail) and the spoken
+     narration appears as its OWN row AFTER it. NEVER a split where row 1 is stuck
+     on "Computing." with an empty [] timestamp / UNKNOWN chip and the reply shows
+     on a second row.
+  FAIL (old): intermittently (it's a race) row 1 froze on "Computing." [] UNKNOWN
+     and the reply was written again as a second row.
+  Also exercise the other narration paths a couple of times each:
+     - a workflow: "open chrome and take a screenshot"  (run_workflow always narrates)
+     - a success suggestion: "open chrome"               (suggest-on-success)
+  PASS: single clean primary row + a later narration/continuation row, every time.
+
+Code-level proof (forces the narration-before-primary ordering — no hoping):
+  uv run pytest -q tests/test_workflow_offthread.py
+  -> test_narration_before_primary_is_buffered_then_flushed: narration arriving
+     before the primary is BUFFERED (no row), the primary lands on the COMMAND row
+     (replaces 'Computing.', real ts + chips), then the narration flushes as its own
+     row after — and no orphaned 'Computing.' row survives.
+     test_narration_after_primary_appends_immediately (normal non-racing path),
+     test_narration_fallback_flushes_when_primary_never_signals (never lost),
+     test_narration_dropped_when_command_superseded (stale narration not mis-appended).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

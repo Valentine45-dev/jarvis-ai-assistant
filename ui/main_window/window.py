@@ -278,6 +278,14 @@ class JarvisWindow(
         self._code_exec_confirm_ctx: dict | None = None
         self._last_error_toast_msg = ""
         self._last_error_toast_ts = 0.0
+        # Post-execution narration sequencing (main-thread-only). The narration
+        # daemon runs concurrently with the primary TTS; appending its row before
+        # the primary lands would let the primary's on_ready update land on the
+        # narration row, orphaning the "Computing." placeholder. So the narration is
+        # BUFFERED until the primary for that token finishes, then flushed — mirroring
+        # the responder-follow path (which already fires from the primary's on_done).
+        self._pending_narration: tuple | None = None
+        self._primary_done_token: int = -1
 
         # Wire inline transcript confirmation card signals
         self._dashboard.left.transcript.confirmed.connect(self._on_confirmed)

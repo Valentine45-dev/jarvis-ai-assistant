@@ -288,6 +288,11 @@ class _ExecutionMixin:
         "type_text", "control_mouse", "read_screen", "weather",
     })
 
+    # Upper bound (ms) a buffered post-execution narration waits for the primary to
+    # finish before it's flushed anyway (so it's never lost on an edge path where the
+    # primary never signals on_done). Comfortably longer than any normal primary clip.
+    _NARRATION_FALLBACK_MS: int = 12000
+
     def _execute_result(self, result: dict, intent: str, conf: float, resp: str, hud: str,
                         confirmed: bool = False):
         """Dispatch to OS + update all HUD surfaces."""
@@ -731,10 +736,15 @@ class _ExecutionMixin:
             )
 
         def _on_primary_done() -> None:
+            # The primary row for this command has now landed (and finished
+            # speaking). Mark it so a buffered narration can be flushed AFTER the
+            # primary, not concurrently — the responder follow already fires here.
+            self._primary_done_token = tok
             if has_follow:
                 _queue_followup()
             else:
                 self._tts_done_signal.emit(tok)
+            self._flush_pending_narration(tok)
 
         # TTS runs on a worker thread; emit a Qt signal when audio is ready so
         # transcript animation starts on the main thread at the real playback point.
@@ -831,6 +841,22 @@ class _ExecutionMixin:
 
         QTimer.singleShot(2000, _post_speaking)
 
+    def _flush_pending_narration(self, token: int, forced: bool = False) -> None:
+        """Append a buffered post-execution narration now that the primary has
+        landed (called from the primary's on_done) — or unconditionally on the
+        fallback timer (``forced``) so the narration is never lost if the primary
+        never signals done (e.g. an empty primary, or the say() exception path that
+        fires no on_done). Clears the buffer before replaying so it can't loop."""
+        pending = self._pending_narration
+        if not pending or pending[4] != token:
+            return
+        self._pending_narration = None
+        if forced:
+            # The primary never marked itself done; allow the replay through the
+            # primary-done gate so the narration still appends.
+            self._primary_done_token = max(self._primary_done_token, token)
+        self._on_action_followup_tts(*pending)
+
     def _on_action_followup_tts(
         self,
         follow: str,
@@ -846,6 +872,21 @@ class _ExecutionMixin:
         this explanatory line gets the SAME outcome rail as the primary line — a
         failure-narration line reads red, not the neutral/info rail it used to."""
         if token != self._transcript_update_token:
+            return
+        # Sequencing guard: the narration daemon emits CONCURRENTLY with the primary
+        # TTS. If it arrives before the primary's row has landed, appending now would
+        # take the rows[-1] slot and the primary's on_ready update would land on THIS
+        # row instead of replacing the "Computing." placeholder (the "written twice"
+        # bug). So buffer until the primary for this token finishes (on_done sets
+        # _primary_done_token, then flushes us). A fallback timer guarantees we're
+        # never lost if the primary never signals. The responder-follow path is
+        # unaffected: it is emitted from on_done, AFTER _primary_done_token is set.
+        if token != self._primary_done_token:
+            self._pending_narration = (follow, j_time, follow_intent, conf, token, success)
+            QTimer.singleShot(
+                self._NARRATION_FALLBACK_MS,
+                lambda t=token: self._flush_pending_narration(t, forced=True),
+            )
             return
         if self._history:
             prev = (self._history[-1].get("jarvis") or "").strip()
