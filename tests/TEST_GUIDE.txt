@@ -2536,6 +2536,34 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§28 — Confidence no longer zeroed on a FAILED scheduled reminder-action
+-----------------------------------------------------------------------
+Background: §26 decoupled confidence from outcome on the main command path
+(_finish_execute now shows the REAL routing % even on a failure, never 0%). But
+its audit missed a sibling: _on_reminder_action (the delayed-reminder-WITH-an-
+executable-step slot in backend_signals_mixin.py) still re-implemented the conf
+logic inline as `hud_conf = sc if exec_ok else 0.0`, so a failed scheduled action
+read 0% on the LAST ACTION chip, the Voice page, and the persisted history. Fix:
+`hud_conf = sc` (mirrors the main path's `hud_conf = conf`) — the divergent inline
+re-implementation is removed so it can't drift again. The sys-log rail was already
+correct (success=exec_ok) and is untouched.
+
+This path needs a reminder that carries a `run` step (an executable scheduled
+action) AND a failure to observe by hand, so it's proven by the automated test.
+
+Manual sense-check (optional): schedule a reminder whose action will fail, let it
+fire, and confirm the HUD's confidence reads the real % with a FAIL/err indicator
+— NOT 0%.
+
+Code-level proof (no timers, no disk):
+  uv run pytest -q tests/test_reminder_scheduled.py
+  -> test_reminder_action_failure_preserves_real_confidence: a FAILED scheduled
+     action keeps the real schedule % (0.92) in history, the LAST ACTION chip, and
+     the Voice page, while success=False still drives the red sys-log rail.
+     test_reminder_action_success_reports_confidence: the success path is unchanged.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

@@ -135,7 +135,14 @@ class _BackendSignalsMixin:
             exec_out.get("error", ""),
             params=parameters,
         )
-        hud_conf = sc if exec_ok else 0.0
+        # §26: confidence and outcome are SEPARATE axes. The % is the routing/
+        # schedule confidence ("did JARVIS understand the task") and is NOT zeroed
+        # when the action later fails — failure is carried by its OWN channels (the
+        # sys-log rail via success=exec_ok below, the error toast, and the Voice
+        # page "err"). Mirrors _finish_execute's `hud_conf = conf`; do NOT
+        # re-introduce a `0.0 if not exec_ok` divergence here (that was the bug §26
+        # fixed on the main path but missed on this reminder-action sibling).
+        hud_conf = sc
         j_time = datetime.now().strftime("%H:%M")
 
         entry = {
