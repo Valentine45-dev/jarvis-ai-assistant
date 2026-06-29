@@ -2963,6 +2963,46 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§38 — doc generator: Job Object killed the subprocess at startup (Fix C)
+-----------------------------------------------------------------------
+Background: after Fix B, docx STILL failed — but with a NEW, cleaner signature that
+Fix A's diagnostics surfaced: "Script ran (exit 0) but no file appeared" with
+"(no subprocess output captured)". exit 0, ZERO output (not even the script's own
+"OK:"/"ERR:" print), no file. Reproduced cold: even a trivial print("OK") script
+through _run_generator gave exit 0 + no output + no file; neutering the limiter made
+the file appear. ROOT CAUSE: _try_limit_generator_process created a Windows Job Object
+with KILL_ON_JOB_CLOSE, assigned the child, then RETURNED — dropping the only reference
+to the job handle. The handle GC'd → job's last handle closed → KILL_ON_JOB_CLOSE
+killed the child at startup. Dormant until pywin32 was installed on this machine (old
+PC had no pywin32 → limiter was a no-op → docs worked). The transfer memory was real,
+just for this: pywin32 presence, not the path/OneDrive.
+Fix C — three parts:
+  1. CORE: stash the handle on the proc (proc._jarvis_job = hjob) so it outlives the
+     function. The poll loop holds proc; by the time both GC, the child has exited —
+     nothing left to kill. The 512 MB cap AND kill-child-if-JARVIS-dies both stay intact.
+  2. DEFENSIVE: the missing-file branch now special-cases exit-0-with-NO-output (the
+     exact silent signature) with a LOUD, named message ("killed before it could run …
+     set doc_generator_limit_enabled=false …") — never again a silent exit-0.
+  3. KILL SWITCH: new config doc_generator_limit_enabled (default ON). Flip to false to
+     disable the limiter instantly if it ever misbehaves again.
+
+PHYSICAL TEST (the real verdict — run each a couple of times, Sonnet output varies):
+  1. "create a word document in my documents folder: a short one-page summary of how
+     neural networks work"  -> confirm -> PASS: a real, OPENABLE .docx in Documents
+     (this is the doc that failed with the silent exit-0).
+  2. "create a word document in my tests/ folder: a detailed 2-page report on the
+     history of artificial intelligence"  -> confirm -> PASS: real .docx in tests/.
+  3. Kill-switch sanity (optional): set "doc_generator_limit_enabled": false in
+     config/jarvis.json -> docs still generate (limiter skipped entirely).
+
+Code-level proof:
+  uv run pytest -q tests/test_document_sandbox.py
+  -> config flag defaults ON; and (win32 + pywin32 guarded) a real docx script through
+     _run_generator with the limiter ENABLED now PRODUCES an openable file — this test
+     would have FAILED before Fix C (child killed at startup).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

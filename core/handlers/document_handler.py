@@ -380,6 +380,17 @@ def _try_limit_generator_process(proc: subprocess.Popen) -> None:
 
     AST validation is the real safety net; this only limits runaway allocation
     before the 60 s wall-clock timeout fires. No-op when pywin32 is unavailable.
+
+    CRITICAL (Fix C): the job is created with ``KILL_ON_JOB_CLOSE``, so the job
+    handle MUST outlive this function. The original code kept ``hjob`` only as a
+    local — on return it was garbage-collected, the job's last handle closed,
+    and ``KILL_ON_JOB_CLOSE`` terminated the just-assigned child at startup
+    (silent exit-0, no output, no file). That stayed dormant until pywin32 was
+    installed on this machine, which is why doc generation "worked on the old
+    PC" and broke here. We now stash the handle on ``proc`` so it lives as long
+    as the process: the poll loop in ``_run_generator`` holds ``proc``, and by
+    the time both are GC'd the child has already exited (nothing left to kill).
+    Both guarantees — the 512 MB cap and kill-the-child-if-JARVIS-dies — remain.
     """
     if sys.platform != "win32":
         return
@@ -401,6 +412,9 @@ def _try_limit_generator_process(proc: subprocess.Popen) -> None:
             hjob, win32job.JobObjectExtendedLimitInformation, info,
         )
         win32job.AssignProcessToJobObject(hjob, int(proc._handle))
+        # Keep the handle alive for the process's lifetime (see docstring) —
+        # without this the child is killed at startup by KILL_ON_JOB_CLOSE.
+        proc._jarvis_job = hjob  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -731,7 +745,10 @@ def _run_generator(code: str, target_path: Path) -> dict:
         except Exception as exc:
             return _fail(f"Couldn't launch generator: {exc}")
 
-        _try_limit_generator_process(proc)
+        # Kill switch (Fix C): the Job Object limiter is default-ON but can be
+        # disabled instantly via config if it ever misbehaves again.
+        if getattr(config, "doc_generator_limit_enabled", True):
+            _try_limit_generator_process(proc)
 
         def _reader() -> None:
             for raw_line in proc.stdout:  # type: ignore[union-attr]
@@ -785,7 +802,21 @@ def _run_generator(code: str, target_path: Path) -> dict:
                 target_path, tmp_path, rc, output_lines, where="missing-file"
             )
             tail = "\n".join(output_lines[-12:]) or "(no script output)"
-            if reported and Path(reported).resolve() != target_path.resolve():
+            if rc == 0 and not output_lines:
+                # DEFENSIVE (Fix C): exit-0 with ZERO output is the exact silent
+                # signature of the process being killed at startup before it ran
+                # (the Job Object KILL_ON_JOB_CLOSE handle-lifetime bug). The
+                # generator always prints `OK:`/`ERR:`, so no output means it
+                # never executed. Name the likely cause + the kill switch loudly
+                # — this exact silent failure cost a whole investigation once.
+                detail = (
+                    "The generator exited immediately with NO output and wrote no "
+                    "file — it was almost certainly killed before it could run "
+                    "(e.g. the sandbox process-limiter). Set "
+                    "doc_generator_limit_enabled=false to disable the limiter, or "
+                    "check that win32job isn't terminating the child."
+                )
+            elif reported and Path(reported).resolve() != target_path.resolve():
                 detail = (
                     f"Script ran (exit 0) but saved to a DIFFERENT path than expected.\n"
                     f"expected: {target_path}\nscript saved: {reported}"

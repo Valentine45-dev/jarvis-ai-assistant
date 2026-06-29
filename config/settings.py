@@ -139,6 +139,12 @@ class AppConfig:
     # handler (browser, files, system, etc.). Existing in-flight streamers
     # (code_exec, document_handler, find_in_files) are not gated by this flag.
     terminal_show_actions: bool = True
+    # Sandbox the doc-generator subprocess under a Windows Job Object (512 MB
+    # memory cap + kill-the-child-if-JARVIS-dies). Default ON. Kill switch
+    # (Fix C): this job-object code once silently killed EVERY doc generation
+    # when its handle lifetime was wrong; flip to false to disable the limiter
+    # instantly if it ever misbehaves again. No-op off Windows / without pywin32.
+    doc_generator_limit_enabled: bool = True
     # Show the raw Haiku reasoning line behind a browser picker pick. Off by
     # default — only useful when debugging element-selection misses.
     browser_show_picker_reasoning: bool = True
