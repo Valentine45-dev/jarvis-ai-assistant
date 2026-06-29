@@ -2869,6 +2869,50 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§36 — docx/doc generator failures are now diagnosable (Fix A)
+-----------------------------------------------------------------------
+Background: a Word-doc creation failed with only "✗ Script ran but the output file is
+missing. [ERR 1]". The generated python-docx script was PROVEN good (runs standalone,
+produces a valid file). The failure is in the handler's run-and-verify, and it was
+UNDIAGNOSABLE because the generator subprocess's stdout/stderr was discarded — only a
+5-line tail reached the user on a non-zero exit, and NOTHING at all on the rc==0
+"output file is missing" branch. ("[ERR 1]" is just _fail()'s generic terminal_done(1)
+— NOT the script's exit code.) Extra clue: docx worked on a different PC and broke after
+the project was transferred to this machine (~Apr 2026) — so a machine-specific path
+(OneDrive-redirected Documents, stale username, baked path) is in play.
+Fix A (diagnostics only — no behaviour change to the happy path): on EVERY failure
+branch (timeout / non-zero exit / missing-file) the handler now logs to the debug log:
+  - the exit code, target_path, its resolved form, and whether it exists;
+  - the path the SCRIPT said it saved to (parsed from the script's "OK: <path>" line)
+    and whether THAT exists / matches target_path — the key path-divergence signal;
+  - machine context: OneDrive redirect (under_onedrive + $OneDrive), home, tmp cwd,
+    and which python (sys.executable) ran the script;
+  - the FULL subprocess stdout+stderr (not a 5-line tail).
+The user-facing message is also richer: the missing-file case now says whether the
+script saved to a DIFFERENT path than expected, names both paths, and shows a 12-line
+tail, ending with "(full subprocess output in debug log)".
+
+PHYSICAL TEST (this surfaces the REAL cause of the original failure):
+  1. Ensure debug_mode is ON (config/jarvis.json "debug_mode": true) so [doc] debug
+     lines print.
+  2. Re-run the failing request: "create a word document in my tests/ folder: a
+     detailed 2-page report on the history of artificial intelligence".
+  3. If it FAILS again, read the terminal/debug log for the "--- generator diagnostics
+     (missing-file) ---" block. PASS: you can now see the script's "OK:/ERR:" line, the
+     actual saved path, the OneDrive flag, and the full traceback — enough to tell
+     whether Sonnet echoed a wrong path OR an environment path issue. (This is the
+     evidence that decides Fix B's exact form.)
+  4. If it SUCCEEDS, the happy path is unchanged — the file lands in tests/ as before.
+
+Code-level proof:
+  uv run pytest -q tests/test_document_diagnostics.py
+  -> _script_reported_path pulls the script's "OK: <path>" (last one wins; None when
+     absent); _log_run_diagnostics returns the reported path, logs machine context
+     (OneDrive, python) and the FULL output (traceback line survives — not truncated),
+     and handles the no-output case.
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

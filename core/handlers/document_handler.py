@@ -556,6 +556,82 @@ def _generate_code(
     return code, ""
 
 
+# ── Failure diagnostics (Fix A) ───────────────────────────────────────────────
+# The generator subprocess used to discard its stdout/stderr (only a 5-line tail
+# ever reached the user, and nothing was logged), so every docx failure was a
+# black box — including the "output file is missing" case where the process
+# exits 0 yet no file appears. These helpers surface WHERE the script actually
+# wrote, the full subprocess output, and machine context (resolved path,
+# OneDrive redirection, cwd, python) — because the same handler can succeed on
+# one machine and fail on another after a project transfer.
+
+def _script_reported_path(output_lines: list[str]) -> str | None:
+    """Pull the path the script said it saved to.
+
+    The bundled skill scripts print ``OK: <OUTPUT_PATH>`` after a successful
+    ``doc.save(...)``. Recovering that string is the key signal for a path
+    divergence: if the script reports a save path different from the handler's
+    ``target_path`` (e.g. Sonnet echoed a slightly different path, or a
+    machine-specific redirect), that's the bug.
+    """
+    for line in reversed(output_lines):
+        s = line.strip()
+        if s.upper().startswith("OK:"):
+            return s[3:].strip()
+    return None
+
+
+def _log_run_diagnostics(
+    target_path: Path,
+    tmp_path: Path,
+    rc: int,
+    output_lines: list[str],
+    *,
+    where: str,
+) -> str | None:
+    """Dump everything needed to diagnose a generator failure to the debug log.
+
+    Returns the script-reported save path (if any) so callers can enrich the
+    user-facing message. Full subprocess output goes to the log only — never the
+    spoken/UI message — so a 200-line traceback can't end up read aloud.
+    """
+    reported = _script_reported_path(output_lines)
+    onedrive = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer") or ""
+    try:
+        resolved = str(target_path.resolve())
+    except (OSError, ValueError, RuntimeError):
+        resolved = "(unresolvable)"
+    under_onedrive = bool(onedrive) and str(target_path).lower().startswith(onedrive.lower())
+
+    _dbg("doc", f"--- generator diagnostics ({where}) ---")
+    _dbg("doc", f"exit code       : {rc}")
+    _dbg("doc", f"target_path     : {target_path}")
+    _dbg("doc", f"target resolved : {resolved}")
+    _dbg("doc", f"target exists   : {target_path.exists()}")
+    _dbg("doc", f"script saved to : {reported or '(no OK: line — script never reported a save)'}")
+    if reported:
+        try:
+            rp = Path(reported)
+            _dbg("doc", f"reported exists : {rp.exists()}  | matches target: {rp.resolve() == target_path.resolve()}")
+        except (OSError, ValueError, RuntimeError):
+            _dbg("doc", "reported exists : (path unusable)")
+    _dbg("doc", f"OneDrive redirect: under_onedrive={under_onedrive}  (OneDrive={onedrive or 'unset'})")
+    _dbg("doc", f"home={Path.home()}  tmp_cwd={tmp_path}  python={sys.executable}")
+    try:
+        siblings = sorted(p.name for p in target_path.parent.glob(f"*{target_path.suffix}"))
+        _dbg("doc", f"{target_path.suffix} files already in target dir: {siblings or '(none)'}")
+    except OSError:
+        pass
+    _dbg("doc", "--- full generator output (stdout+stderr) ---")
+    if output_lines:
+        for line in output_lines:
+            _dbg("doc", f"  {line}")
+    else:
+        _dbg("doc", "  (no subprocess output captured)")
+    _dbg("doc", "--- end generator output ---")
+    return reported
+
+
 # ── Soft-isolated subprocess (R2-24: AST + proxy; optional Windows job cap) ───
 def _run_generator(code: str, target_path: Path) -> dict:
     output_lines: list[str] = []
@@ -617,12 +693,15 @@ def _run_generator(code: str, target_path: Path) -> dict:
         reader.join(timeout=3)
 
         if timed_out:
+            _log_run_diagnostics(target_path, tmp_path, -1, output_lines, where="timeout")
             return _fail(f"Generator timed out after {_GEN_TIMEOUT_S}s.")
 
         rc = proc.returncode if proc.returncode is not None else -1
         if rc != 0:
-            tail = "\n".join(output_lines[-5:]) or "(no output)"
-            return _fail(f"Generator failed (exit {rc}):\n{tail}")
+            _log_run_diagnostics(target_path, tmp_path, rc, output_lines, where="nonzero-exit")
+            # Surface a longer tail than before (full output is in the debug log).
+            tail = "\n".join(output_lines[-12:]) or "(no output)"
+            return _fail(f"Generator failed (exit {rc}) — full output in debug log:\n{tail}")
 
         # Recovery: script may have written to cwd (tmp) instead of target_path.
         if not target_path.exists():
@@ -635,7 +714,24 @@ def _run_generator(code: str, target_path: Path) -> dict:
                     pass
 
         if not target_path.exists():
-            return _fail("Script ran but the output file is missing.")
+            # rc was 0 yet no file — the black-box case. Log WHERE the script
+            # said it saved (OK: line), the full output, and machine context so
+            # the next run is diagnosable instead of just "[ERR 1]".
+            reported = _log_run_diagnostics(
+                target_path, tmp_path, rc, output_lines, where="missing-file"
+            )
+            tail = "\n".join(output_lines[-12:]) or "(no script output)"
+            if reported and Path(reported).resolve() != target_path.resolve():
+                detail = (
+                    f"Script ran (exit 0) but saved to a DIFFERENT path than expected.\n"
+                    f"expected: {target_path}\nscript saved: {reported}"
+                )
+            else:
+                detail = (
+                    f"Script ran (exit 0) but no file appeared at:\n{target_path}\n"
+                    f"script output tail:\n{tail}"
+                )
+            return _fail(detail + "\n(full subprocess output in debug log)")
 
         try:
             size = target_path.stat().st_size
