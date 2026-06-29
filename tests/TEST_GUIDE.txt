@@ -2828,6 +2828,47 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§35 — large generations no longer time out at the brain (15s ceiling)
+-----------------------------------------------------------------------
+Background: asking JARVIS to generate a big file/script (e.g. the ~5k-char "Mini File
+Search Engine" challenge) returned "I couldn't reach my brain right now — try that
+again." with a clean red/UNKNOWN row. The brain WAS reachable — the model was still
+GENERATING when a flat 15s timeout fired and cut it off. Small commands (2-4s) were
+fine; only large-output requests blew the ceiling.
+Root cause: the brain call (core/brain.py) is NON-streaming, so the whole response
+arrives only after the model finishes — no bytes flow during generation, so httpx's
+READ timeout behaves like a total generation deadline. timeout=15 (a bare float) set
+connect/read/write/pool ALL to 15s, and the SDK retried the timeout twice → a doomed
+big generation re-ran 3× (~45s) before surfacing api_timeout.
+Fix: _api_timeout_for(max_out) builds a SPLIT httpx.Timeout — connect/write/pool stay
+~10s (a dead network still fast-fails), READ scales off the SAME max_out the brain
+already computes via _infer_max_output_tokens (2048->20s, 8192->60s, 16384->90s). The
+big-content path (max_out > 2048) also caps SDK retries to 0 (no 3× regeneration); fast
+routing calls keep the default retries. Applied at BOTH the primary call and the
+529-overload retry block.
+
+PHYSICAL TEST — the exact repro:
+  1. Ask for a large file, e.g. "create a python file mini_search.py in tests/ that
+     implements a mini file search engine: recursive indexing, ranking, and a CLI"
+     -> confirm.
+     PASS (fixed): it COMPLETES and writes real code (used to fail with "couldn't
+     reach my brain" after ~45s).
+  2. A normal quick command still snaps back fast: "what time is it" -> instant.
+  3. (Negative, optional) Pull your network cable / disable Wi-Fi, then issue any
+     command. PASS: it still fails FAST (~10s connect), not a 90s hang — the long
+     budget is on READ only, not connect.
+  Cleanup: delete tests/mini_search.py if created.
+
+Code-level proof:
+  uv run pytest -q tests/test_brain_timeout.py
+  -> read scales with budget (20/60/90s); connect/write/pool stay 10s at every budget;
+     big-prompt path gets read=90s AND caps retries (with_options(max_retries=0)); short
+     command keeps read=20s and does NOT cap retries; APITimeoutError still surfaces the
+     api_timeout fallback; a 529 mid-generation retries with the SAME scaled timeout at
+     both call sites (never falls back to the old 15s).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

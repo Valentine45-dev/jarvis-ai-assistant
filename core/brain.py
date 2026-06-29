@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
+import httpx
 
 from config.settings import config
 from core import log as _log
@@ -199,6 +200,31 @@ def _infer_max_output_tokens(user_msg: str) -> int:
     return 2048
 
 
+def _api_timeout_for(max_out: int) -> httpx.Timeout:
+    """Per-operation HTTP timeout scaled to the output budget.
+
+    The brain call is NON-streaming, so the whole response body arrives only
+    after the model finishes generating — no bytes flow during generation. That
+    makes httpx's READ timeout behave like a total generation deadline. A flat
+    15 s therefore cut off any large generation (e.g. a ~5 k-char create_file)
+    mid-write, surfacing as the ``api_timeout`` fallback even though the brain
+    was perfectly reachable.
+
+    Fix: keep connect/write/pool short so a genuinely dead network still fails
+    fast, but scale the READ timeout off the SAME budget signal
+    (``_infer_max_output_tokens``) we already use to size ``max_tokens`` — no
+    intent knowledge needed (the intent IS the call's output). Quick routing
+    calls keep a ~20 s ceiling; generation-heavy calls get the room they need.
+    """
+    if max_out >= 16384:
+        read = 90.0
+    elif max_out >= 8192:
+        read = 60.0
+    else:
+        read = 20.0
+    return httpx.Timeout(read, connect=10.0, write=10.0, pool=10.0)
+
+
 def _parse_claude_json_raw(raw: str) -> dict[str, Any]:
     """Parse JSON from Claude; try whole string, then first object substring."""
     raw = raw.strip()
@@ -374,13 +400,22 @@ def ask_claude(
     #    ``max_tokens`` must be large for ``file_operation`` / ``create_file``:
     #    a full JSON with escaped multiline ``content`` easily exceeds 1024 tokens.
     max_out = _infer_max_output_tokens(user_msg)
+    api_timeout = _api_timeout_for(max_out)
+    # A long generation that trips the READ timeout would otherwise be retried
+    # twice (SDK default max_retries=2), re-running the doomed generation 3×
+    # (~45 s) before the user sees the failure. On the big-content path one shot
+    # is the right call — a 90 s read timeout retried is brutal. Fast routing
+    # calls keep the SDK default (a timeout there is more likely a transient blip).
+    brain_client = _get_client()
+    if max_out > 2048:
+        brain_client = brain_client.with_options(max_retries=0)
     raw = ""
     try:
         # get_prompt_messages() (not get_messages()) drops redacted `<N chars>`
         # placeholders from replayed assistant turns, so the model can't copy one into
         # a new create_file's content and write the placeholder to disk (data loss).
         prior_messages = memory.get_prompt_messages() if use_memory else []
-        msg = _get_client().messages.create(
+        msg = brain_client.messages.create(
             model=config.claude_model,
             max_tokens=max_out,
             # R2-29 dropped this 0.8 → 0.5 for routing-JSON stability, but the
@@ -392,11 +427,13 @@ def ask_claude(
             # first call of a fresh install. The JSON-parse fallback below
             # catches any rare structure drift at the higher temperature.
             temperature=sampling_temperature,
-            # R2-8: hard upper bound on the API round-trip so an Anthropic
-            # stall can't hang the entire voice pipeline indefinitely.
-            # 15s comfortably covers normal completions (median ~1–2s); a
-            # genuine stall past 15s gets _fallback("api_timeout", ...).
-            timeout=15,
+            # R2-8: hard upper bound on the API round-trip so an Anthropic stall
+            # can't hang the voice pipeline indefinitely. Split per-operation
+            # timeout (see _api_timeout_for): connect/write/pool stay ~10 s so a
+            # dead network fails fast, while READ scales with max_out so a large
+            # create_file generation isn't cut off mid-write on this non-streaming
+            # call. A genuine stall still gets _fallback("api_timeout", ...).
+            timeout=api_timeout,
             system=[
                 {
                     "type": "text",
@@ -459,11 +496,11 @@ def ask_claude(
             import time as _time
             _time.sleep(1.5)
             try:
-                msg = _get_client().messages.create(
+                msg = brain_client.messages.create(
                     model=config.claude_model,
                     max_tokens=max_out,
                     temperature=sampling_temperature,
-                    timeout=15,
+                    timeout=api_timeout,
                     system=[
                         {
                             "type": "text",
