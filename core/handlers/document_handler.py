@@ -117,19 +117,38 @@ _IMPORT_ALLOWLIST: frozenset[str] = frozenset({
 # tier infrastructure in place because confirm-on-warn is still a useful escape
 # hatch if Sonnet ever emits something odd that should be human-reviewed.
 _IMPORT_WARN: frozenset[str] = frozenset()
-_DANGEROUS_NAMES: frozenset[str] = frozenset({
-    # Bytecode / dynamic execution
+# Call-policy (Fix B): three intent-specific tiers, receiver-aware — replacing a
+# single receiver-blind name set. The old set blocked any call whose bare name OR
+# attribute name matched, which over-blocked innocent python-docx idioms
+# (`setattr(section, 'left_margin', Inches(1))`) and — worse — `re.compile(...)`
+# (attr "compile"), even though `re` is allowlisted precisely so Sonnet can use
+# it. The non-determinism of Sonnet's output is what made this intermittent.
+
+# Real builtins for dynamic code execution — block ONLY as a bare `Name` call.
+# Deliberately NOT matched as attributes, so `re.compile(...)` is fine. The rare
+# `__builtins__.compile(...)` form is still caught by the guarded-receiver rule
+# in _validate_script (receiver root is a powerful module).
+_DANGEROUS_BUILTINS: frozenset[str] = frozenset({
     "eval", "exec", "compile", "__import__",
-    # R2-3: process/shell exits via the `os` module — which IS on the import
-    # allowlist (the generator legitimately needs os.path / os.makedirs).
-    # The AST walker blocks attribute calls by `fn.attr`, so e.g.
-    # `os.system("rm -rf")` gets caught here (fn.attr == "system").
+})
+
+# Process / shell spawn via the `os` module (allowlisted for os.path/makedirs).
+# Blocked as a `Name` OR an `Attribute`, catching both `os.system(...)` and
+# `from os import system; system(...)`. None of these collide with docx idioms.
+_DANGEROUS_OS_CALLS: frozenset[str] = frozenset({
     "system", "popen", "execv", "execvp", "execve", "spawnv",
     "fork", "forkpty",
-    # Dynamic attribute access defeats name-based blocking
-    # (`getattr(os, "sys"+"tem")("...")`). Generator scripts use named
-    # attributes only — no legitimate reason for dynamic lookup.
-    "getattr", "setattr",
+})
+
+# getattr/setattr/delattr are allowed on ORDINARY objects (the docx idiom
+# `setattr(section, 'left_margin', Inches(1))`), but blocked when the FIRST
+# argument reaches into a powerful module — `getattr(os, "sys"+"tem")(...)` is
+# the dynamic-access escape that defeats name-based blocking. Receiver-aware:
+# the guarded set is what distinguishes "safe object" from "escape hatch".
+_DYNAMIC_ACCESS_FUNCS: frozenset[str] = frozenset({"getattr", "setattr", "delattr"})
+_GUARDED_DYNAMIC_TARGETS: frozenset[str] = frozenset({
+    "os", "sys", "builtins", "__builtins__",
+    "importlib", "subprocess", "ctypes", "socket",
 })
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -248,6 +267,26 @@ def _strip_code_fences(text: str) -> str:
     return s.strip()
 
 
+def _attr_root(node: ast.AST) -> str | None:
+    """Leftmost `Name` id of a (possibly dotted) attribute/name chain.
+
+    `os` → "os"; `os.path` → "os"; `os.path.join` → "os". Returns None when the
+    chain doesn't bottom out in a plain Name (e.g. a call or subscript)."""
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        cur = cur.value
+    return cur.id if isinstance(cur, ast.Name) else None
+
+
+def _targets_guarded_module(call: ast.Call) -> bool:
+    """True when a getattr/setattr/delattr call's first argument references a
+    powerful module (os, sys, …) — i.e. a dynamic-access escape, not an ordinary
+    object. `getattr(os, 'system')` → True; `setattr(section, 'x', v)` → False."""
+    if not call.args:
+        return False
+    return _attr_root(call.args[0]) in _GUARDED_DYNAMIC_TARGETS
+
+
 def _validate_script(code: str) -> tuple[list[str], list[str]]:
     """AST-walk the script. Returns (block_reasons, warn_reasons).
     A non-empty block list is a hard refusal; warn triggers a confirm card."""
@@ -280,10 +319,35 @@ def _validate_script(code: str) -> tuple[list[str], list[str]]:
                 block.append(f"from {node.module} import … (not on allowlist)")
         elif isinstance(node, ast.Call):
             fn = node.func
-            if isinstance(fn, ast.Name) and fn.id in _DANGEROUS_NAMES:
-                block.append(f"call to {fn.id}()")
-            elif isinstance(fn, ast.Attribute) and fn.attr in _DANGEROUS_NAMES:
-                block.append(f"call to .{fn.attr}()")
+            # Callable's name, whether `foo(...)` or `obj.foo(...)`.
+            if isinstance(fn, ast.Name):
+                call_name: str | None = fn.id
+            elif isinstance(fn, ast.Attribute):
+                call_name = fn.attr
+            else:
+                call_name = None
+
+            if call_name in _DANGEROUS_OS_CALLS:
+                # os.system(...) AND `from os import system; system(...)`.
+                block.append(f"call to {call_name}()")
+            elif isinstance(fn, ast.Name) and call_name in _DANGEROUS_BUILTINS:
+                # eval/exec/compile/__import__ as real builtins — NOT re.compile.
+                block.append(f"call to {call_name}()")
+            elif (
+                isinstance(fn, ast.Attribute)
+                and call_name in _DANGEROUS_BUILTINS
+                and _attr_root(fn.value) in _GUARDED_DYNAMIC_TARGETS
+            ):
+                # Rare `__builtins__.compile(...)` escape — caught here, while
+                # `re.compile(...)` (receiver root "re", not guarded) passes.
+                block.append(f"call to {call_name}() on a restricted module")
+            elif (
+                isinstance(fn, ast.Name)
+                and call_name in _DYNAMIC_ACCESS_FUNCS
+                and _targets_guarded_module(node)
+            ):
+                # getattr(os, 'system')(...) escape — but setattr(section, …) is fine.
+                block.append(f"dynamic {call_name}() into a restricted module")
     return block, warn
 
 
@@ -893,9 +957,14 @@ def _document_creation_sync(action: str, params: dict) -> dict:
             hint = " — the generator imported a module outside the allowlist; this is a generator bug, not user input."
         else:
             hint = ""
+        # Plain-language, user-facing reason (Fix B #4). _fail streams this to
+        # the terminal panel AND returns it as the spoken/responder error, so the
+        # user sees WHY a doc was blocked — not a bare "[ERR 1]". Avoid a double
+        # "try again" when the hint already suggests it.
+        retry = "" if "again" in hint else " Try again — the generated draft varies between runs."
         return _fail(
-            f"Script blocked — unsafe call detected: {reasons}{hint} "
-            "The document could not be generated."
+            f"Couldn't create the document: the generated script used a pattern "
+            f"the sandbox blocks ({reasons}).{hint}{retry}"
         )
     if warn:
         prompt = (

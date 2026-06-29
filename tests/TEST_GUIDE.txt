@@ -2913,6 +2913,56 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§37 — doc-generator validator calibrated (the REAL cause of §36) (Fix B)
+-----------------------------------------------------------------------
+Background: Fix A (§36) surfaced the true cause of the docx failures — the AST validator
+(_validate_script) HARD-BLOCKED the generated script over an innocent line:
+  for attr in ('left_margin','right_margin','top_margin','bottom_margin'):
+      setattr(section, attr, Inches(1))
+"✗ Script blocked — unsafe call detected: call to setattr()". The script never ran → no
+file anywhere. It was intermittent ("worked on the old PC") because Sonnet's output
+varies — sometimes setattr, sometimes not. It was never the machine.
+Root cause = a CLASS bug: the validator blocked any call whose bare name OR attribute
+name matched one deny-set, receiver-blind. Proven siblings (same trap): getattr(...) and
+— worse — re.compile(...) (attr "compile"), even though `re` is allowlisted so Sonnet
+CAN use it. Fix setattr alone and the next re.compile/getattr puts us right back here.
+Fix B — three intent-specific tiers, receiver-aware (keeps the sandbox a real safety net):
+  - _DANGEROUS_BUILTINS {eval,exec,compile,__import__} — blocked as a bare Name call
+    ONLY (so re.compile passes); the rare __builtins__.compile(...) form is still caught.
+  - _DANGEROUS_OS_CALLS {system,popen,execv*,fork*} — blocked as Name OR Attribute
+    (catches os.system(...) AND `from os import system; system(...)`).
+  - getattr/setattr/delattr — ALLOWED on ordinary objects; BLOCKED only when the first
+    arg reaches into a guarded powerful module (os/sys/builtins/importlib/subprocess/
+    ctypes/socket). `setattr(section,'left_margin',…)` passes; `getattr(os,'system')`
+    stays blocked. (Accepted residual, disclosed: an aliased escape like
+    `import os as o; getattr(o,'system')` isn't caught — needs an adversarial generator;
+    network is proxy-blocked, subprocess runs with no args / temp cwd / memory cap.)
+Also: a one-line nudge added to all four skills/*/SKILL.md ("set attributes directly,
+never via setattr/getattr") so Sonnet rarely even exercises the guard; and the block
+message is now plain-language + a retry hint, streamed to the panel via _fail (Fix A's
+diagnostics untouched).
+
+PHYSICAL TEST (the real gate — green tests proved nothing here until Fix A):
+  1. "create a word document in my documents folder: a short one-page summary of how
+     neural networks work"  -> confirm -> PASS: a real .docx lands in Documents (this
+     is the exact doc that failed on the setattr block).
+  2. "create a word document in my tests/ folder: a detailed 2-page report on the
+     history of artificial intelligence"  -> confirm -> PASS: real .docx in tests/.
+  3. Regression sanity: if a generation ever IS blocked, the panel shows a plain-English
+     reason ("...the generated script used a pattern the sandbox blocks (...). Try
+     again..."), not a bare "[ERR 1]".
+
+Code-level proof:
+  uv run pytest -q tests/test_document_validator.py
+  -> PASS set: setattr(section,…), the VERBATIM margin loop, getattr(obj,'x',None),
+     delattr(obj,…), re.compile, an innocent docx script.
+     BLOCK set: eval/exec/compile/__import__ builtins; os.system/os.popen and
+     `from os import system; system()`; getattr(os,'system') / setattr(sys,…) /
+     delattr(os,…) escapes; __builtins__.compile; import socket/subprocess; a
+     non-allowlisted import (pandas).
+
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

@@ -26,6 +26,12 @@ license: Proprietary. LICENSE.txt has complete terms
 >
 > Same rule for `importlib`, `getattr(module, 'name')`, and any other
 > dynamic-import trick. If you need a symbol, import it at the top.
+>
+> **Set object attributes directly, never via `setattr`/`getattr`.** Write
+> `section.left_margin = Inches(1)` — not `setattr(section, 'left_margin', Inches(1))`.
+> The sandbox allows `setattr`/`getattr` on plain objects, but direct assignment
+> is clearer and sidesteps the guard entirely; reserve a loop only when you truly
+> must, and even then assign by name.
 
 # Requirements for Outputs
 
