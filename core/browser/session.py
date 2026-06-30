@@ -479,6 +479,44 @@ class _SessionBase:
             nxt = f" — now on {self._active}" if self._active else ""
             return _ok(f"Closed {eng}{nxt}")
 
+    def close_all_engines(self) -> dict:
+        """Close EVERY open engine, leaving nothing running (concurrent model).
+
+        The brain routes plural/all browser-close requests here ("close the
+        browsers", "close the two I just opened") so it never has to NAME or
+        COUNT the engines: this enumerates the live registry (``self._sessions`` —
+        the single source of truth) at run time, which makes it immune to a brain
+        miscount or wrong-engine guess. Closing all also releases the shared
+        Playwright driver, exactly like the last ``close_engine``. Friendly no-op
+        (not an error) when nothing is open. Must run on the driver's thread.
+        """
+        with self._lock:
+            names = list(self._sessions.keys())
+            if not names:
+                return _ok("No browsers were open.")
+            for sess in list(self._sessions.values()):
+                for obj in (sess.page, sess.context):
+                    try:
+                        if obj is not None:
+                            obj.close()
+                    except Exception:
+                        pass
+            try:
+                if self._pw is not None:
+                    self._pw.stop()
+            except Exception:
+                pass
+            self._sessions = {}
+            self._active = ""
+            self._pw = None
+            if len(names) == 1:
+                pretty = names[0]
+            elif len(names) == 2:
+                pretty = f"{names[0]} and {names[1]}"
+            else:
+                pretty = ", ".join(names[:-1]) + f", and {names[-1]}"
+            return _ok(f"Closed {pretty}.")
+
     def stop(self) -> None:
         """Close ALL engines and the driver. Safe to call even when not started."""
         with self._lock:

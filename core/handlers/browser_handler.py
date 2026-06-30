@@ -30,12 +30,17 @@ def _is_vague_selector(selector: str) -> bool:
 def _handle_browser_automation(action: str, params: dict) -> dict:
     from core.browser import browser
 
-    # close_engine must run BEFORE the auto-start guard — closing a browser
-    # should never first launch one. Closes one engine, leaves the rest alive.
+    # close_engine / close_all_engines must run BEFORE the auto-start guard —
+    # closing a browser should never first launch one.
     if action == "close_engine":
         engine = (params.get("browser") or params.get("engine")
                   or params.get("target") or "").strip()
         return browser.close_engine(engine)
+
+    # close_all_engines: the executor enumerates the live engine registry at run
+    # time, so the brain never has to name/count engines (immune to a wrong guess).
+    if action == "close_all_engines":
+        return browser.close_all_engines()
 
     if not browser.is_ready:
         browser.start()

@@ -3043,6 +3043,38 @@ Code-level proof (Part B is deterministic; Part A is prompt-driven -> physical o
      content; the fast-path routing tests stay green (workflow_nlu.py untouched).
 
 -----------------------------------------------------------------------
+§41 — close_all_engines: executor enumerates live engines (no brain guess)
+-----------------------------------------------------------------------
+Background (sweep find #2): "close the two browsers you just opened" (Chrome+Firefox
+live) -> the BRAIN guessed [close firefox, close edge], closed firefox OK, then FAILED
+on "edge isn't open" (edge was never open). The executor tracks the live set perfectly
+(_SessionBase._sessions); the brain had zero visibility and guessed a default pair.
+Fix (Option A): new browser_automation action `close_all_engines` — the executor
+enumerates self._sessions at run time and closes them all (no naming, no counting),
+immune to a brain miscount. Plural/all/quantified phrasing routes here; a SINGULAR
+"close the browser" still routes to close_engine (active engine). Friendly no-op (not an
+error) when none open. Deferred: injecting open-engine state into brain context (Option
+B) — only needed for "close some-but-not-all named" subsets, not paid for now.
+
+PHYSICAL TEST (routing is model-driven -> verify live):
+  1. Open Chrome, then "switch to firefox and go to github.com" (Chrome + Firefox both
+     live). Then: "close the two browsers you just opened" -> PASS: BOTH close, response
+     names them, NO "edge isn't open", no guessed engine.
+  2. "close all browsers" / "close both browsers" / "close every browser" -> same: all close.
+  3. Ambiguous singular: with two engines open, "close the browser" -> closes the ACTIVE
+     one only (close_engine), NOT all.
+  4. No-op: with nothing open, "close the browsers" -> "No browsers were open." (friendly,
+     no red FAIL rail).
+  5. Single named still works: "close edge" -> close_engine, others stay alive.
+
+Code-level proof (executor + routing are deterministic; brain phrasing is physical):
+  uv run pytest -q tests/test_browser_close_engines.py
+  -> close_all_engines closes every open engine (registry emptied, _active cleared) and
+     names them; single-engine case has no " and "; zero-engine case is a success no-op
+     ("No browsers were open"); the handler routes close_all_engines to it and does NOT
+     auto-start a browser first (close before the auto-start guard).
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

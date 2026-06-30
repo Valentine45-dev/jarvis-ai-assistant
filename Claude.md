@@ -562,12 +562,16 @@ Control Chrome via a persistent Playwright session. JARVIS owns the browser tab 
 - `hard_refresh` — Reload bypassing the HTTP cache (Ctrl+Shift+R equivalent). Use for *"hard refresh"*, *"hard reload"*, *"force reload"*, *"clear cache and reload"*. No parameters.
 - `list_tabs` — List every open tab with index, host, and title; the active tab is marked with `*`. Use for *"what tabs do I have open?"*, *"list my browser tabs"*, *"show open tabs"*. No parameters.
 - `close_engine` — Close ONE controlled **browser engine** (Chrome/Edge/Firefox), leaving the others alive. Use for *"close edge"*, *"close firefox"*, *"close the chrome browser"*, *"shut the edge browser"*. Set `browser` to `chrome` | `edge` | `firefox`; omit it to close the **active** engine (*"close the browser"*). The active engine then falls back to a remaining one. **Routing — do not confuse three things:** (1) closing a **browser engine** JARVIS controls → `close_engine` (this); (2) closing a single **tab/site** inside the browser (*"close the youtube tab"*) → `close_tab`; (3) `close_app`/`force_quit` is for force-killing an unrelated desktop app's process — **don't** use it to close a controlled browser engine (it would kill every window of that browser, not just JARVIS's). When the user says *"close \<chrome|edge|firefox\>"* meaning the browser, use `close_engine`.
+- `close_all_engines` — Close **every** open controlled browser engine at once. Use for **plural / quantified / all** browser-close requests: *"close the browsers"*, *"close both browsers"*, *"close all browsers"*, *"close every browser"*, *"close the two browsers you just opened"*, *"shut down all the browsers"*. **No parameters** — JARVIS enumerates the live engines itself at run time, so you must **NOT** name or count them (do **not** emit a multi-step workflow of `close_engine` calls guessing which engines are open — that is the bug this replaces; let the executor enumerate). Friendly no-op when none are open ("No browsers were open."). 
+  - **Ambiguous SINGULAR — *"close the browser"* (singular) → `close_engine` with no `browser` (the ACTIVE engine), NOT `close_all_engines`.** A singular "the browser" means one — the focused/active one — even when several engines are open. Reserve `close_all_engines` for explicit plural/all/quantified phrasing.
 
 **Parameters (close_engine):**
 
 ```json
 { "browser": "string — chrome|firefox|edge (omit to close the active engine)" }
 ```
+
+**Parameters (close_all_engines):** none — `{}`. Never pass engine names; the executor closes whatever is actually live.
 
 **Parameters:**
 
@@ -1957,6 +1961,24 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "requires_confirmation": false
 }
 ```
+
+-----
+
+**Input:** `"Close the two browsers you just opened"` (plural — close them ALL; do NOT name/count engines, the executor enumerates the live set)
+
+```json
+{
+  "intent": "browser_automation",
+  "action": "close_all_engines",
+  "parameters": {},
+  "confidence": 0.95,
+  "response": "Closing every browser I have open.",
+  "hud_status": "BROWSER CTRL",
+  "requires_confirmation": false
+}
+```
+
+*(Contrast: singular **"close the browser"** → `close_engine` with no `browser` (active engine). Only plural/all/quantified phrasing routes to `close_all_engines`.)*
 
 -----
 
