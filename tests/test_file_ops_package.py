@@ -171,6 +171,50 @@ def test_create_file_normal_content_still_writes(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "about 50 chars here"
 
 
+# ── Fix B: an empty create_file is NEVER silent (card note + post-write flag) ──
+# The model sometimes emits create_file with no `content` for a code-file request
+# ("create a python file that prints fizzbuzz"), writing a 0-byte file. Part A
+# (CLAUDE.md) tells the model to inline content; Part B is the executor visibility
+# net so a miss (or an auto-confirmed/workflow empty create) is always seen.
+
+def test_empty_create_flags_card_and_post_write(tmp_path: Path, monkeypatch) -> None:
+    import core.handlers.file_ops.create as create_mod
+    logs: list[str] = []
+    monkeypatch.setattr(create_mod, "_tlog", lambda msg: logs.append(msg))
+
+    target = tmp_path / "empty.py"          # has an extension → a real file, not a dir
+    r = _handle_file_operation("create_file", {"path": str(target), "content": ""})
+    assert r.get("needs_confirmation")
+    # Layer 1 — the confirmation card flags the emptiness BEFORE the write.
+    assert "EMPTY file" in r["output"]
+
+    out = resolve_confirmation("yes")
+    assert out["success"] is True
+    # Intentional empties are still allowed (we flag, never block).
+    assert target.exists() and target.stat().st_size == 0
+    # Layer 2 — the post-write path emits a distinct ⚠ EMPTY line (fires even when
+    # the card is auto-confirmed), not a plain ✓ that reads as success.
+    assert any("created EMPTY" in m for m in logs)
+    assert not any(m.startswith("✓ created") for m in logs)
+
+
+def test_content_create_has_no_empty_flag(tmp_path: Path, monkeypatch) -> None:
+    import core.handlers.file_ops.create as create_mod
+    logs: list[str] = []
+    monkeypatch.setattr(create_mod, "_tlog", lambda msg: logs.append(msg))
+
+    target = tmp_path / "real.py"
+    r = _handle_file_operation("create_file", {"path": str(target), "content": "print('hi')\n"})
+    assert r.get("needs_confirmation")
+    assert "EMPTY file" not in r["output"]          # no false flag on real content
+
+    out = resolve_confirmation("yes")
+    assert out["success"] is True
+    assert target.read_text(encoding="utf-8") == "print('hi')\n"
+    assert not any("created EMPTY" in m for m in logs)
+    assert any(m.startswith("✓ created") for m in logs)
+
+
 def test_append_file_refuses_redacted_placeholder(tmp_path: Path) -> None:
     f = tmp_path / "log.txt"
     f.write_text("existing\n", encoding="utf-8")

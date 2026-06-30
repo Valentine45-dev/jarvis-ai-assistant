@@ -106,6 +106,11 @@ def _op_create_file(params, *, path, raw_path, confirmed):
         folder_display = str(parent)
 
     lines = [f"File:  {target_display}", f"Folder: {folder_display}"]
+    if not content_stripped:
+        # Visibility net (Fix B): if the model emitted create_file with no content
+        # for a file that has an extension (e.g. fizzbuzz.py), the user is about to
+        # get a 0-byte file. Surface it on the card so it's a choice, not a surprise.
+        lines.append("Note: this will create an EMPTY file (no content).")
     if not parent.exists():
         lines.append(
             "Note: that folder is not on disk yet — I can create it when you confirm."
@@ -121,10 +126,28 @@ def _op_create_file(params, *, path, raw_path, confirmed):
                 captured_parent.mkdir(parents=True, exist_ok=True)
             captured_path.write_text(content, encoding="utf-8")
             try:
-                size = _format_human_size(captured_path.stat().st_size)
+                raw_size = captured_path.stat().st_size
+                size = _format_human_size(raw_size)
             except OSError:
+                raw_size = None
                 size = "?"
-            _tlog(f"✓ created — {captured_path.name} ({size})")
+            # Visibility net (Fix B): an empty file must NEVER be written silently —
+            # even when the confirmation card was skipped (auto_confirm / workflow
+            # auto-confirm). Flag the 0-byte write with a ⚠ terminal line AND a toast
+            # so an accidental empty create is always seen. Intentional empties
+            # ("create an empty file log.txt") read accurately here too.
+            if raw_size == 0:
+                _tlog(f"⚠ created EMPTY — {captured_path.name} (0 B)")
+                try:
+                    from core.signals import signals
+                    signals.notice.emit(
+                        f"Created {captured_path.name} — 0 bytes (empty file).",
+                        "info",
+                    )
+                except Exception:
+                    pass
+            else:
+                _tlog(f"✓ created — {captured_path.name} ({size})")
             return _ok(f"Created: {captured_path.name}")
         except PermissionError:
             _tlog(f"✗ permission denied: {captured_path}")

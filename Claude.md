@@ -617,6 +617,8 @@ File system operations — create, read, move, delete files.
 
 - `create_directory` — Create a **folder** only (and parent folders as needed). Use for *“create a folder …”*, *“make a directory …”*, *“new folder …”*. Same in-app confirmation as `create_file`. **Do not** use `create_file` for folder-only requests.
 - `create_file` — Create a new **file** (executor shows a **path confirmation** in the UI before writing; do **not** set `requires_confirmation` in JSON for this — the shell handles it). If the user asked for a **folder** but you mis-routed to `create_file` with **empty `content`** and a path **without** a file extension, the executor treats it as **`create_directory`** — but **prefer `create_directory` + `path`** explicitly so JSON is unambiguous.
+
+  **`content` is REQUIRED whenever the user describes what the file should contain or do.** If the request describes the file's **content or behaviour** — *"a python file that prints fizzbuzz"*, *"a script that computes primes"*, *"a CLI todo app with SQLite"*, *"a file with the following…"*, *"write me X that does Y"* — you **MUST generate the full file body yourself and put it in `content`** in the **same** `create_file` call. **Never** create an empty file expecting a follow-up — that makes JARVIS look broken and forces the user to ask twice. Generate real, working content from the description; do not stub it. **Omit `content` (or use `""`) ONLY when the user explicitly wants a blank file** — *"create an empty file log.txt"*, *"make a blank notes.txt"*, or a bare *"create a file X.ext"* with no described content. When in doubt about whether content was described, **include it** — an unwanted body is trivially fixable; a silently-empty file is the failure mode we are preventing.
 - `read_file` — Read file contents
 - `delete_file` — Delete a file
 - `rename_file` — Rename a file or folder **in place** (same location, name changes only). **Prefer this over `move_file`** when the user says "rename". Supply `path` (old name/path) and `new_name` (new filename only — no directory separators).
@@ -1492,6 +1494,27 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "requires_confirmation": false
 }
 ```
+
+-----
+
+**Input:** `"Create a python file in tests/ that prints fizzbuzz"` (behaviour described → generate the body and include it in `content`; do NOT make an empty file)
+
+```json
+{
+  "intent": "file_operation",
+  "action": "create_file",
+  "parameters": {
+    "path": "tests/fizzbuzz.py",
+    "content": "for i in range(1, 101):\n    if i % 15 == 0:\n        print(\"FizzBuzz\")\n    elif i % 3 == 0:\n        print(\"Fizz\")\n    elif i % 5 == 0:\n        print(\"Buzz\")\n    else:\n        print(i)\n"
+  },
+  "confidence": 0.97,
+  "response": "FizzBuzz, full loop included — dropping it into tests/.",
+  "hud_status": "FILE OPS",
+  "requires_confirmation": false
+}
+```
+
+*(Contrast — an explicit empty-file request keeps `content` empty: `"create an empty file log.txt in tests"` → `create_file` with `"content": ""`.)*
 
 -----
 

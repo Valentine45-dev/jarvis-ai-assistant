@@ -3003,6 +3003,46 @@ Code-level proof:
 
 
 -----------------------------------------------------------------------
+§40 — create_file no longer silently makes a 0-byte file (A: spec, B: net)
+-----------------------------------------------------------------------
+Background (found in the pre-sleep sweep): "create a python file in tests/ that prints
+fizzbuzz" -> the BRAIN emitted create_file with `path` but NO `content` -> a 0-byte EMPTY
+file; user had to ask a 2nd time before code appeared. NOT phrasing-determined (identical
+"...that prints X" wording gave both empty and full) - the model was free to omit content
+because the CLAUDE.md create_file spec was silent on it; an in-conversation correction
+flipped it. Fast-path (workflow_nlu.py) and executor were both exonerated - brain spec gap.
+Fix - two parts:
+  A (root cause): CLAUDE.md create_file rule - `content` is REQUIRED whenever the user
+    DESCRIBES what the file should contain/do ("a python file that prints fizzbuzz", "a
+    CLI todo app with SQLite"); generate the full body in the SAME call, never an empty
+    file + follow-up. Omit content ONLY for an explicit blank file ("create an empty file
+    log.txt"). + a worked example.
+  B (visibility net - because auto_confirm/workflow can SKIP the card): an empty create is
+    never silent regardless of confirm path. Layer 1: the confirmation card shows "Note:
+    this will create an EMPTY file (no content)." Layer 2: the post-write closure emits a
+    warn "created EMPTY - X (0 B)" line + an info toast (signals.notice) on a 0-byte write,
+    instead of a plain check that reads as success. Intentional empties are FLAGGED, never
+    blocked.
+
+PHYSICAL TEST (the real gate - model behaviour isn't deterministically unit-testable, so
+test COLD: fresh session, no correction priming the history):
+  1. "create a python file in tests/ that prints fizzbuzz" -> PASS: code is in the file on
+     the FIRST ask (no empty file, no asking twice). Open it to confirm real code.
+  2. "write a python file in tests/: a full CLI todo app with SQLite, add/list/done/delete"
+     -> PASS: full code on first ask.
+  3. Regression - intentional empties preserved: "create an empty file blank.txt in tests"
+     -> still 0 bytes (allowed), and the card shows the EMPTY note + a 0-bytes heads-up.
+  4. "create a file log.txt in tests" (bare, no described content) -> still empty via the
+     deterministic fast-path (unchanged).
+
+Code-level proof (Part B is deterministic; Part A is prompt-driven -> physical only):
+  uv run pytest -q tests/test_file_ops_package.py tests/test_file_creation_routing.py
+  -> empty create flags the card ("EMPTY file" in the prompt) AND emits the "created
+     EMPTY" post-write line (not a plain check), while still WRITING the 0-byte file
+     (intentional empties allowed); a real-content create shows no flag and writes the
+     content; the fast-path routing tests stay green (workflow_nlu.py untouched).
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.
