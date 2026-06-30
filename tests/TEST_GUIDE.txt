@@ -3075,6 +3075,45 @@ Code-level proof (executor + routing are deterministic; brain phrasing is physic
      auto-start a browser first (close before the auto-start guard).
 
 -----------------------------------------------------------------------
+§43 — clock-anchored recurring reminders fire ON TIME, not 30 min late (A+B1+B2)
+-----------------------------------------------------------------------
+Background (sweep find): "remind me every day at 1:18pm to check email" correctly created
+a cron workflow (schedule "18 13 * * *") and fired at 13:18 — BUT the step was stored as
+the NL string "set a reminder to check email" (no time; the time went to the cron
+schedule). At fire time that string re-parsed through the brain -> reminder_task/set_reminder
+with the 30-min DEFAULT, so the 1:18 fire scheduled a SECOND reminder for 1:48 (30 min late,
+daily). The re-parse-each-run is general+accepted; the bug is the lost timing for the
+clock-anchored reminder case.
+Fix — the cron `schedule` owns the timing, so a reminder step fires immediately:
+  A (prompt): CLAUDE.md rule — for "remind me every day at TIME", emit create_workflow with
+    the cron schedule AND a CONCRETE reminder step {reminder_task/set_reminder,
+    message:<msg>, delay_seconds:5} (concrete steps don't re-parse), message only (no time).
+  B1 (handler): in create_workflow, when a `schedule` is present, clamp any concrete
+    set_reminder step's delay_seconds to <=5 (drift-proof against a big brain-emitted delay).
+  B2 (handler): in create_workflow, when a `schedule` is present, rewrite a reminder-ish
+    STRING step ("set a reminder to check email") into a concrete set_reminder{message,
+    delay:5} — closes the string-step escape at persist time without cross-layer plumbing.
+  Deferred C: fire-time scheduled-flag plumbing through 4 layers — not needed; A+B cover it.
+Untouched: one-shot reminders, general string re-parse, the cron scheduler, morning_routine.
+
+PHYSICAL TEST (Part A is model-driven -> verify live; B is deterministic -> unit-tested):
+  1. "remind me every day at <~2 min from now> to drink water" -> check data/workflows.json:
+     the stored step is CONCRETE ({reminder_task/set_reminder, message:"drink water",
+     delay_seconds:5}), NOT a string. At the cron minute it speaks+toasts ~immediately
+     (~5 s), NOT 30 min later. DELETE the test workflow after.
+  2. Regression: "remind me in 2 minutes to stretch" (one-shot) still fires in ~2 min.
+  3. Regression: morning_routine still runs (its non-reminder string steps untouched).
+  4. Drift: a scheduled workflow whose reminder step has delay_seconds:1800 -> clamped to 5.
+
+Code-level proof (B is deterministic):
+  uv run pytest -q tests/test_scheduled_reminder_steps.py
+  -> reminder-string message extraction (strips the time tail); non-reminder strings not
+     matched; a string reminder step is rewritten to a concrete set_reminder{delay 5}; a
+     concrete set_reminder delay 1800 is clamped to 5 (small/missing delays preserved/
+     defaulted); non-reminder steps untouched; create_workflow normalises ONLY when a
+     schedule is present (no-schedule leaves the string as-is).
+
+-----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
   - "what time is it" / "open chrome" / "take a screenshot"  -> all still work.

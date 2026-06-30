@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -38,6 +39,84 @@ _KNOWN_STEP_INTENTS: frozenset[str] = frozenset({
     "read_screen", "reminder_task", "jarvis_meta", "code_execution",
     "document_creation",
 })
+
+# ── Scheduled-reminder normalisation (cron reminder-at-TIME fix, B1+B2) ────────
+# A clock-anchored "remind me every day at TIME" workflow stores its timing in the
+# cron `schedule`, NOT in the reminder step. The bug: the step was stored as the NL
+# string "set a reminder to check email" and re-parsed at fire time to a 30-min
+# default, so the cron fire scheduled a SECOND reminder 30 min later. For a SCHEDULED
+# workflow the cron fire IS the reminder moment, so the reminder step must fire
+# immediately (~5 s). Applied ONLY when a `schedule` is present — one-shot reminders
+# and non-reminder/general string steps are untouched.
+_SCHEDULED_REMINDER_MAX_DELAY = 5
+
+_REMINDER_STEP_PREFIX = re.compile(
+    r"^\s*(?:set\s+(?:a\s+|an\s+)?reminder|remind(?:\s+me)?)\b\s*", re.IGNORECASE,
+)
+_REMINDER_CONNECTOR = re.compile(r"^\s*(?:to|that|for|about|:)\s+", re.IGNORECASE)
+# Trailing time/recurrence phrase — the cron schedule owns timing, so drop it from
+# the message ("check email every day at 9am" -> "check email").
+_REMINDER_TIME_TAIL = re.compile(
+    r"\s+(?:every\s+day|each\s+day|daily|every\s+\w+day"
+    r"|at\s+\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?"
+    r"|in\s+\d+\s*(?:second|sec|minute|min|hour|hr)s?)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _reminder_message_from_string(step: str) -> str | None:
+    """Extract the reminder message from a reminder-ish step string, or None when the
+    string is not clearly a reminder (so it's left untouched). Used only for SCHEDULED
+    workflows, where the cron schedule owns the timing — any embedded time is dropped."""
+    if not _REMINDER_STEP_PREFIX.match(step):
+        return None
+    msg = _REMINDER_STEP_PREFIX.sub("", step, count=1)
+    msg = _REMINDER_CONNECTOR.sub("", msg, count=1)
+    msg = _REMINDER_TIME_TAIL.sub("", msg)
+    msg = msg.strip().strip(".,;:").strip()
+    return msg or None
+
+
+def _normalize_scheduled_reminder_steps(steps: list) -> list:
+    """Normalise reminder steps in a SCHEDULED (cron) workflow so they fire
+    immediately when the cron fires (the schedule owns the timing):
+      B1 — a concrete reminder_task/set_reminder step → clamp delay_seconds to <=5.
+      B2 — a reminder-ish STRING step → rewrite to a concrete set_reminder{message,
+           delay_seconds:5} so it can't re-parse through the brain at fire time and
+           pick up the 30-min default.
+    Non-reminder steps and unrecognisable strings are returned unchanged.
+    """
+    out: list = []
+    for step in steps:
+        if (isinstance(step, dict)
+                and step.get("intent") == "reminder_task"
+                and step.get("action") == "set_reminder"):
+            params = dict(step.get("parameters") or {})
+            try:
+                delay = int(params.get("delay_seconds", _SCHEDULED_REMINDER_MAX_DELAY))
+            except (TypeError, ValueError):
+                delay = _SCHEDULED_REMINDER_MAX_DELAY
+            if not (0 <= delay <= _SCHEDULED_REMINDER_MAX_DELAY):
+                delay = _SCHEDULED_REMINDER_MAX_DELAY
+            params["delay_seconds"] = delay
+            new_step = dict(step)
+            new_step["parameters"] = params
+            out.append(new_step)
+            continue
+        if isinstance(step, str):
+            msg = _reminder_message_from_string(step)
+            if msg:
+                out.append({
+                    "intent": "reminder_task",
+                    "action": "set_reminder",
+                    "parameters": {
+                        "message": msg,
+                        "delay_seconds": _SCHEDULED_REMINDER_MAX_DELAY,
+                    },
+                })
+                continue
+        out.append(step)
+    return out
 
 
 def _yield_ui() -> None:
@@ -117,6 +196,12 @@ def _handle_automation_task(action: str, params: dict) -> dict:
         if not isinstance(steps, list) or not steps:
             _tlog("✗ steps must be a non-empty list")
             return _err("Steps must be a non-empty list.")
+        # B1+B2: a SCHEDULED workflow's cron `schedule` owns the timing, so reminder
+        # steps must fire immediately when it runs — normalise them BEFORE validation
+        # (so rewritten concrete steps are validated too). No-op without a schedule.
+        schedule = (params.get("schedule") or "").strip()
+        if schedule:
+            steps = _normalize_scheduled_reminder_steps(steps)
         slug = task_name.lower().replace(" ", "_")
         if workflow_library.get(slug) is not None:
             _tlog(f"✗ workflow {task_name!r} already exists")
@@ -142,10 +227,9 @@ def _handle_automation_task(action: str, params: dict) -> dict:
             "id": slug, "name": task_name, "trigger": trigger,
             "enabled": True, "last_run": "", "steps": steps,
         }
-        # F-3: optional cron expression for auto-fire. Validated lightly here
-        # (just non-empty); the scheduler itself silently skips invalid
+        # F-3: optional cron expression for auto-fire (read above). Validated
+        # lightly (just non-empty); the scheduler silently skips invalid
         # expressions at fire-time rather than blocking workflow creation.
-        schedule = (params.get("schedule") or "").strip()
         if schedule:
             wf["schedule"] = schedule
         workflow_library.add(wf)
