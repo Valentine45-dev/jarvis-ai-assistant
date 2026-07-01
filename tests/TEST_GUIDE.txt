@@ -3461,6 +3461,35 @@ Code-level proof:
      current-weather path unchanged; a bare 'forecast' action is still unsupported; geocoding
      resolves a country name to a real city (query by coords); a geocode miss falls back to q=.
 
+§54 — Settings-UI expansion: 6 previously JSON-only config fields now have controls
+-----------------------------------------------------------------------
+Background (project_settings_ui_gaps): meaningful config (incl. two SAFETY toggles) lived only
+in jarvis.json with no UI. Added CONFIG-page controls following the existing patterns
+(_section_row + ToggleSwitch / QComboBox / QLineEdit, wired into _apply_cfg -> config.save()):
+  Voice & Audio panel:
+    - STT engine (dropdown: Google batch / Deepgram streaming) -> config.stt_provider
+    - Persistent STT (toggle) -> config.stt_persistent
+  Behaviour & Visuals panel:
+    - Code execution (toggle) -> config.code_exec_enabled (master code_execution switch)
+    - Auto-run AI fixes (toggle, 'Caution' help) -> config.allow_ai_command_autorun (the P1 safety toggle)
+    - Default browser (dropdown: Chrome/Edge/Firefox/Auto) -> config.browser_engine
+    - Default weather city (text) -> config.weather_default_city
+All applied on APPLY_CFG (config.save); read live where the backend reads them (no restart for
+code_exec/autorun/safe-search/city; stt_provider/persistent + browser_engine take effect next
+session, same as other engine settings).
+
+PHYSICAL TEST (screenshot review + per-field verify):
+  1. Open CONFIG -> the 6 new rows render with correct labels/help + initial values from config.
+  2. Flip 'Code execution' OFF -> APPLY -> a code_execution command is refused (master switch).
+  3. 'Auto-run AI fixes' ON -> APPLY -> a failing command's suggested fix runs WITHOUT a card
+     (leave OFF afterwards). 'Default browser' Edge -> APPLY + restart -> Edge opens by default.
+  4. 'Default weather city' London,GB -> APPLY -> 'what's the weather?' (no location) -> London.
+  5. Each survives restart (persisted to jarvis.json).
+
+Code-level proof (qtgui, offscreen):
+  JARVIS_RUN_QT=1 QT_QPA_PLATFORM=offscreen uv run pytest -q tests/test_settings_knobs.py
+  -> the 6 fields read their initial values FROM config; _apply_cfg writes all 6 back to config.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

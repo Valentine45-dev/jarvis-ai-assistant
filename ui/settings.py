@@ -904,6 +904,28 @@ class SettingsView(QWidget):
             "cut you off. 0 = off (snappiest). ~350-500ms suits natural pauses.",
         ))
 
+        # STT engine + persistent connection (applied on save; STT reads them on
+        # the next session). Deepgram streams (lower latency); Google is batch.
+        self._stt_provider_combo = QComboBox()
+        self._stt_provider_combo.setStyleSheet(_COMBO_SS)
+        for display, key in (("Google (batch)", "google"), ("Deepgram (streaming)", "deepgram")):
+            self._stt_provider_combo.addItem(display, userData=key)
+        _stt_idx = next(
+            (i for i in range(self._stt_provider_combo.count())
+             if self._stt_provider_combo.itemData(i) == getattr(config, "stt_provider", "google")), 0
+        )
+        self._stt_provider_combo.setCurrentIndex(_stt_idx)
+        panel.add(_section_row(
+            "STT engine", self._stt_provider_combo,
+            "Speech-to-text provider. Deepgram streams (lower latency); Google is batch.",
+        ))
+
+        self._flag_stt_persistent = ToggleSwitch(getattr(config, "stt_persistent", False))
+        panel.add(_section_row(
+            "Persistent STT", self._flag_stt_persistent,
+            "Keep the STT connection open between turns for faster starts (Deepgram).",
+        ))
+
         # Noise gate + wake word listener
         self._noise_toggle = ToggleSwitch(config.noise_gate)
         panel.add(_section_row("Noise gate", self._noise_toggle,
@@ -942,6 +964,48 @@ class SettingsView(QWidget):
         panel.add(_section_row("Safe search", self._flag_safesearch,
                                "Confirm before an explicit/adult web search. Off by "
                                "default — a speed-bump for shared machines, never a refusal."))
+
+        # Code-execution safety controls (applied on save; read live per command,
+        # no restart). code_exec_enabled is the master switch for the whole
+        # code_execution intent; autorun lets AI-suggested fixes run without a card.
+        self._flag_code_exec = ToggleSwitch(getattr(config, "code_exec_enabled", True))
+        panel.add(_section_row(
+            "Code execution", self._flag_code_exec,
+            "Master switch for running code / shell commands. Off disables the "
+            "entire code_execution intent.",
+        ))
+
+        self._flag_autorun = ToggleSwitch(getattr(config, "allow_ai_command_autorun", False))
+        panel.add(_section_row(
+            "Auto-run AI fixes", self._flag_autorun,
+            "Caution: lets AI-suggested fixes run WITHOUT a confirmation card. Off "
+            "by default — leave off unless you trust every suggested command.",
+        ))
+
+        # Default browser engine (voice can still switch at runtime).
+        self._browser_engine_combo = QComboBox()
+        self._browser_engine_combo.setStyleSheet(_COMBO_SS)
+        for display, key in (("Chrome", "chrome"), ("Edge", "edge"),
+                             ("Firefox", "firefox"), ("Auto", "auto")):
+            self._browser_engine_combo.addItem(display, userData=key)
+        _be_idx = next(
+            (i for i in range(self._browser_engine_combo.count())
+             if self._browser_engine_combo.itemData(i) == getattr(config, "browser_engine", "chrome")), 0
+        )
+        self._browser_engine_combo.setCurrentIndex(_be_idx)
+        panel.add(_section_row(
+            "Default browser", self._browser_engine_combo,
+            "Which engine JARVIS controls by default. Switchable by voice too.",
+        ))
+
+        # Default weather city (used when a query names no location).
+        self._weather_city_input = QLineEdit(getattr(config, "weather_default_city", "Monrovia,LR"))
+        self._weather_city_input.setStyleSheet(_INPUT_SS)
+        self._weather_city_input.setFixedWidth(160)
+        panel.add(_section_row(
+            "Default weather city", self._weather_city_input,
+            "Used when a weather query names no location. Format: City,CC (e.g. Monrovia,LR).",
+        ))
 
         self._flag_dim = ToggleSwitch(getattr(config, "dim_mode", False))
         self._flag_dim.toggled.connect(self.dim_mode_changed.emit)
@@ -1088,6 +1152,13 @@ class SettingsView(QWidget):
         config.auto_confirm     = self._flag_conf.isChecked()
         config.dim_mode         = self._flag_dim.isChecked()
         config.wake_word_enabled = self._flag_wake.isChecked()
+        # Newly-surfaced config (previously JSON-only)
+        config.stt_provider     = self._stt_provider_combo.currentData() or "google"
+        config.stt_persistent   = self._flag_stt_persistent.isChecked()
+        config.code_exec_enabled = self._flag_code_exec.isChecked()
+        config.allow_ai_command_autorun = self._flag_autorun.isChecked()
+        config.browser_engine   = self._browser_engine_combo.currentData() or "chrome"
+        config.weather_default_city = self._weather_city_input.text().strip() or "Monrovia,LR"
 
         try:
             config.save()

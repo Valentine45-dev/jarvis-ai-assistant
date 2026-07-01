@@ -56,6 +56,58 @@ def test_apply_writes_new_knobs_to_config(_app, isolated_settings, monkeypatch):
         view.deleteLater()
 
 
+def test_expanded_config_fields_read_from_config(_app, monkeypatch):
+    # The six previously JSON-only fields now surface in the CONFIG page.
+    monkeypatch.setattr(config, "stt_provider", "deepgram", raising=False)
+    monkeypatch.setattr(config, "stt_persistent", True, raising=False)
+    monkeypatch.setattr(config, "code_exec_enabled", False, raising=False)
+    monkeypatch.setattr(config, "allow_ai_command_autorun", True, raising=False)
+    monkeypatch.setattr(config, "browser_engine", "firefox", raising=False)
+    monkeypatch.setattr(config, "weather_default_city", "Accra,GH", raising=False)
+    view = SettingsView()
+    try:
+        assert view._stt_provider_combo.currentData() == "deepgram"
+        assert view._flag_stt_persistent.isChecked() is True
+        assert view._flag_code_exec.isChecked() is False
+        assert view._flag_autorun.isChecked() is True
+        assert view._browser_engine_combo.currentData() == "firefox"
+        assert view._weather_city_input.text() == "Accra,GH"
+    finally:
+        view.deleteLater()
+
+
+def _select(combo, value):
+    combo.setCurrentIndex(
+        next(i for i in range(combo.count()) if combo.itemData(i) == value)
+    )
+
+
+def test_apply_writes_expanded_config_fields(_app, isolated_settings, monkeypatch):
+    monkeypatch.setattr(config, "stt_provider", "google", raising=False)
+    monkeypatch.setattr(config, "stt_persistent", False, raising=False)
+    monkeypatch.setattr(config, "code_exec_enabled", True, raising=False)
+    monkeypatch.setattr(config, "allow_ai_command_autorun", False, raising=False)
+    monkeypatch.setattr(config, "browser_engine", "chrome", raising=False)
+    monkeypatch.setattr(config, "weather_default_city", "Monrovia,LR", raising=False)
+    view = SettingsView()
+    try:
+        _select(view._stt_provider_combo, "deepgram")
+        view._flag_stt_persistent.setChecked(True)
+        view._flag_code_exec.setChecked(False)
+        view._flag_autorun.setChecked(True)
+        _select(view._browser_engine_combo, "edge")
+        view._weather_city_input.setText("London,GB")
+        view._apply_cfg()
+        assert config.stt_provider == "deepgram"
+        assert config.stt_persistent is True
+        assert config.code_exec_enabled is False
+        assert config.allow_ai_command_autorun is True
+        assert config.browser_engine == "edge"
+        assert config.weather_default_city == "London,GB"
+    finally:
+        view.deleteLater()
+
+
 def test_settle_readout_shows_off_at_zero(_app):
     assert SettingsView._fmt_settle(0) == "Off"
     assert SettingsView._fmt_settle(350) == "350"
