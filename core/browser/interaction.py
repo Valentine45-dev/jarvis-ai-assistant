@@ -21,6 +21,40 @@ from core.browser.session import (
 from core.handlers.shared import _err, _ok, _redact_value, _tlog
 
 
+# P6: map Playwright net:: codes to clean human lines. The raw goto error reads
+# 'Page.goto: net::ERR_NAME_NOT_RESOLVED at https://… Call log: - navigating to …'
+# — the 'Call log:' tail + 'Page.goto:' prefix are developer noise that leaked
+# into the PRIMARY SYS_LOG line (the narration path was already clean).
+_NAV_ERR_MAP: tuple[tuple[str, str], ...] = (
+    ("err_name_not_resolved",    "Couldn't resolve {host} — check the spelling and your connection."),
+    ("err_internet_disconnected", "No internet connection."),
+    ("err_connection_refused",   "{host} refused the connection."),
+    ("err_connection_reset",     "The connection to {host} was reset."),
+    ("err_connection_timed_out", "{host} took too long to respond."),
+    ("err_timed_out",            "{host} took too long to respond."),
+    ("err_address_unreachable",  "{host} is unreachable."),
+    ("err_cert",                 "{host} has a certificate problem."),
+    ("err_ssl",                  "{host} has an SSL problem."),
+)
+
+
+def _clean_nav_error(msg: str, url: str) -> str:
+    """Turn a raw Playwright navigation error into a clean, human line.
+
+    Strips the developer-facing 'Call log:' tail and 'Page.goto:' prefix, then
+    maps the net:: code to a friendly message. The raw text is still logged to
+    the terminal panel (dev console); only the user-facing response is cleaned.
+    """
+    head = msg.split("Call log:", 1)[0].strip()
+    low = head.lower()
+    host = urlparse(url).hostname or url
+    for needle, template in _NAV_ERR_MAP:
+        if needle in low:
+            return template.format(host=host)
+    cleaned = head.replace("Page.goto:", "").strip().rstrip(".")
+    return f"Couldn't load {host} — {cleaned}." if cleaned else f"Couldn't load {host}."
+
+
 def _reg_domain(host: str) -> str:
     """The LAST TWO LABELS of a host, for a loose same-site comparison — so
     ``github.com`` and a ``www.github.com`` redirect compare equal, but an off-host
@@ -144,7 +178,7 @@ class _InteractionMixin:
                     _tlog(f"✗ timed out (>{secs} s): {url}")
                     return _err(f"Page took too long to load (>{secs} s): {url}")
                 _tlog(f"✗ {msg}")
-                return _err(msg)
+                return _err(_clean_nav_error(msg, url))
 
     def go_back(self) -> dict:
         """Go back one entry in the active tab's history."""

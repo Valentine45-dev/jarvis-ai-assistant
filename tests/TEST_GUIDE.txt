@@ -3396,6 +3396,31 @@ Code-level proof:
   -> a run_python child that prints '16.4°C → warm' round-trips: output contains '°C' and '→',
      and contains NO replacement char '�'.
 
+§52 — nav-error primary line is humanized, not raw Playwright (P6 cosmetic)
+-----------------------------------------------------------------------
+Background (sweep Priority 6, cosmetic): navigating to a dead URL ('go to
+help.thisdoesnotexist1234.com') showed the RAW Playwright error on the PRIMARY SYS_LOG line:
+'Page.goto: net::ERR_NAME_NOT_RESOLVED ... Call log: - navigating to ...' -- while the NARRATION
+line was already clean ('DNS can't resolve ... check the spelling'). Not functional (the failure
+surfaced fine, confidence was right) -- just developer-ugly. Cause: interaction.navigate()'s
+fallthrough returned _err(str(exc)) with the raw goto message, which drives the primary line.
+Fix (core/browser/interaction.py): new _clean_nav_error(msg, url) strips the 'Call log:' tail +
+'Page.goto:' prefix and maps net:: codes to friendly lines (ERR_NAME_NOT_RESOLVED, refused,
+timed out, cert/ssl, unreachable, generic fallback). Applied to navigate()'s fallthrough _err.
+The RAW text is still logged to the terminal panel (dev console) via _tlog -- only the
+user-facing response is cleaned.
+
+PHYSICAL TEST:
+  1. 'go to help.thisdoesnotexist1234.com' -> the PRIMARY SYS_LOG line reads a clean
+     'Couldn't resolve help.thisdoesnotexist1234.com -- check the spelling...' -- NO 'Page.goto',
+     NO 'net::', NO 'Call log:' tail. Confidence/outcome unchanged (still a clean FAIL).
+  2. Regression: a normal 'go to youtube.com' still loads fine.
+
+Code-level proof:
+  uv run pytest -q tests/test_nav_error_clean.py
+  -> DNS error humanized + tail/prefix/net:: stripped; connection-refused; cert error; generic
+     fallback still strips the noise and names the host.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
