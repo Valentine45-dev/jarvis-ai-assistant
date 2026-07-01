@@ -3310,6 +3310,36 @@ Code-level proof:
      alias gold->amber; unknown 'crimson' -> honest error, theme unchanged, never saved;
      a save() failure rolls config.theme back.
 
+§49 — vision_analysis runs OFF the Qt main thread; ctrl+shift+r no longer freezes the UI
+-----------------------------------------------------------------------
+Background (sweep Priority 5): the ctrl+shift+r hotkey (read_screen) did NOT read the screen
+AND froze the UI, while the TYPED 'what's on my screen' worked. Trace: the hotkey dispatches
+vision_analysis/describe (backend_signals_mixin._on_hotkey) -- the SAME path as the typed
+command -- and vision_analysis ran SYNCHRONOUSLY on the Qt main thread (execution_mixin: only
+code_execution + off-thread-safe workflows used the worker). Its blocking Anthropic Vision API
+call (vision.analyze_image) stalled the event loop -> UI freeze. The hotkey just made it
+obvious (fired from another app, nobody watching the frozen window). The capture is mss/PIL
+(thread-safe, no Qt), so it's safe off-thread.
+Fix (execution_mixin._execute_result): route direct vision_analysis dispatch through the SAME
+_spawn_code_worker harness as code_execution (result returns via code_execution_done ->
+_on_code_execution_done -> _finish_execute; vision_analysis is in _ACTION_INTENTS so the
+analysis is spoken correctly). EXCEPTION: source='browser' uses vision.capture_browser_page()
+-> Playwright (thread-affine to the main thread), so that ONE source stays synchronous.
+Scope: vision_analysis only (read_screen OCR is local/fast, not the reported freeze).
+
+PHYSICAL TEST (threading -> physical gate):
+  1. Press ctrl+shift+r (from JARVIS OR another focused app) -> the UI STAYS RESPONSIVE
+     ('Analyzing the screen...' toast), then speaks the description. NO freeze.
+  2. Typed 'what's on my screen' -> same: responsive, then the description. NO freeze.
+  3. 'describe the browser page' (source=browser) -> still works (synchronous, Playwright).
+  4. During a vision read, the HUD/other buttons remain clickable (proof it's off-thread).
+
+Code-level proof:
+  uv run pytest -q tests/test_vision_offthread.py
+  -> vision (source=screenshot) routes to _spawn_code_worker, NOT inline dispatch; a missing
+     source defaults to screenshot -> off-thread; source=browser stays SYNCHRONOUS (dispatched
+     inline on the main thread, no worker).
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

@@ -339,6 +339,25 @@ class _ExecutionMixin:
             self._set_state("processing")
             return
 
+        # P5: vision_analysis blocks on a screen capture + Vision API network call.
+        # Run synchronously on the Qt main thread it froze the UI — most visibly on
+        # the ctrl+shift+r hotkey (fired from another app, nobody watching the frozen
+        # window). Its capture is mss/PIL (thread-safe, no Qt), so route it through
+        # the SAME worker harness as code_execution. EXCEPTION: source="browser" uses
+        # vision.capture_browser_page() → Playwright, which is thread-affine to the
+        # main thread, so that one path stays synchronous below.
+        if intent == "vision_analysis" and (result.get("parameters") or {}).get(
+            "source", "screenshot"
+        ) != "browser":
+            self._spawn_code_worker(
+                lambda: dispatch(result, confirmed=confirmed),
+                result=result, intent=intent, conf=conf, resp=resp, hud=hud,
+            )
+            self._dashboard.left.status_lbl.setText("Analyzing the screen — please wait…")
+            self._dashboard.toast.show_toast(resp or "Taking a look…", "info")
+            self._set_state("processing")
+            return
+
         exec_out = dispatch(result, confirmed=confirmed)
 
         # R2-15: document_creation runs on a worker thread — finish on signal.
