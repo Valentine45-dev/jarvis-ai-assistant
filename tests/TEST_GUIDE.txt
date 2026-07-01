@@ -3183,6 +3183,46 @@ Code-level proof:
      multiword IANA (America/New_York -> "... in New York"); bare-city fallback (tokyo);
      unknown zone -> success False + honest error; blank location -> local.
 
+§46 — search_web grounds follow-ups in the RESULTS, not the model's training (fake-success #2)
+-----------------------------------------------------------------------
+Background (sweep find, Priority 3 / accuracy): "search for latest nba final mvp 2026" opened
+the Google SERP fine, but the follow-up "yes briefly" routed to jarvis_meta/conversational and
+the brain SPOKE "Shai Gilgeous-Alexander took the 2026 Finals MVP" -- unsourced, from TRAINING,
+and WRONG (that's the 2025 MVP; 2026 = Jalen Brunson). When the user forced "read the top
+result" it grounded on Wikipedia and answered correctly (Brunson) -- proving the grounding
+channel works; search just never fed it.
+Trace: _do_search_web (app_launcher.py) only NAVIGATED -- it never read the results or called
+_set_page_cache. The brain grounds follow-ups via get_page_cache() injected as <page_content>
+(brain.py), but that cache is set ONLY by read_page/OCR/vision, never by search. So after a
+bare search the cache is stale/empty and the brain fills its `response` from training; the
+conversational handler returns cache-or-empty, so the brain's (dated) line gets spoken.
+Fix (auto-read + prompt rule, Google only):
+  A (structural, app_launcher.py): after a successful GOOGLE navigate, browser.read_page() the
+    SERP into _set_page_cache -- the SAME channel read_page uses -- so the next turn is
+    grounded. Best-effort (a read failure never fails the search). youtube/github/etc. are
+    navigational -> NOT auto-read (no latency hit, no spoken summary wanted there).
+  B (prompt, Claude.md §3): when a <page_content> block is present after a search, answer
+    current/dated facts FROM it, not from memory; never state a post-cutoff fact (future/recent
+    year, "latest", "who won 2026", standings, prices) as certain from training; if the answer
+    isn't in the results, say "let me read the top result" (route read_page) instead of guessing.
+    Pre-cutoff stable facts ("who won the 2022 World Cup") may still come from knowledge.
+Untouched: the <page_content> runtime preamble in brain.py (governs ALL page uses -- left as-is
+to avoid touching the general path; the §3 rule covers search); the actual MVP is NOT hardcoded.
+
+PHYSICAL TEST (Part B is model-driven -> verify live):
+  1. "search for latest nba finals mvp 2026" -> SERP opens; terminal shows "results cached for
+     follow-up". Then "summarize briefly" / "who won" -> the spoken answer matches the RESULTS
+     (Brunson), NOT a dated 2025 answer, and does not sound confidently unsourced.
+  2. A current-fact search where the SERP snippet has the answer -> answer comes FROM the page.
+  3. If the results don't contain the answer -> JARVIS offers to read the top result, not a guess.
+  4. Regression: "search cats on youtube" -> still just opens YouTube (no auto-read, no summary).
+  5. Pre-cutoff: "who won the 2022 world cup" -> still answered correctly (Argentina) from knowledge.
+
+Code-level proof (Part A is deterministic):
+  uv run pytest -q tests/test_search_grounding.py
+  -> google search reads the SERP into the cache; youtube + github do NOT auto-read (cache
+     untouched); a read that raises does NOT fail the search (cache untouched, search ok).
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

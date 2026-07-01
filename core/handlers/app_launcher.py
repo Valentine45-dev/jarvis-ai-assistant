@@ -14,7 +14,7 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from core.handlers.shared import _OS, _ok, _err, _tlog
+from core.handlers.shared import _OS, _ok, _err, _set_page_cache, _tlog
 
 # Bounds for Program Files / AppData exe scanning — keep cold lookups snappy.
 _APP_SCAN_TIME_BUDGET_S = 5.0
@@ -734,6 +734,22 @@ def _do_search_web(query: str, platform_key: str) -> dict:
         result = browser.navigate(url)
         if result.get("success"):
             _tlog("✓ opened")
+            # P3 (fake-success #2): ground follow-ups in the ACTUAL results. Search
+            # used to only navigate, so a follow-up ("summarize", "yes briefly") had
+            # no page content in the cache → the brain answered current/dated facts
+            # from training (e.g. the 2025 MVP for a 2026 question), confidently and
+            # unsourced. Read the Google SERP into the page cache — the SAME channel
+            # read_page uses (brain injects it as <page_content>) — so the next turn
+            # is grounded. Google only: youtube/github/etc. are navigational, not
+            # fact-answering. Best-effort: a read failure never fails the search.
+            if platform_key == "google":
+                try:
+                    page = browser.read_page()
+                    if page.get("success") and page.get("output"):
+                        _set_page_cache(page["output"])
+                        _tlog("↳ results cached for follow-up")
+                except Exception:
+                    pass
         else:
             _tlog(f"✗ {result.get('error') or 'navigation failed'}")
         return result

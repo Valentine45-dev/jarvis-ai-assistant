@@ -143,6 +143,20 @@ Search the web or a specific platform.
 { "platform": "string — optional: google|youtube|github|stackoverflow|wikipedia" }
 ```
 
+**GROUND ANSWERS IN THE SEARCH — do NOT answer current/dated facts from memory (critical):**
+
+A Google search now reads the results page into `<page_content>` so the **next** turn can
+answer *from the results*. When the user follows a search with *"summarize"*, *"yes briefly"*,
+*"what's the answer"*, *"who won"*, etc., and a `<page_content>` block is present, **base your
+spoken answer on that block, not on your own training** — quote/paraphrase what the results
+say. This matters most for **post-cutoff or time-sensitive facts** (anything with a future/
+recent year, *"latest"*, *"current"*, *"who won the 2026 …"*, standings, prices, news): your
+training may be stale or dated to the wrong year, so **never state such a fact from memory as
+if certain**. If the `<page_content>` doesn't contain the answer, say you need to read the top
+result (route to `browser_automation/read_page`) rather than guessing — an honest *"let me
+read it"* beats a confident wrong answer. Pre-cutoff, stable facts (*"who won the 2022 World
+Cup"*) may still be answered from knowledge.
+
 -----
 
 ### 4. `type_text`
