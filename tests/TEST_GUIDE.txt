@@ -3490,6 +3490,31 @@ Code-level proof (qtgui, offscreen):
   JARVIS_RUN_QT=1 QT_QPA_PLATFORM=offscreen uv run pytest -q tests/test_settings_knobs.py
   -> the 6 fields read their initial values FROM config; _apply_cfg writes all 6 back to config.
 
+§55 — CONFIG page scrolls (fixes compressed/cramped fields after the Settings-UI expansion)
+-----------------------------------------------------------------------
+Background: after §54 added 6 fields, the CONFIG page looked cramped on the real screen --
+labels colliding with their inputs, dropdowns/text below intended size. Cause: the 3-column
+body went straight into the page layout with stretch (root.addLayout(cols, 1)) -- no scroll --
+so the columns were pinned to the window height and every row shrank below its sizeHint as
+more fields were added. HISTORY already scrolls (QScrollArea); CONFIG did not.
+Fix (ui/settings.py): wrap the 3 columns in a QScrollArea mirroring HISTORY's setup
+(setWidgetResizable(True), NoFrame, horizontal bar off, thin cyan vertical scrollbar,
+AlignTop). The body now takes its NATURAL height and scrolls when it exceeds the viewport, so
+rows render full-size regardless of field count (future-proof).
+
+PHYSICAL TEST (real screen):
+  1. Open CONFIG -> fields render at full/legible size (no label/input overlap), like before
+     the expansion. Dropdowns + text inputs are full height.
+  2. If the window is short enough that content overflows, a thin cyan scrollbar appears on the
+     right and the page scrolls smoothly (like HISTORY). Scroll to top + bottom -> all fields,
+     incl. the 6 new ones + the theme swatches, are fully visible.
+  3. Resize the window taller -> scrollbar disappears when everything fits; no compression.
+
+Code-level proof (qtgui, offscreen):
+  JARVIS_RUN_QT=1 QT_QPA_PLATFORM=offscreen uv run pytest -q tests/test_settings_knobs.py
+  + an instrumented build at a 780px window: viewport 582 vs content 1065 -> scrolls=True,
+    panel sizeHints [657, 1060, 1065] (natural, NOT squashed to the viewport).
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

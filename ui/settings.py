@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -670,13 +671,39 @@ class SettingsView(QWidget):
         self._health = _HealthStrip()
         root.addWidget(self._health)
 
-        # ── 3-column body ───────────────────────────────────────────────────
+        # ── 3-column body (scrollable, mirrors the HISTORY page) ────────────
+        # Without a scroll area the columns are pinned to the window height, so
+        # each new field shrinks every row below its intended size (labels then
+        # collide with their inputs). Wrapping the columns in a QScrollArea gives
+        # them unbounded height: rows render at full size and the page scrolls
+        # when there are more fields than fit — future-proof as more are added.
         cols = QHBoxLayout()
+        cols.setContentsMargins(0, 0, 8, 0)   # gutter so the scrollbar clears the panels
         cols.setSpacing(14)
+        cols.setAlignment(Qt.AlignTop)
         cols.addWidget(self._build_api_panel(), 1)
         cols.addWidget(self._build_voice_panel(), 1)
         cols.addWidget(self._build_behaviour_panel(), 1)
-        root.addLayout(cols, 1)
+
+        body_container = QWidget()
+        body_container.setLayout(cols)
+
+        body_scroll = QScrollArea()
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setFrameShape(QScrollArea.NoFrame)
+        body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: transparent; width: 6px; }"
+            "QScrollBar::handle:vertical {"
+            "background: rgba(0,229,255,0.30); border-radius: 3px; min-height: 20px;"
+            "}"
+            "QScrollBar::handle:vertical:hover { background: rgba(0,229,255,0.55); }"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical { background: transparent; }"
+        )
+        body_scroll.setWidget(body_container)
+        root.addWidget(body_scroll, 1)
 
         # ── Apply bar ───────────────────────────────────────────────────────
         apply_bar = QFrame()
