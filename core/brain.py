@@ -290,6 +290,41 @@ def _is_memory_meta_command(result: dict[str, Any]) -> bool:
     )
 
 
+# Engine names (+ aliases) that count as the user explicitly naming a browser.
+_BROWSER_ENGINE_WORDS: tuple[str, ...] = (
+    "chrome", "edge", "firefox", "mozilla", "msedge", "chromium",
+)
+
+
+def _normalize_default_browser(result: dict, user_text: str) -> None:
+    """Deterministic Default-Browser backstop for `open_browser`.
+
+    If the user's text names NO browser engine, strip any `browser` param the model
+    added to an `open_browser` action — direct OR inside a `run_workflow` step — so
+    the executor opens the CONFIGURED default (`config.browser_engine`) instead of a
+    hardcoded/model-defaulted 'chrome'. If the user DID name an engine, keep it.
+    Prompt rules alone are model-dependent; this makes the behaviour deterministic.
+    """
+    try:
+        low = (user_text or "").lower()
+        if any(w in low for w in _BROWSER_ENGINE_WORDS):
+            return  # user named an engine → respect the model's browser choice
+
+        def _strip(node: object) -> None:
+            if isinstance(node, dict) and node.get("action") == "open_browser":
+                params = node.get("parameters")
+                if isinstance(params, dict):
+                    params.pop("browser", None)
+
+        _strip(result)  # direct open_browser
+        steps = (result.get("parameters") or {}).get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                _strip(step)  # open_browser inside a workflow
+    except Exception:
+        pass
+
+
 def ask_claude(
     raw_input: str,
     context: dict[str, Any] | None = None,
@@ -555,6 +590,15 @@ def ask_claude(
     # Surface unrecognised tag warning via a sideband field (never breaks routing)
     if unrecognised_tag:
         result["_unknown_tag"] = unrecognised_tag
+
+    # Deterministic backstop for the Default Browser setting: a generic "open
+    # browser" (user named NO engine) must open the CONFIGURED default engine, not
+    # a model-defaulted 'chrome'. Strip a brain-added `browser` param so the handler
+    # falls through to config.browser_engine. Covers a direct open_browser AND
+    # open_browser steps inside a run_workflow (the "open browser and X" case). If
+    # the user DID name an engine, the param is kept. Runs before the debug print
+    # so the [brain] PARAMS block reflects the correction.
+    _normalize_default_browser(result, raw_input)
 
     # create_file / delete_file / rename_file: the executor owns the confirm card and
     # shows the fully-resolved path before acting. Brain-level requires_confirmation

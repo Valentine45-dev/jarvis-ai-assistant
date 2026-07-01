@@ -3545,7 +3545,15 @@ CONFIG dirty-wiring audit (final -- every _apply_cfg widget marks UNSAVED):
 
 PHYSICAL TEST:
   BUG 1: Settings -> Default Browser = Firefox -> APPLY. 'open browser and navigate to youtube'
-         (no engine named) -> FIREFOX opens (not Chrome). 'open chrome' still opens Chrome.
+         (no engine named) -> FIREFOX opens (not Chrome), AND the [brain] block shows the
+         open_browser step with NO 'browser' param. 'open chrome'/'open firefox' still honour the name.
+    PASS 2: the compound 'open browser AND navigate' still opened Chrome because the brain copied
+    browser:'chrome' into the workflow step from the morning_routine example. Fixed at TWO levels:
+    (a) Claude.md examples no longer teach chrome (morning_routine omits browser; added a targeted
+    'open browser and navigate to youtube' example; bullet covers workflow steps); (b) DETERMINISTIC
+    backstop brain._normalize_default_browser strips a model-added browser param when the user named
+    no engine -> handler uses config.browser_engine regardless of the model. (proof:
+    uv run pytest -q tests/test_brain_default_browser.py)
   BUG 2: flip Code Execution (or any previously-unwired toggle: Mute Mic, Auto-confirm, Persistent
          STT, Auto-run AI fixes, ...) -> '* UNSAVED' appears IMMEDIATELY, same as editing a text field.
 

@@ -75,7 +75,7 @@ Open a desktop application, URL, or system utility.
 
 **Actions:**
 
-- `open_browser` — Open / switch the **controlled** browser engine (Chrome, Edge, or Firefox). Set `browser` to `chrome` | `edge` | `firefox` **only when the user names one**. JARVIS drives one active engine but can keep several alive at once; switching is instant and **closes nothing**. Use for *"open chrome"*, *"open edge"*, *"open firefox"*, **and for switching engines**: *"switch to edge"*, *"switch to firefox"*, *"use chrome"*, *"control edge instead"*, *"go to firefox"* (meaning the browser app). After this, every browser command (navigate, click, screenshot, scroll, tabs) operates on the now-active engine. **Bare *"open browser"* / *"open a browser"* / *"open the browser"* with NO engine named → OMIT the `browser` param** (emit `parameters: {}` or without `browser`) so JARVIS opens the user's **configured default engine** (`config.browser_engine`, set in Settings). Do **NOT** default to `"chrome"` for a generic open — that ignores the user's Default Browser setting. Only put a concrete engine in `browser` when the user actually says the engine. **Do not** route a *browser-engine* switch to `browser_automation/switch_tab` — that is for switching **tabs inside** the current browser, not switching Chrome↔Edge↔Firefox.
+- `open_browser` — Open / switch the **controlled** browser engine (Chrome, Edge, or Firefox). Set `browser` to `chrome` | `edge` | `firefox` **only when the user names one**. JARVIS drives one active engine but can keep several alive at once; switching is instant and **closes nothing**. Use for *"open chrome"*, *"open edge"*, *"open firefox"*, **and for switching engines**: *"switch to edge"*, *"switch to firefox"*, *"use chrome"*, *"control edge instead"*, *"go to firefox"* (meaning the browser app). After this, every browser command (navigate, click, screenshot, scroll, tabs) operates on the now-active engine. **Bare *"open browser"* / *"open a browser"* / *"open the browser"* with NO engine named → OMIT the `browser` param** (emit `parameters: {}` or without `browser`) so JARVIS opens the user's **configured default engine** (`config.browser_engine`, set in Settings). Do **NOT** default to `"chrome"` for a generic open — that ignores the user's Default Browser setting. Only put a concrete engine in `browser` when the user actually says the engine. **This holds INSIDE a workflow too:** for a compound *"open browser and \<do X\>"* → `automation_task` / `run_workflow`, the `open_browser` **step** must ALSO omit `browser` (`parameters: {}`) — do not copy `"chrome"` from any example into the step. **Do not** route a *browser-engine* switch to `browser_automation/switch_tab` — that is for switching **tabs inside** the current browser, not switching Chrome↔Edge↔Firefox.
 - `open_vscode` — Open VS Code
 - `open_terminal` — Open terminal/command prompt
 - `open_file_manager` — Open file explorer/finder
@@ -1700,7 +1700,7 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "parameters": {
     "task_name": "morning_routine",
     "steps": [
-      { "intent": "open_app", "action": "open_browser", "parameters": { "browser": "chrome" } },
+      { "intent": "open_app", "action": "open_browser", "parameters": {} },
       { "intent": "open_app", "action": "open_spotify", "parameters": {} },
       { "intent": "system_control", "action": "volume_up", "parameters": { "level": 40 } },
       { "intent": "search_web", "action": "google_search", "parameters": { "query": "today's news" } }
@@ -1708,6 +1708,27 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   },
   "confidence": 0.88,
   "response": "Morning routine — let's go.",
+  "hud_status": "AUTOMATION",
+  "requires_confirmation": false
+}
+```
+
+-----
+
+**Input:** `"open browser and navigate to youtube"` (compound → `run_workflow`; the `open_browser` step has **NO** `browser` — a generic "open browser" opens the user's configured default engine, NOT chrome. Never write `browser: "chrome"` here, and never say "Chrome" in the response unless the user named it.)
+
+```json
+{
+  "intent": "automation_task",
+  "action": "run_workflow",
+  "parameters": {
+    "steps": [
+      { "intent": "open_app", "action": "open_browser", "parameters": {} },
+      { "intent": "browser_automation", "action": "navigate", "parameters": { "url": "https://www.youtube.com" } }
+    ]
+  },
+  "confidence": 0.94,
+  "response": "Opening your browser, then YouTube.",
   "hud_status": "AUTOMATION",
   "requires_confirmation": false
 }
