@@ -3552,7 +3552,11 @@ PHYSICAL TEST:
     (a) Claude.md examples no longer teach chrome (morning_routine omits browser; added a targeted
     'open browser and navigate to youtube' example; bullet covers workflow steps); (b) DETERMINISTIC
     backstop brain._normalize_default_browser strips a model-added browser param when the user named
-    no engine -> handler uses config.browser_engine regardless of the model. (proof:
+    no engine -> handler uses config.browser_engine regardless of the model.
+    PASS 3: the ACTION opened Firefox but the FIRST spoken line still said 'Chrome up...' -- the
+    model wrote `response` from its pre-strip guess. _normalize_default_browser now also RENAMES the
+    engine in `response` to the configured engine (or 'your browser' when default=auto) so the first
+    line matches what opens. Physical: the FIRST line says Firefox (or generic), not Chrome. (proof:
     uv run pytest -q tests/test_brain_default_browser.py)
   BUG 2: flip Code Execution (or any previously-unwired toggle: Mute Mic, Auto-confirm, Persistent
          STT, Auto-run AI fixes, ...) -> '* UNSAVED' appears IMMEDIATELY, same as editing a text field.

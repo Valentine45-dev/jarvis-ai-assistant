@@ -56,3 +56,48 @@ def test_open_browser_without_browser_param_no_crash():
     r = {"intent": "open_app", "action": "open_browser", "parameters": {}}
     brain._normalize_default_browser(r, "open browser")
     assert r["parameters"] == {}
+
+
+# ── response text is corrected to match what actually opens ──────────────────
+
+def test_response_renamed_to_configured_engine(monkeypatch):
+    from config.settings import config
+    monkeypatch.setattr(config, "browser_engine", "firefox", raising=False)
+    r = {"intent": "open_app", "action": "open_browser", "parameters": {"browser": "chrome"},
+         "response": "Chrome up, heading to Claude's platform now."}
+    brain._normalize_default_browser(r, "open browser and navigate to claude")
+    assert "browser" not in r["parameters"]
+    assert "Firefox" in r["response"] and "Chrome" not in r["response"]
+    assert "Claude" in r["response"]   # non-engine text left alone (Claude != chrome)
+
+
+def test_response_generic_when_configured_auto(monkeypatch):
+    from config.settings import config
+    monkeypatch.setattr(config, "browser_engine", "auto", raising=False)
+    r = {"intent": "open_app", "action": "open_browser", "parameters": {},
+         "response": "Opening Chrome now."}
+    brain._normalize_default_browser(r, "open the browser")
+    assert "your browser" in r["response"] and "Chrome" not in r["response"]
+
+
+def test_response_untouched_when_engine_named(monkeypatch):
+    from config.settings import config
+    monkeypatch.setattr(config, "browser_engine", "firefox", raising=False)
+    r = {"intent": "open_app", "action": "open_browser", "parameters": {"browser": "chrome"},
+         "response": "Chrome's up."}
+    brain._normalize_default_browser(r, "open chrome")
+    assert r["response"] == "Chrome's up."          # user named chrome → keep
+    assert r["parameters"]["browser"] == "chrome"
+
+
+def test_workflow_response_renamed(monkeypatch):
+    from config.settings import config
+    monkeypatch.setattr(config, "browser_engine", "firefox", raising=False)
+    r = {"intent": "automation_task", "action": "run_workflow", "parameters": {"steps": [
+        {"intent": "open_app", "action": "open_browser", "parameters": {"browser": "chrome"}},
+        {"intent": "browser_automation", "action": "navigate",
+         "parameters": {"url": "https://platform.claude.com/"}},
+    ]}, "response": "Chrome up, heading to Claude's platform now."}
+    brain._normalize_default_browser(r, "open browser and navigate to https://platform.claude.com/")
+    assert "browser" not in r["parameters"]["steps"][0]["parameters"]
+    assert "Firefox" in r["response"] and "Chrome" not in r["response"]

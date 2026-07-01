@@ -296,22 +296,34 @@ _BROWSER_ENGINE_WORDS: tuple[str, ...] = (
 )
 
 
+_ENGINE_DISPLAY: dict[str, str] = {"chrome": "Chrome", "edge": "Edge", "firefox": "Firefox"}
+_ENGINE_NAME_RE = re.compile(r"\b(chrome|edge|firefox|mozilla|msedge|chromium)\b", re.I)
+
+
 def _normalize_default_browser(result: dict, user_text: str) -> None:
     """Deterministic Default-Browser backstop for `open_browser`.
 
-    If the user's text names NO browser engine, strip any `browser` param the model
-    added to an `open_browser` action — direct OR inside a `run_workflow` step — so
-    the executor opens the CONFIGURED default (`config.browser_engine`) instead of a
-    hardcoded/model-defaulted 'chrome'. If the user DID name an engine, keep it.
-    Prompt rules alone are model-dependent; this makes the behaviour deterministic.
+    If the user's text names NO browser engine, (1) strip any `browser` param the
+    model added to an `open_browser` action — direct OR inside a `run_workflow` step
+    — so the executor opens the CONFIGURED default (`config.browser_engine`) instead
+    of a hardcoded/model-defaulted 'chrome'; and (2) fix the spoken `response`, which
+    the model wrote from its PRE-strip guess (e.g. "Chrome up, …") — rename the wrong
+    engine to the configured one (or a generic "your browser" when the default is
+    'auto') so the FIRST line matches what actually opens. If the user DID name an
+    engine, everything is kept. Prompt rules alone are model-dependent; this is
+    deterministic.
     """
     try:
         low = (user_text or "").lower()
         if any(w in low for w in _BROWSER_ENGINE_WORDS):
             return  # user named an engine → respect the model's browser choice
 
+        has_open_browser = False
+
         def _strip(node: object) -> None:
+            nonlocal has_open_browser
             if isinstance(node, dict) and node.get("action") == "open_browser":
+                has_open_browser = True
                 params = node.get("parameters")
                 if isinstance(params, dict):
                     params.pop("browser", None)
@@ -321,6 +333,22 @@ def _normalize_default_browser(result: dict, user_text: str) -> None:
         if isinstance(steps, list):
             for step in steps:
                 _strip(step)  # open_browser inside a workflow
+
+        if not has_open_browser:
+            return
+
+        # (2) The model's `response` may name its pre-strip guess ("Chrome up…").
+        # Rename it to the actual configured engine so the FIRST line isn't wrong.
+        resp = result.get("response") or ""
+        if resp and _ENGINE_NAME_RE.search(resp):
+            try:
+                from config.settings import config as _cfg
+                configured = (getattr(_cfg, "browser_engine", "") or "chrome").strip().lower()
+            except Exception:
+                configured = "chrome"
+            # 'auto'/unknown → the real engine isn't known until run time → generic.
+            replacement = _ENGINE_DISPLAY.get(configured, "your browser")
+            result["response"] = _ENGINE_NAME_RE.sub(replacement, resp)
     except Exception:
         pass
 
