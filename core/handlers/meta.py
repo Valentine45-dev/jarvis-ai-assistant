@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 
 from config.settings import config
-from core.handlers.shared import _ok, _err, _tlog, get_page_cache, request_confirmation
+from core.handlers.shared import _ok, _err, _tlog, request_confirmation
 
 
 # Pool of programmer / dry-wit one-liners for jarvis_meta.tell_joke.
@@ -202,9 +202,14 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
             return _err(str(exc))
 
     if action == "conversational":
-        cached = get_page_cache()
-        if cached:
-            return _ok(cached[:800])
+        # P3 BUG A: do NOT dump the raw page cache here. Returning the scrape
+        # verbatim overrode the brain's own synthesized answer (see the
+        # conversational branch in response_composer) — so a "summarize the
+        # search" turn read the literal "--- Page content ---" dump aloud, and a
+        # stale cache leaked into unrelated questions. Return empty so the
+        # composer falls through to the brain's `resp`, which the brain writes
+        # FROM the injected <page_content> (Claude.md §3 grounding rule):
+        # synthesis, not a raw dump.
         return _ok("")
 
     if action == "wipe_memory":

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.handlers.shared import _err, _set_page_cache
+from core.handlers.shared import _clear_page_cache, _err, _set_page_cache
 
 
 def _as_bool(v) -> bool:
@@ -52,6 +52,10 @@ def _handle_browser_automation(action: str, params: dict) -> dict:
     if action == "navigate":
         if not url:
             return _err("No URL provided")
+        # P3 BUG B: navigating to a new page makes the previous page's cached
+        # text stale — drop it so it can't ground a follow-up about the NEW page
+        # (a subsequent read_page repopulates it with the current page).
+        _clear_page_cache()
         return browser.navigate(url)
 
     if action == "new_tab":

@@ -348,7 +348,11 @@ def ask_claude(
         from core.executor import get_page_cache
         cp = get_page_cache()
         if cp:
-            cached_page = cp[:600]
+            # P3: search results now flow through here, so the brain synthesizes
+            # its answer FROM this block (Claude.md §3). Give it enough of the
+            # page/SERP to answer accurately. Safe against stale pollution now
+            # that the cache is TTL-expired and cleared on new search/navigation.
+            cached_page = cp[:1200]
     except Exception:
         pass
 

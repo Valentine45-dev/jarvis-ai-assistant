@@ -25,6 +25,7 @@ import logging
 import platform
 import re
 import threading
+import time
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -73,19 +74,44 @@ def _confirm(prompt: str) -> dict:
 # ── Page cache ────────────────────────────────────────────────────────────────
 # R2-19: single-key dict written from browser handler / read from brain; lock
 # keeps concurrent read_page + follow-up routing consistent.
+#
+# P3 lifecycle: this cache grounds a follow-up ("summarize", "who won") in the
+# page/SERP the user just read (the brain injects it as <page_content>). It must
+# NOT linger into an unrelated conversation, or it answers new questions with
+# stale content. Two invalidations: (1) a NEW search / navigation clears it (a
+# topic-change signal — see _do_search_web / browser_handler navigate), and
+# (2) a TTL backstop expires it so an unrelated follow-up with no intervening
+# navigation can't leak it either. A same-page multi-turn follow-up still works
+# (within the TTL).
 
-_PAGE_CACHE: dict[str, str] = {}
+_PAGE_CACHE: dict[str, object] = {}   # {"text": str, "ts": float(monotonic)}
 _PAGE_CACHE_LOCK = threading.Lock()
+_PAGE_CACHE_TTL_S = 120.0             # stale content expires after 2 minutes
 
 
 def get_page_cache() -> str | None:
     with _PAGE_CACHE_LOCK:
-        return _PAGE_CACHE.get("last_read")
+        text = _PAGE_CACHE.get("text")
+        if not text:
+            return None
+        ts = float(_PAGE_CACHE.get("ts", 0.0))
+        if _PAGE_CACHE_TTL_S and (time.monotonic() - ts) > _PAGE_CACHE_TTL_S:
+            _PAGE_CACHE.clear()       # expired — drop it so it can't ground a later turn
+            return None
+        return text  # type: ignore[return-value]
 
 
 def _set_page_cache(text: str) -> None:
     with _PAGE_CACHE_LOCK:
-        _PAGE_CACHE["last_read"] = text
+        _PAGE_CACHE["text"] = text
+        _PAGE_CACHE["ts"] = time.monotonic()
+
+
+def _clear_page_cache() -> None:
+    """Drop any cached page content — called when a new search/navigation starts
+    (topic change), so a stale page can't ground an unrelated follow-up."""
+    with _PAGE_CACHE_LOCK:
+        _PAGE_CACHE.clear()
 
 
 # ── Confirmation system ───────────────────────────────────────────────────────

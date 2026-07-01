@@ -54,23 +54,25 @@ def test_google_search_caches_serp_for_grounding(monkeypatch):
     assert "2026 MVP" in shared.get_page_cache()      # ...into the grounding cache
 
 
-def test_youtube_search_does_not_autoread(monkeypatch):
-    # navigational search — no extra read, cache left untouched
+def test_youtube_search_clears_stale_cache_and_does_not_autoread(monkeypatch):
+    # navigational search — no read, and it CLEARS any stale page (topic change)
+    # so a prior page can't leak into this search's follow-ups (P3 BUG B).
     res, fake = _run("youtube", monkeypatch)
     assert res["success"] is True
     assert fake.read_calls == 0
-    assert shared.get_page_cache() == "SENTINEL"
+    assert shared.get_page_cache() is None            # SENTINEL cleared, nothing re-read
 
 
-def test_github_search_does_not_autoread(monkeypatch):
+def test_github_search_clears_stale_cache_and_does_not_autoread(monkeypatch):
     res, fake = _run("github", monkeypatch)
     assert res["success"] is True
     assert fake.read_calls == 0
-    assert shared.get_page_cache() == "SENTINEL"
+    assert shared.get_page_cache() is None
 
 
 def test_google_read_failure_does_not_break_search(monkeypatch):
-    # best-effort: a read that raises must NOT fail the search itself
+    # best-effort: a read that raises must NOT fail the search itself. The stale
+    # cache is still cleared (the search cleared it before the failed read).
     fake = _FakeBrowser()
 
     def _boom():
@@ -81,4 +83,4 @@ def test_google_read_failure_does_not_break_search(monkeypatch):
     shared._set_page_cache("SENTINEL")
     res = al._do_search_web("anything", "google")
     assert res["success"] is True                     # search still succeeded
-    assert shared.get_page_cache() == "SENTINEL"      # cache untouched on failure
+    assert shared.get_page_cache() is None            # cleared; failed read set nothing

@@ -14,7 +14,7 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from core.handlers.shared import _OS, _ok, _err, _set_page_cache, _tlog
+from core.handlers.shared import _OS, _ok, _err, _clear_page_cache, _set_page_cache, _tlog
 
 # Bounds for Program Files / AppData exe scanning — keep cold lookups snappy.
 _APP_SCAN_TIME_BUDGET_S = 5.0
@@ -728,6 +728,11 @@ def _do_search_web(query: str, platform_key: str) -> dict:
         "wikipedia":     f"https://en.wikipedia.org/wiki/Special:Search?search={quote_plus(query)}",
     }
     url = urls.get(platform_key, urls["google"])
+    # P3 BUG B: a new search is a topic change — drop any stale page cache so a
+    # prior page can't ground THIS search's follow-ups (or a later unrelated
+    # question). Cleared for ALL platforms; google then re-populates it below
+    # via read_page, navigational platforms (youtube/github/…) leave it empty.
+    _clear_page_cache()
     if not browser.is_ready:
         browser.start()
     if browser.is_ready:

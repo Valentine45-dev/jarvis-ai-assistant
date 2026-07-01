@@ -3223,6 +3223,45 @@ Code-level proof (Part A is deterministic):
   -> google search reads the SERP into the cache; youtube + github do NOT auto-read (cache
      untouched); a read that raises does NOT fail the search (cache untouched, search ok).
 
+§47 — search grounding pass 2: synthesize (don't raw-dump) + page-cache lifecycle
+-----------------------------------------------------------------------
+Background (physical test of §46 surfaced TWO regressions):
+  BUG A (raw dump): "summarize briefly" after a search read the LITERAL scrape aloud
+    ("--- Tab --- / Document title / --- Page content ---") instead of a synthesized answer.
+    Cause: jarvis_meta/conversational returned the raw page cache (meta.py), and
+    response_composer's conversational branch prefers handler output over the brain's resp
+    -> the brain's OWN synthesized (grounded) answer was discarded for the raw dump.
+  BUG B (stale-cache leak): after "search cats on youtube" (correctly no auto-read), the
+    unrelated "who won the 2022 world cup" got the SAME OLD NBA page back verbatim. Cause:
+    the page cache NEVER expired or cleared -- it lived forever and leaked into any later
+    conversational turn (a NEW wrong-answer class: topically wrong, not just dated).
+Fix:
+  A (meta.py): conversational returns EMPTY -> the composer falls through to the brain's
+    resp, which the brain writes FROM the injected <page_content> (synthesis, not a dump).
+  B (shared.py): page cache gets a timestamp + 120s TTL (get_page_cache auto-expires) and a
+    new _clear_page_cache(). Cleared on a NEW search (app_launcher _do_search_web, ALL
+    platforms) and on browser navigate (browser_handler) -- topic-change signals. A same-page
+    multi-turn follow-up still works within the TTL.
+  brain.py: <page_content> cap 600 -> 1200 so synthesis has headroom (safe now that stale
+    caches expire + clear).
+Untouched: the grounding MECHANISM from §46 (google auto-read) -- that content was already
+correct (Brunson was in the cache); §47 fixes PRESENTATION (synthesize) + LIFECYCLE (expire/clear).
+
+PHYSICAL TEST (Part A synthesis is model-driven -> verify live):
+  1. "search latest nba finals mvp 2026" then "summarize briefly, team + mvp" -> a SYNTHESIZED
+     spoken answer (e.g. "Jalen Brunson, Knicks beat Cavaliers 4-0"), NOT the raw scrape.
+  2. Then "search cats on youtube" (clears cache), then "who won the 2022 world cup" ->
+     Argentina from knowledge, NOT the stale NBA dump. (The core BUG-B repro.)
+  3. Wait >2 min after a search, then an unrelated conversational question -> no stale leak (TTL).
+  4. Regression: same-page double follow-up within 2 min still grounded (both answer the page).
+
+Code-level proof:
+  uv run pytest -q tests/test_page_cache_lifecycle.py tests/test_search_grounding.py
+  -> cache returns within TTL / None after TTL (entry dropped); _clear_page_cache clears;
+     conversational returns "" even with a cache present (no raw dump); google search reads
+     the SERP into the cache; youtube + github CLEAR a stale cache and do not auto-read; a
+     failing read doesn't break the search (cache left cleared).
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
