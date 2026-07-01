@@ -530,6 +530,14 @@ def _stream_execute(
     else:
         _grp_kwargs["start_new_session"] = True
 
+    # P4: we DECODE the child's stdout as UTF-8 (below), so the child must ENCODE
+    # it as UTF-8 too. On Windows a piped Python child defaults to the locale
+    # codepage (cp1252), so a '°'/arrow came out as cp1252 bytes that are invalid
+    # UTF-8 → rendered as '�' (mojibake) in the raw terminal panel. Forcing the
+    # child into UTF-8 I/O makes the bytes match our decode. (No-op for non-Python
+    # children; cmd.exe codepage output is a separate, unreported case.)
+    _child_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+
     try:
         proc = subprocess.Popen(
             args,
@@ -540,6 +548,7 @@ def _stream_execute(
             shell=False,
             encoding="utf-8",
             errors="replace",
+            env=_child_env,
             **_grp_kwargs,
         )
     except Exception as exc:

@@ -3374,6 +3374,28 @@ Code-level proof (regression guard that the rule isn't dropped):
      vision _DESCRIBE_PROMPT + find prompt all carry a never-'sir' rule; the old 'butler tone'
      wording is gone.
 
+§51 — code_execution raw stdout is UTF-8 (no more '�' mojibake on '°'/arrows)
+-----------------------------------------------------------------------
+Background (sweep Priority 4): 'weather tomorrow?' routed to code_execution (Python via urllib)
+and the RAW stdout showed '16.36�C' -- the degree sign and an arrow rendered as '�'. The
+interpreted narration line ABOVE it was correct ('16.4°C') because it's produced in-process;
+only the child's raw stdout mis-rendered. Cause: _stream_execute DECODES the child stdout as
+UTF-8, but a piped Python child on Windows ENCODES stdout in the locale codepage (cp1252), so
+'°' (byte 0xB0) is invalid UTF-8 -> '�' (errors='replace').
+Fix (code_exec.py _stream_execute): pass env with PYTHONIOENCODING=utf-8 + PYTHONUTF8=1 to the
+child so it EMITS UTF-8, matching our decode. No-op for non-Python children; cmd.exe codepage
+output is a separate, unreported case (would need chcp 65001).
+
+PHYSICAL TEST:
+  1. 'weather tomorrow?' (or any code_execution that prints °/arrows/accents) -> the RAW stdout
+     shows '16.4°C' correctly, NOT '16.36�C'. No '�' anywhere in the raw block.
+  2. run_python printing an emoji or accented text (e.g. 'café', '→', '£') -> renders correctly.
+
+Code-level proof:
+  uv run pytest -q tests/test_code_exec_encoding.py
+  -> a run_python child that prints '16.4°C → warm' round-trips: output contains '°C' and '→',
+     and contains NO replacement char '�'.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
