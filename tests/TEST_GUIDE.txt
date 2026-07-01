@@ -3421,6 +3421,38 @@ Code-level proof:
   -> DNS error humanized + tail/prefix/net:: stripped; connection-refused; cert error; generic
      fallback still strips the noise and names the host.
 
+§53 — WEATHER covers forecasts natively (no code_execution fallback for 'weather tomorrow')
+-----------------------------------------------------------------------
+Background (cross-cutting theme, option A): a forecast query ('weather tomorrow?', 'will it
+rain today?') had no native path -- WEATHER did CURRENT only -- so the brain fell back to
+code_execution (writing urllib/pytz by hand), which pops a confirm card + shows raw code.
+Same shape as the P2 timezone gap. Fix (option A): extend the WEATHER handler natively, so a
+forecast query never touches code_execution.
+Implementation:
+  - core/integrations/weather.py: factored _fetch(endpoint, city, timeout) shared by current +
+    forecast; new get_forecast(location, when) hits OpenWeather's free /forecast (5-day/3-hour)
+    endpoint and aggregates the target LOCAL day (in the CITY's timezone -- 'tomorrow' means
+    tomorrow where the weather is) into min/max temp, dominant condition, peak rain chance.
+    Falls back to the soonest day if the target is out of the 5-day window. format_forecast()
+    spells units out (spoken verbatim, like format_current_weather).
+  - core/handlers/weather.py: get_forecast action (when: today|tomorrow, default tomorrow).
+  - Claude.md §14: get_forecast action + when param + routing (time-forward word or 'will it
+    rain' -> get_forecast; right-now -> get_current_weather; do NOT route forecast to code_execution).
+
+PHYSICAL TEST (Part routing is model-driven -> verify live):
+  1. 'what's the weather tomorrow?' -> routes to weather/get_forecast (NOT code_execution),
+     answers INSTANTLY (e.g. 'Forecast for Monrovia, Liberia tomorrow: light rain, between 22
+     and 28 degrees Celsius, 60 percent chance of rain'), NO confirm card, NO raw code.
+  2. 'will it rain today?' -> get_forecast when=today, gives a rain chance (not current conditions).
+  3. 'forecast for London' -> get_forecast for London tomorrow.
+  4. Regression: 'what's the weather?' / 'is it raining right now' -> still get_current_weather.
+
+Code-level proof:
+  uv run pytest -q tests/test_weather.py
+  -> get_forecast aggregates tomorrow's steps (min/max, dominant condition, rain chance);
+     format_forecast spells units out (no glyphs); the handler get_forecast action returns _ok;
+     current-weather path unchanged; a bare 'forecast' action is still unsupported.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

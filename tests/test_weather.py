@@ -107,8 +107,64 @@ def test_format_spells_out_units_for_tts():
         assert glyph not in out
 
 
+def _forecast_payload(temps, *, desc="light rain", pop=0.6, tz=0, days_ahead=1):
+    """Build an OpenWeather /forecast payload whose steps land on the target local
+    day (default: tomorrow, UTC)."""
+    from datetime import datetime, timedelta, timezone
+
+    target = (datetime.now(timezone.utc) + timedelta(days=days_ahead)).date()
+    lst = []
+    for i, t in enumerate(temps):
+        dt = datetime(target.year, target.month, target.day, 6 + i * 3, tzinfo=timezone.utc)
+        lst.append({
+            "dt": int(dt.timestamp()),
+            "main": {"temp": t},
+            "weather": [{"description": desc}],
+            "pop": pop,
+        })
+    return {"city": {"name": "Monrovia", "country": "LR", "timezone": tz}, "list": lst}
+
+
+def test_get_forecast_aggregates_tomorrow(monkeypatch):
+    monkeypatch.setattr(weather_mod.config, "openweather_api_key", "test-key")
+    monkeypatch.setattr(weather_mod.config, "weather_default_city", "Monrovia,LR")
+    payload = _forecast_payload([24, 28, 22], desc="light rain", pop=0.6)
+    monkeypatch.setattr(weather_mod, "urlopen", lambda *a, **k: _FakeResp(payload))
+
+    f = weather_mod.get_forecast(when="tomorrow")
+    assert f["when"] == "tomorrow"
+    assert f["temp_min_c"] == 22 and f["temp_max_c"] == 28
+    assert f["description"] == "light rain"
+    assert f["rain_chance"] == 60
+
+
+def test_format_forecast_spoken_units():
+    out = weather_mod.format_forecast({
+        "location": "Monrovia", "country": "LR", "when": "tomorrow",
+        "description": "light rain", "temp_min_c": 22, "temp_max_c": 28, "rain_chance": 60,
+    })
+    assert "Forecast for Monrovia, Liberia tomorrow" in out
+    assert "between 22 and 28 degrees Celsius" in out
+    assert "60 percent chance of rain" in out
+    for glyph in ("°", "28C", "%"):
+        assert glyph not in out
+
+
+def test_handle_weather_forecast_success(monkeypatch):
+    monkeypatch.setattr(
+        weather_handler, "get_forecast",
+        lambda location=None, when="tomorrow", timeout=8: {
+            "location": "Accra", "country": "GH", "when": "tomorrow",
+            "description": "clear sky", "temp_min_c": 25, "temp_max_c": 31, "rain_chance": 10,
+        },
+    )
+    out = _handle_weather("get_forecast", {"location": "Accra", "when": "tomorrow"})
+    assert out["success"] is True
+    assert "Forecast for Accra, Ghana tomorrow" in out["output"]
+
+
 def test_handle_weather_unknown_action():
-    out = _handle_weather("forecast", {})
+    out = _handle_weather("forecast", {})   # bare 'forecast' is still unsupported
     assert out["success"] is False
     assert "Unsupported weather action" in out["error"]
 

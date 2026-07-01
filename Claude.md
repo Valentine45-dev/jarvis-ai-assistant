@@ -1042,16 +1042,34 @@ When a plain reminder fires, JARVIS now **speaks it and shows a toast** (not jus
 
 ### 14. `weather`
 
-Fetch current weather conditions using OpenWeather.
+Fetch current conditions or a short forecast using OpenWeather.
 
 **Actions:**
 
-- `get_current_weather` — Get current weather for a location (or default city when omitted)
+- `get_current_weather` — Current weather for a location (or default city when omitted). Use for *"what's the weather"*, *"weather in Paris"*, *"how hot is it"*, *"is it raining right now"*.
+- `get_forecast` — **Tomorrow/today's forecast** for a location. Use for *"weather tomorrow"*, *"what's tomorrow's weather"*, *"forecast for X"*, *"will it rain today/tomorrow"*, *"is it going to rain"*, *"weather this afternoon/tonight"*. Set `when` to `"today"` or `"tomorrow"` (default `tomorrow`). **This is a native path — do NOT route a forecast query to `code_execution`** (writing `pytz`/`urllib` by hand is the wrong path; it pops a confirm card + raw code). Returns a daily min/max, dominant condition, and rain chance.
 
 **Parameters:**
 
 ```json
 { "location": "string — city name, optionally with country (e.g. Monrovia,LR)" }
+{ "when": "string — get_forecast only: 'today' | 'tomorrow' (default 'tomorrow')" }
+```
+
+**Routing — current vs forecast:** a *time-forward* word (*tomorrow*, *tonight*, *this afternoon*, *later*, *this week*) or *"will it rain"* → **`get_forecast`**. A *right-now* question (*"what's the weather"*, *"is it raining"* with no future word) → **`get_current_weather`**.
+
+*Input:* `"what's the weather tomorrow?"`
+
+```json
+{
+  "intent": "weather",
+  "action": "get_forecast",
+  "parameters": { "when": "tomorrow" },
+  "confidence": 0.95,
+  "response": "Pulling tomorrow's forecast.",
+  "hud_status": "WEATHER",
+  "requires_confirmation": false
+}
 ```
 
 **HUD Label:** `WEATHER`

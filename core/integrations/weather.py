@@ -64,18 +64,17 @@ def _default_city() -> str:
     return city or "Monrovia,LR"
 
 
-def get_current_weather(location: str | None = None, *, timeout: int = 8) -> dict:
-    city = (location or "").strip() or _default_city()
-    params = {
-        "q": city,
-        "appid": _api_key(),
-        "units": "metric",
-    }
-    url = "https://api.openweathermap.org/data/2.5/weather?" + urlencode(params)
+def _fetch(endpoint: str, city: str, timeout: int) -> dict:
+    """GET an OpenWeather 2.5 endpoint ('weather' | 'forecast') as JSON.
 
+    Shared by current + forecast so the auth/units/error handling lives in one
+    place. Raises WeatherClientError with a human message on any failure.
+    """
+    params = {"q": city, "appid": _api_key(), "units": "metric"}
+    url = f"https://api.openweathermap.org/data/2.5/{endpoint}?" + urlencode(params)
     try:
         with urlopen(url, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
     except HTTPError as exc:
         body = (exc.read() or b"").decode("utf-8", errors="replace")
         try:
@@ -87,6 +86,11 @@ def get_current_weather(location: str | None = None, *, timeout: int = 8) -> dic
         raise WeatherClientError(f"Weather request failed: {exc.reason}") from exc
     except Exception as exc:
         raise WeatherClientError(f"Weather request failed: {exc}") from exc
+
+
+def get_current_weather(location: str | None = None, *, timeout: int = 8) -> dict:
+    city = (location or "").strip() or _default_city()
+    payload = _fetch("weather", city, timeout)
 
     weather_list = payload.get("weather") or [{}]
     main = payload.get("main") or {}
@@ -128,4 +132,91 @@ def format_current_weather(snapshot: dict) -> str:
         parts.append(f"humidity {int(humidity)} percent")
     if wind is not None:
         parts.append(f"wind {float(wind):.1f} meters per second")
+    return ", ".join(parts)
+
+
+def get_forecast(location: str | None = None, when: str = "tomorrow", *, timeout: int = 8) -> dict:
+    """Daily forecast summary from OpenWeather's free 5-day/3-hour endpoint.
+
+    Aggregates the 3-hour steps for the target local day (in the CITY's timezone —
+    'tomorrow' means tomorrow where the weather is, not where the user is) into
+    min/max temp, the dominant condition, and the peak rain probability. `when`
+    accepts 'today' or 'tomorrow' (anything else → tomorrow). If the target day
+    isn't in the 5-day window, falls back to the soonest available day.
+    """
+    import time
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+
+    city = (location or "").strip() or _default_city()
+    payload = _fetch("forecast", city, timeout)
+
+    city_info = payload.get("city") or {}
+    tz_offset = int(city_info.get("timezone", 0) or 0)   # seconds east of UTC
+    items = payload.get("list") or []
+    if not items:
+        raise WeatherClientError("No forecast data was returned.")
+
+    def _local_date(unix_dt: int):
+        # shift the UTC instant by the city offset, then read the wall date
+        return datetime.fromtimestamp(int(unix_dt) + tz_offset, timezone.utc).date()
+
+    by_date: dict = {}
+    for it in items:
+        dt = it.get("dt")
+        if dt is None:
+            continue
+        by_date.setdefault(_local_date(dt), []).append(it)
+
+    delta = 0 if "today" in (when or "").lower() else 1
+    city_today = datetime.fromtimestamp(time.time() + tz_offset, timezone.utc).date()
+    target = city_today + timedelta(days=delta)
+    if target not in by_date:
+        # target beyond the window (or no steps left today) → soonest future day
+        future = sorted(d for d in by_date if d >= city_today)
+        target = future[0] if future else sorted(by_date)[0]
+    day_items = by_date[target]
+
+    temps = [
+        float(it["main"]["temp"]) for it in day_items
+        if isinstance(it.get("main"), dict) and it["main"].get("temp") is not None
+    ]
+    conditions = [
+        (it.get("weather") or [{}])[0].get("description", "") for it in day_items
+    ]
+    pops = [float(it.get("pop") or 0.0) for it in day_items]
+    dominant = Counter([c for c in conditions if c]).most_common(1)
+
+    return {
+        "location": city_info.get("name") or city,
+        "country": city_info.get("country", ""),
+        "when": "today" if target == city_today else ("tomorrow" if target == city_today + timedelta(days=1) else target.isoformat()),
+        "date": target.isoformat(),
+        "temp_min_c": min(temps) if temps else None,
+        "temp_max_c": max(temps) if temps else None,
+        "description": dominant[0][0] if dominant else "unknown conditions",
+        "rain_chance": round(max(pops) * 100) if pops else None,
+    }
+
+
+def format_forecast(f: dict) -> str:
+    """Spoken forecast line — units spelled out (same reasoning as
+    format_current_weather: this string is read verbatim by TTS)."""
+    place = str(f.get("location") or "Unknown location").strip()
+    country = _country_name(str(f.get("country") or "").strip())
+    where = f"{place}, {country}" if country else place
+    when = str(f.get("when") or "tomorrow")
+    cond = str(f.get("description") or "unknown conditions")
+
+    tmin = f.get("temp_min_c")
+    tmax = f.get("temp_max_c")
+    rain = f.get("rain_chance")
+
+    parts = [f"Forecast for {where} {when}: {cond}"]
+    if tmin is not None and tmax is not None:
+        parts.append(f"between {round(float(tmin))} and {round(float(tmax))} degrees Celsius")
+    elif tmax is not None:
+        parts.append(f"around {round(float(tmax))} degrees Celsius")
+    if rain is not None:
+        parts.append(f"{int(rain)} percent chance of rain")
     return ", ".join(parts)
