@@ -932,8 +932,8 @@ Commands directed at JARVIS itself — status, settings, identity.
 - `set_wake_word` — Change the wake word
 - `help` — List available commands
 - `who_are_you` — Identity response
-- `tell_time` — Report current time
-- `tell_date` — Report current date
+- `tell_time` — Report the time. **Local by default** (no params). For a **specific place/zone** — *"what time is it in Tokyo"*, *"time in London"*, *"New York time"*, *"what's the time in Sydney right now"* — set **`parameters.location`**, and **prefer the IANA zone** (e.g. `"Asia/Tokyo"`, `"America/New_York"`, `"Europe/London"`) since you know city→zone; a bare city name also works as a fallback. The handler answers instantly via the stdlib timezone database — **do NOT route time-in-a-place to `code_execution`** (writing `import pytz`/`datetime` code is the wrong path: it needs a package install and hangs). Bare *"what time is it"* → `tell_time` with **no** `location` (local).
+- `tell_date` — Report current date (local)
 - `tell_joke` — Tell a JARVIS-appropriate quip
 - `conversational` — Handle casual conversation (incl. *what is my name* / *who am I* when `context.user_name` is set — use that name; do not return `unknown`)
 - `quit_application` — **Exit the JARVIS app** (executor closes the window after TTS; use a warm spoken `response` such as a short goodbye)
@@ -948,6 +948,21 @@ Commands directed at JARVIS itself — status, settings, identity.
 { "voice": "string — male-british|male-american|female-british" }
 { "wake_word": "string — new wake word" }
 { "query": "string — forget_memory: the topic/phrase to delete from conversation history" }
+{ "location": "string — tell_time: place/zone for a non-local time. Prefer the IANA zone (e.g. 'Asia/Tokyo', 'America/New_York'); a bare city name is a fallback. Omit for local time." }
+```
+
+*Input:* `"what time is it in Tokyo?"` (place named → set `location`, prefer the IANA zone; do NOT route to `code_execution`)
+
+```json
+{
+  "intent": "jarvis_meta",
+  "action": "tell_time",
+  "parameters": { "location": "Asia/Tokyo" },
+  "confidence": 0.96,
+  "response": "Checking Tokyo time.",
+  "hud_status": "STANDBY",
+  "requires_confirmation": false
+}
 ```
 
 *Input:* `"forget what my brother said about porn movies"`

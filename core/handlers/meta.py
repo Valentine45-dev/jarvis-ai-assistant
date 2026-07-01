@@ -101,9 +101,75 @@ _VOICE_LABELS: dict[str, str] = {
 }
 
 
+# Curated common-city → IANA fallback for tell_time when the brain emits a bare
+# city name instead of an IANA zone. The brain is instructed (Claude.md §12) to
+# prefer the IANA zone directly, so this is only a safety net — it does NOT need
+# to be exhaustive. Unknown → honest error (never a silent local-time substitute).
+_CITY_TZ: dict[str, str] = {
+    "tokyo": "Asia/Tokyo", "japan": "Asia/Tokyo",
+    "london": "Europe/London", "uk": "Europe/London",
+    "paris": "Europe/Paris", "berlin": "Europe/Berlin", "madrid": "Europe/Madrid",
+    "rome": "Europe/Rome", "moscow": "Europe/Moscow",
+    "dubai": "Asia/Dubai",
+    "delhi": "Asia/Kolkata", "new delhi": "Asia/Kolkata", "mumbai": "Asia/Kolkata",
+    "india": "Asia/Kolkata",
+    "beijing": "Asia/Shanghai", "shanghai": "Asia/Shanghai", "china": "Asia/Shanghai",
+    "hong kong": "Asia/Hong_Kong", "singapore": "Asia/Singapore", "seoul": "Asia/Seoul",
+    "sydney": "Australia/Sydney", "melbourne": "Australia/Melbourne",
+    "new york": "America/New_York", "nyc": "America/New_York",
+    "washington": "America/New_York",
+    "chicago": "America/Chicago", "houston": "America/Chicago",
+    "denver": "America/Denver",
+    "los angeles": "America/Los_Angeles", "la": "America/Los_Angeles",
+    "san francisco": "America/Los_Angeles", "seattle": "America/Los_Angeles",
+    "toronto": "America/Toronto", "sao paulo": "America/Sao_Paulo",
+    "mexico city": "America/Mexico_City",
+    "monrovia": "Africa/Monrovia", "lagos": "Africa/Lagos", "accra": "Africa/Accra",
+    "cairo": "Africa/Cairo", "nairobi": "Africa/Nairobi",
+    "johannesburg": "Africa/Johannesburg",
+    "utc": "UTC", "gmt": "Etc/GMT",
+}
+
+
+def _resolve_timezone(location: str):
+    """Resolve a location string to a ZoneInfo, or None if unknown.
+
+    IANA-first (the brain emits e.g. "Asia/Tokyo" for any city it knows), then the
+    curated common-city map for a bare city name, then None — the caller reports an
+    honest 'unknown zone' rather than silently substituting local time (which would
+    be a new fake-success). Needs the `tzdata` package on Windows (zoneinfo has no
+    system IANA db there); it is a declared dependency.
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    raw = (location or "").strip()
+    if not raw:
+        return None
+    try:
+        return ZoneInfo(raw)  # "Asia/Tokyo", "America/New_York", "UTC"
+    except (ZoneInfoNotFoundError, ValueError):
+        pass
+    iana = _CITY_TZ.get(raw.lower().replace("_", " "))
+    if not iana:
+        return None
+    try:
+        return ZoneInfo(iana)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
 def _handle_jarvis_meta(action: str, params: dict) -> dict:
     if action == "tell_time":
-        return _ok(datetime.now().strftime("%I:%M %p").lstrip("0"))
+        location = (params.get("location") or "").strip()
+        if not location:
+            return _ok(datetime.now().strftime("%I:%M %p").lstrip("0"))
+        tz = _resolve_timezone(location)
+        if tz is None:
+            return _err(f"I don't recognize the timezone for {location!r}.")
+        # Friendly display name: strip the IANA area prefix and underscores
+        # ("Asia/Tokyo" → "Tokyo", "America/New_York" → "New York").
+        display = location.split("/")[-1].replace("_", " ") if "/" in location else location
+        now = datetime.now(tz).strftime("%I:%M %p").lstrip("0")
+        return _ok(f"{now} in {display}")
 
     if action == "tell_date":
         return _ok(datetime.now().strftime("%A, %d %B %Y"))

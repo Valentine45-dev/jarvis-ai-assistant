@@ -3148,6 +3148,41 @@ Code-level proof:
      an ai_command confirmation (exit 0) STAYS success=True (regression guard); the auto-fix
      path (autorun ON, fix exit 0) reports success=False.
 
+§45 — tell_time answers ANY timezone natively (no more code_execution/pytz fallback)
+-----------------------------------------------------------------------
+Background (sweep find, Priority 2 / cross-cutting theme): "time in Tokyo?" had NO
+jarvis_meta path -- tell_time was local-only (datetime.now()) -- so the brain fell back to
+code_execution and wrote `import pytz ...` -> ModuleNotFoundError -> an offered `pip install
+pytz` fix whose SUBPROCESS hit the 60s stream cap (the "timed out after 60s"; run_python
+itself caps at 30s, so the 60s was never the import -- it was the fix). Two issues, one root:
+the handler didn't cover the timezone variant. Covering it removes the code path, the pip,
+and the 60s hang all at once.
+Fix -- give tell_time zone support via the stdlib `zoneinfo`:
+  A (prompt, Claude.md §12): "time in <place>" -> jarvis_meta/tell_time with
+    parameters.location, PREFER the IANA zone (e.g. "Asia/Tokyo"); do NOT route to
+    code_execution. Bare "what time is it" stays local (no location).
+  B (handler, core/handlers/meta.py): tell_time reads optional `location`. Resolve IANA-first
+    (ZoneInfo(location)), then a curated ~25-city map for a bare city name, else an HONEST
+    error ("I don't recognize the timezone for ...") -- never a silent local-time substitute.
+  DEP: added `tzdata` (official, pure-Python IANA db). REQUIRED on Windows -- zoneinfo has no
+    system tz database there, so without tzdata every ZoneInfo(...) raises and the feature
+    can't work. `uv add tzdata` (tzdata==2026.2). This corrects the plan's "zero-deps" premise.
+Untouched: tell_date (still local), code_exec.py (the fix mechanism is fine -- we just stop
+routing time queries into it), the 60s fix-path cap.
+
+PHYSICAL TEST (Part A is model-driven -> verify live):
+  1. "what time is it in Tokyo?" -> routes to jarvis_meta (NOT code_execution), answers
+     INSTANTLY (e.g. "2:03 PM in Tokyo"), NO confirm card, NO pip, NO 60s hang.
+  2. "time in London" / "New York time" / "Sydney time" -> correct zone, instant.
+  3. Regression: "what time is it?" -> still LOCAL time.
+  4. Unknown: "time in Narnia" -> honest "I don't recognize that timezone", NOT a fake.
+
+Code-level proof:
+  uv run pytest -q tests/test_tell_time_zone.py
+  -> local unchanged (no location suffix); IANA zone (Asia/Tokyo -> "... in Tokyo");
+     multiword IANA (America/New_York -> "... in New York"); bare-city fallback (tokyo);
+     unknown zone -> success False + honest error; blank location -> local.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------
