@@ -223,15 +223,18 @@ class AppConfig:
                 u = os.getenv("USER_NAME", "").strip()
                 if u:
                     instance.user_name = u
-                # P7: wake_word lives in jarvis.json (a user setting), so it must
-                # NOT be in the generic env-overlay above — from_env() defaults it
-                # to the truthy literal "jarvis", which the `if env_val` overlay
-                # would then use to CLOBBER a persisted custom wake word ("stark")
-                # back to the default on every restart (the set_wake_word read-back
-                # bug). Only an EXPLICITLY-set WAKE_WORD env var overrides the
-                # persisted value.
+                # P7: wake_word is a PERSISTED user setting (jarvis.json — the
+                # set_wake_word handler and the Settings UI both write it there),
+                # so jarvis.json is AUTHORITATIVE. It is deliberately NOT in the
+                # generic env-overlay above. A WAKE_WORD in .env is only a SEED
+                # used for a fresh install (no wake_word key yet) — it must NOT
+                # override a value the user already saved. Without the
+                # `"wake_word" not in data` guard, a leftover WAKE_WORD=jarvis in
+                # .env re-clobbered a voice-set "stark" on every load, and the
+                # next save() then wrote the default back to jarvis.json (the
+                # real-world read-back bug — the .env line, not from_env's default).
                 w = os.getenv("WAKE_WORD", "").strip()
-                if w:
+                if w and "wake_word" not in data:
                     instance.wake_word = w.lower()
                 return instance
             except Exception as exc:

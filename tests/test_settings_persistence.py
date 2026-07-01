@@ -38,9 +38,23 @@ def test_persisted_wake_word_survives_load(tmp_path, monkeypatch):
     assert cfg.wake_word == "stark"   # NOT clobbered back to "jarvis"
 
 
-def test_explicit_wake_word_env_still_wins(tmp_path, monkeypatch):
-    cfg = _load_with_json(tmp_path, monkeypatch, {"wake_word": "stark"}, wake_env="atlas")
-    assert cfg.wake_word == "atlas"   # an explicit env override is still respected
+def test_persisted_wake_word_wins_over_env_seed(tmp_path, monkeypatch):
+    # THE REAL REPRO: .env has WAKE_WORD=jarvis, jarvis.json has the user's "stark".
+    # jarvis.json is authoritative for a persisted user setting — the .env value is
+    # only a seed, so it must NOT clobber the saved wake word.
+    cfg = _load_with_json(tmp_path, monkeypatch, {"wake_word": "stark"}, wake_env="jarvis")
+    assert cfg.wake_word == "stark"
+
+
+def test_env_seeds_wake_word_only_when_json_has_none(tmp_path, monkeypatch):
+    # fresh install: jarvis.json has no wake_word key -> the WAKE_WORD env seeds it
+    cfg = _load_with_json(tmp_path, monkeypatch, {"theme": "cyan"}, wake_env="atlas")
+    assert cfg.wake_word == "atlas"
+
+
+def test_default_wake_word_when_no_json_key_no_env(tmp_path, monkeypatch):
+    cfg = _load_with_json(tmp_path, monkeypatch, {"theme": "cyan"})
+    assert cfg.wake_word == "jarvis"   # dataclass default
 
 
 # ── 7a: change_theme persists + validates ───────────────────────────────────

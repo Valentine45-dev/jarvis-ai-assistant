@@ -3266,10 +3266,12 @@ Code-level proof:
 -----------------------------------------------------------------------
 Background (sweep Priority 7): two settings actions claimed success but didn't take effect.
   7b set_wake_word: 'set it as STARK' -> '(restart required)', but after restart the wake word
-    was STILL 'jarvis'. The WRITE was fine (config.save persists wake_word); the bug was in
-    config.load(): the env-overlay loop INCLUDED wake_word, and from_env() defaults it to the
-    truthy literal 'jarvis' -> `if env_val` always re-applied 'jarvis', CLOBBERING the persisted
-    value on every restart. A read-back failure, not a write failure.
+    was STILL 'jarvis'. The WRITE was fine (config.save persists wake_word); the bug was
+    config.load() overriding it from the environment. TWO-PASS: (1) first removed wake_word from
+    the generic env-overlay loop; (2) re-test STILL failed -> ground truth: .env contains
+    WAKE_WORD=jarvis (the app loads .env), so an 'explicit env wins' branch re-clobbered the
+    saved 'stark' at load, and the NEXT save() (a theme change) wrote 'jarvis' back to
+    jarvis.json. A read-back/precedence failure, not a write failure.
   7a change_theme: 'switch theme to matrix' -> 'going green / applied', but the theme NEVER
     changed. The handler returned _ok WITHOUT persisting config.theme or applying anything --
     a pure fake. (Startup DOES read config.theme; theme follows the wake-word convention:
@@ -3277,8 +3279,11 @@ Background (sweep Priority 7): two settings actions claimed success but didn't t
     Also: Claude.md advertised gold|cyan|emerald|crimson but the REAL palettes are
     cyan|teal|amber|indigo|matrix -- 3 of 4 documented names didn't exist (silent fallback).
 Fix:
-  7b (config/settings.py): drop wake_word from the generic env-overlay; override it only when
-    WAKE_WORD is EXPLICITLY set (mirrors user_name). Persisted wake word now survives restart.
+  7b (config/settings.py): drop wake_word from the generic env-overlay AND make jarvis.json
+    AUTHORITATIVE -- .env WAKE_WORD only SEEDS a fresh install (if w and 'wake_word' not in data).
+    Survives restart even with a leftover WAKE_WORD=jarvis in .env. NOTE: the already-saved
+    jarvis.json still holds the clobbered 'jarvis', so re-run 'set wake word to stark' ONCE
+    after this fix; it then sticks.
   7a (meta.py): change_theme validates against the real palettes (+ aliases gold->amber,
     green/emerald->matrix, blue/purple->indigo, turquoise->teal), persists config.theme +
     save() (rollback on failure), and returns an HONEST 'set to X -- restart to apply'. An
@@ -3289,7 +3294,8 @@ Fix:
 
 PHYSICAL TEST:
   1. 'set wake word to stark' -> honest 'restart to pick it up'. RESTART -> Settings shows
-     'stark' AND the listener uses it (no revert to 'jarvis'). The core 7b repro.
+     'stark' AND the listener uses it (no revert to 'jarvis'), DESPITE .env WAKE_WORD=jarvis.
+     The core 7b repro (needs the re-set noted above, since jarvis.json currently holds 'jarvis').
   2. 'change theme to matrix' -> 'set to matrix -- restart to see it applied'. RESTART -> the
      HUD is actually matrix (green). Settings theme shows matrix.
   3. 'change theme to gold' -> accepted as amber (alias); restart -> amber HUD.
@@ -3298,8 +3304,9 @@ PHYSICAL TEST:
 
 Code-level proof:
   uv run pytest -q tests/test_settings_persistence.py
-  -> persisted wake_word survives load() with no WAKE_WORD env (not clobbered to 'jarvis');
-     an explicit WAKE_WORD env still wins; change_theme valid persists + says 'restart';
+  -> persisted wake_word survives load() with no WAKE_WORD env; persisted value WINS over a
+     .env WAKE_WORD=jarvis SEED (the real repro); env seeds ONLY when jarvis.json has no
+     wake_word key; default 'jarvis' when neither; change_theme valid persists + says 'restart';
      alias gold->amber; unknown 'crimson' -> honest error, theme unchanged, never saved;
      a save() failure rolls config.theme back.
 
