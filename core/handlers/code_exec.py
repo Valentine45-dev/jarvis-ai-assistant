@@ -408,6 +408,21 @@ def _ai_command_confirmation(
             ai_generated=True,
             fix_applied=(confirm_type == "fix"),
         ))
+        # D2: a confirmed "fix" only ran because the user's ORIGINAL command
+        # failed. Even when the fix exits 0, the user's command owns the row —
+        # report on the FAIL rail so a failed command never shows green. (The
+        # raw fix output already streamed live to the terminal; keeping this
+        # message concise also drops the old duplicate "Done. Output:" echo,
+        # which only ever rendered on the success rail.) Other confirm types
+        # (NL-translation, plans) ARE the user's intended command, so their
+        # success is a genuine _ok.
+        if confirm_type == "fix":
+            if exit_code == 0:
+                return _err(
+                    "Your command failed — the suggested fix ran successfully, "
+                    "but your original command did not run."
+                )
+            return _err("Your command failed, and the suggested fix also failed.")
         return _ok(out) if exit_code == 0 else _err(out)
 
     result = request_confirmation(prompt, _run_confirmed)
@@ -736,9 +751,16 @@ def _attempt_fix(block: CommandBlock, cwd: str | None) -> dict | None:
                 duration_ms=dur, cwd=os.getcwd(),
                 ai_generated=True, fix_applied=True,
             ))
+            # D2: the USER's command still failed — an auto-applied fix running
+            # successfully does NOT make the original a success. Report on the
+            # FAIL rail with the fix as a secondary note so the row never fakes
+            # success (mirrors the confirmed-fix path in _ai_command_confirmation).
             if exit_code == 0:
-                return _ok(f"{explain} — fix applied automatically.")
-            return _err(f"Auto-fix also failed: {out}")
+                return _err(
+                    f"Your command failed — auto-applied a fix ({explain}) which "
+                    "succeeded, but the original command did not run."
+                )
+            return _err(f"Your command failed, and the auto-fix also failed: {out}")
         prompt = f"{explain} Suggested fix: {fix_cmd}"
         return _ai_command_confirmation(prompt, fix_cmd, cwd, confirm_type="fix")
     except Exception:
