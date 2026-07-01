@@ -3346,6 +3346,34 @@ Code-level proof:
      inline on the main thread, no worker); hotkey read_screen seeds a synthetic history slot
      AND dispatches vision_analysis/describe; _seed_hotkey_entry survives a missing _history.
 
+§50 — auxiliary LLM prompts no longer leak the butler 'sir' (tone-rule audit)
+-----------------------------------------------------------------------
+Background (bonus find while verifying §49): the vision 'describe' output said "...the
+J.A.R.V.I.S. interface itself, sir..." -- violating the tone rule (a sharp warm friend, never
+'sir'; address as Valentine). Audit of the direct-Claude SIDE-CALL prompts (separate from the
+main brain prompt, which reads Claude.md and is fine) found the gap was SYSTEMIC:
+  - core/vision.py _DESCRIBE_PROMPT + find_ui_element -> no never-'sir' rule -> LEAKED.
+  - persona.JARVIS_PERSONA_PROMPT (shell explain) -> 'never butler-formal' but no explicit
+    never-'sir'/Valentine -> could leak.
+  - persona.JARVIS_POST_EXECUTION_TONE (narration) -> literally 'British butler tone' -> highest risk.
+  - core/vapi_client.py -> ALREADY correct ('never sir') -- the model for the pattern.
+Fix (fix the class, not just vision): add the explicit 'never sir; Valentine occasionally' rule to
+  - JARVIS_PERSONA_PROMPT (so JARVIS_SHELL_RESULTS_PROMPT inherits it),
+  - JARVIS_POST_EXECUTION_TONE (drop 'British butler tone' -> 'sharp, warm, direct ... never sir'),
+  - vision.py via a shared _JARVIS_TONE clause appended to _DESCRIBE_PROMPT + find_ui_element.
+
+PHYSICAL TEST (prompt-driven -> verify live):
+  1. ctrl+shift+r (or 'what's on my screen') -> the spoken/rendered description does NOT say 'sir'
+     (may address you as Valentine occasionally). Repeat a few times -- tone stays friend, not butler.
+  2. A code_execution result narration ('run git status' etc.) -> no 'sir'.
+  3. 'where is the X button' (find_ui_element) -> no 'sir'.
+
+Code-level proof (regression guard that the rule isn't dropped):
+  uv run pytest -q tests/test_persona_tone.py
+  -> JARVIS_PERSONA_PROMPT + JARVIS_SHELL_RESULTS_PROMPT + JARVIS_POST_EXECUTION_TONE +
+     vision _DESCRIBE_PROMPT + find prompt all carry a never-'sir' rule; the old 'butler tone'
+     wording is gone.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

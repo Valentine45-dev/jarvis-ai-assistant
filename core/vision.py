@@ -176,6 +176,15 @@ def capture_browser_page() -> bytes:
 
 # Spoken-style screen/image description (read aloud via TTS) — brief and
 # conversational, not a raw OCR dump or a structured markdown report.
+# Shared JARVIS tone rule for the vision side-call prompts. The vision model
+# otherwise falls back to the butler "sir" trope, which violates the project
+# tone rule (a sharp warm friend, never "sir"). Mirrors core/personality/persona
+# JARVIS_PERSONA_PROMPT (kept inline here — core/vision must stay dependency-light).
+_JARVIS_TONE = (
+    " Speak as JARVIS — a sharp, warm friend, not a butler: never call the user "
+    "'sir'; address them as Valentine occasionally, not every line."
+)
+
 _DESCRIBE_PROMPT = (
     "You are JARVIS, describing what's on the user's screen out loud. Give a "
     "brief, natural description: lead with the gist (what app, page, or screen "
@@ -186,6 +195,7 @@ _DESCRIBE_PROMPT = (
     "flowing prose. Don't use headings, bold, or other markdown symbols, and "
     "don't transcribe every element or line of text — describe what matters, "
     "don't dump everything."
+    + _JARVIS_TONE
 )
 
 _PROMPT_BY_ACTION: dict[str, str] = {
@@ -211,6 +221,7 @@ def _build_prompt(action: str, question: str) -> str:
             "near the profile) with approximate x,y coordinates. If there are a "
             "couple, mention each briefly. No markdown, headings, or bullet "
             "lists — just say it the way you'd tell someone out loud."
+            + _JARVIS_TONE
         )
     if action == "answer_question":
         return question or _PROMPT_BY_ACTION["describe"]
