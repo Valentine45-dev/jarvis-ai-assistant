@@ -1125,6 +1125,20 @@ class SettingsView(QWidget):
         self._noise_toggle.toggled.connect(lambda _: self._mark_dirty())
         self._flag_safesearch.toggled.connect(lambda _: self._mark_dirty())
         self._mic_device_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
+        # Session-flag toggles — persisted on Apply (live signals aside), so they
+        # must mark dirty too; these were missed when the wiring was first built.
+        self._flag_mic.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_tts.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_conf.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_dim.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_wake.toggled.connect(lambda _: self._mark_dirty())
+        # Newly-surfaced config controls (§54)
+        self._stt_provider_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
+        self._flag_stt_persistent.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_code_exec.toggled.connect(lambda _: self._mark_dirty())
+        self._flag_autorun.toggled.connect(lambda _: self._mark_dirty())
+        self._browser_engine_combo.currentIndexChanged.connect(lambda _: self._mark_dirty())
+        self._weather_city_input.textChanged.connect(lambda _: self._mark_dirty())
 
     def _mark_dirty(self) -> None:
         self._unsaved_lbl.setVisible(True)

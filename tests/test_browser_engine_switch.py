@@ -135,11 +135,22 @@ def test_open_browser_routes_to_ensure_engine(monkeypatch: pytest.MonkeyPatch) -
     assert fb.calls == ["edge"]
 
 
-def test_open_browser_defaults_to_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_browser_no_engine_uses_configured_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No engine named → the CONFIGURED default engine (config.browser_engine),
+    # not a hardcoded 'chrome'. Set it explicitly so the test doesn't depend on
+    # the ambient jarvis.json. (Fuller coverage in test_open_browser_default.py.)
+    from config.settings import config
+    monkeypatch.setattr(config, "browser_engine", "chrome", raising=False)
     fb = _FakeBrowser()
     monkeypatch.setattr(cb, "browser", fb)
     _handle_open_app("open_browser", {})
     assert fb.calls == ["chrome"]
+
+    monkeypatch.setattr(config, "browser_engine", "firefox", raising=False)
+    fb2 = _FakeBrowser()
+    monkeypatch.setattr(cb, "browser", fb2)
+    _handle_open_app("open_browser", {})
+    assert fb2.calls == ["firefox"]   # honours the configured default
 
 
 # ── close_engine: close ONE engine, keep the rest (Phase 3) ──────────────────

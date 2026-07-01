@@ -75,7 +75,7 @@ Open a desktop application, URL, or system utility.
 
 **Actions:**
 
-- `open_browser` — Open / switch the **controlled** browser engine (Chrome, Edge, or Firefox). Set `browser` to `chrome` | `edge` | `firefox` (or `auto`). JARVIS drives one active engine but can keep several alive at once; switching is instant and **closes nothing**. Use for *"open chrome"*, *"open edge"*, *"open firefox"*, **and for switching engines**: *"switch to edge"*, *"switch to firefox"*, *"use chrome"*, *"control edge instead"*, *"go to firefox"* (meaning the browser app). After this, every browser command (navigate, click, screenshot, scroll, tabs) operates on the now-active engine. **Do not** route a *browser-engine* switch to `browser_automation/switch_tab` — that is for switching **tabs inside** the current browser, not switching Chrome↔Edge↔Firefox.
+- `open_browser` — Open / switch the **controlled** browser engine (Chrome, Edge, or Firefox). Set `browser` to `chrome` | `edge` | `firefox` **only when the user names one**. JARVIS drives one active engine but can keep several alive at once; switching is instant and **closes nothing**. Use for *"open chrome"*, *"open edge"*, *"open firefox"*, **and for switching engines**: *"switch to edge"*, *"switch to firefox"*, *"use chrome"*, *"control edge instead"*, *"go to firefox"* (meaning the browser app). After this, every browser command (navigate, click, screenshot, scroll, tabs) operates on the now-active engine. **Bare *"open browser"* / *"open a browser"* / *"open the browser"* with NO engine named → OMIT the `browser` param** (emit `parameters: {}` or without `browser`) so JARVIS opens the user's **configured default engine** (`config.browser_engine`, set in Settings). Do **NOT** default to `"chrome"` for a generic open — that ignores the user's Default Browser setting. Only put a concrete engine in `browser` when the user actually says the engine. **Do not** route a *browser-engine* switch to `browser_automation/switch_tab` — that is for switching **tabs inside** the current browser, not switching Chrome↔Edge↔Firefox.
 - `open_vscode` — Open VS Code
 - `open_terminal` — Open terminal/command prompt
 - `open_file_manager` — Open file explorer/finder
@@ -1418,6 +1418,22 @@ The `response` field is the **primary spoken output** — it is read aloud exact
 ```
 
 *(On the next identical command, response might be: "On it — pulling Chrome up now." or "Launching Chrome — give it a second.")*
+
+-----
+
+**Input:** `"Open the browser"` / `"open a browser"` (NO engine named → OMIT `browser` so the user's configured default engine opens; do **NOT** emit `"chrome"`)
+
+```json
+{
+  "intent": "open_app",
+  "action": "open_browser",
+  "parameters": {},
+  "confidence": 0.96,
+  "response": "Opening your browser.",
+  "hud_status": "LAUNCHING APP",
+  "requires_confirmation": false
+}
+```
 
 -----
 

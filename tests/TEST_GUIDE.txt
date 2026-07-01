@@ -3515,6 +3515,45 @@ Code-level proof (qtgui, offscreen):
   + an instrumented build at a 780px window: viewport 582 vs content 1065 -> scrolls=True,
     panel sizeHints [657, 1060, 1065] (natural, NOT squashed to the viewport).
 
+§56 — Settings bugs: Default Browser respected + UNSAVED fires for every widget (+ test isolation)
+-----------------------------------------------------------------------
+BUG 1 (config.browser_engine ignored by open_browser): the handler used
+(params.get('browser') or 'chrome') -- hardcoding Chrome whenever no engine was named, so the
+Default Browser setting was never read. Fix (app_launcher.py): when NO engine is named, resolve
+to config.browser_engine (not 'chrome'); a named engine still wins. Claude.md: for a bare 'open
+browser' the brain now OMITS the `browser` param so the configured default opens (added rule +
+example).
+BUG 2 (UNSAVED didn't fire for many toggles): _wire_dirty_indicators wired only 4 toggles; the 5
+session toggles + all 6 new §54 fields were unwired (ToggleSwitch emits `toggled` on click, which
+was never connected for those). Fix (settings.py): wired all 11 missing widgets. AUDIT -- every
+config-writing widget in _apply_cfg is now in _wire_dirty_indicators (see the full list below).
+TEST ISOLATION (exposed by BUG 1's feature): several browser + code_exec tests read the real
+config (jarvis.json), which tonight had browser_engine=firefox AND code_exec_enabled=False (from
+UI testing) -- so they failed machine-dependently ('_FakePW has no attribute firefox'; a dangerous
+shell refused instead of confirming). Fix (conftest.py): an autouse fixture pins the user-settable
+behaviour flags (browser_engine, code_exec_enabled, allow_ai_command_autorun, safe_search_confirm,
+auto_confirm) to their dataclass defaults for every test. Suite is now deterministic regardless of
+local jarvis.json -> 600 passed.
+
+CONFIG dirty-wiring audit (final -- every _apply_cfg widget marks UNSAVED):
+  text:   anthropic/elevenlabs/gemini/vapi keys, wake_word, weather_default_city
+  combo:  claude_model, tts_voice, mic_device, stt_provider, browser_engine
+  slider: mic_sensitivity, tts_speed, stt_settle_ms
+  toggle: debug, scanline, noise_gate, safe_search, mic_mute, tts_mute, auto_confirm, dim,
+          wake_listener, stt_persistent, code_exec_enabled, allow_ai_command_autorun
+  swatch: theme (via _on_swatch_clicked)
+
+PHYSICAL TEST:
+  BUG 1: Settings -> Default Browser = Firefox -> APPLY. 'open browser and navigate to youtube'
+         (no engine named) -> FIREFOX opens (not Chrome). 'open chrome' still opens Chrome.
+  BUG 2: flip Code Execution (or any previously-unwired toggle: Mute Mic, Auto-confirm, Persistent
+         STT, Auto-run AI fixes, ...) -> '* UNSAVED' appears IMMEDIATELY, same as editing a text field.
+
+Code-level proof:
+  uv run pytest -q tests/test_open_browser_default.py     # BUG 1 handler (config-driven default)
+  JARVIS_RUN_QT=1 QT_QPA_PLATFORM=offscreen uv run pytest -q tests/test_settings_knobs.py  # BUG 2
+  uv run pytest -q     # 600 passed, deterministic regardless of local jarvis.json
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

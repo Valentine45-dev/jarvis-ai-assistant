@@ -553,7 +553,17 @@ def _handle_open_app_inner(action: str, params: dict) -> dict:
         return _ok(f"Opened: {target}")
 
     if action == "open_browser":
-        browser_name = (params.get("browser") or "chrome").lower().strip()
+        raw = (params.get("browser") or "").lower().strip()
+        if raw:
+            # An engine was named ("open firefox") — honour it.
+            browser_name = raw
+        else:
+            # No engine named ("open browser") — open the CONFIGURED default
+            # (config.browser_engine), not a hardcoded 'chrome'. This is the bug:
+            # the old `or "chrome"` default ignored the user's Default Browser
+            # setting entirely. ('auto' resolves to first-installed downstream.)
+            from config.settings import config as _cfg
+            browser_name = (getattr(_cfg, "browser_engine", "") or "chrome").lower().strip()
         engine = _BROWSER_NAME_TO_ENGINE.get(browser_name, "chrome")
         _tlog(f"❯ {engine} browser")
         # Drive the controlled engine: launches if cold, switches if already

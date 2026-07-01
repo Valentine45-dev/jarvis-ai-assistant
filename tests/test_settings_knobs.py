@@ -108,6 +108,49 @@ def test_apply_writes_expanded_config_fields(_app, isolated_settings, monkeypatc
         view.deleteLater()
 
 
+def test_every_config_widget_marks_dirty(_app):
+    # BUG 2: flipping ANY config-writing widget must show UNSAVED. Previously the
+    # 5 session toggles + all 6 new fields were unwired, so e.g. Code Execution
+    # flipped silently. Uses isHidden() (works offscreen without show()).
+    view = SettingsView()
+    try:
+        def _flip_toggle(t):
+            # ToggleSwitch emits `toggled` only on a real click (mousePressEvent),
+            # not on programmatic setChecked() — exercise the actual user path.
+            t.mousePressEvent(None)
+
+        def _cycle_combo(c):
+            c.setCurrentIndex((c.currentIndex() + 1) % c.count())
+
+        toggles = [
+            view._flag_mic, view._flag_tts, view._flag_conf, view._flag_dim,
+            view._flag_wake, view._flag_stt_persistent, view._flag_code_exec,
+            view._flag_autorun,
+            # already-wired ones, re-checked so the audit covers the whole page
+            view._debug_toggle, view._scan_toggle, view._noise_toggle,
+            view._flag_safesearch,
+        ]
+        for t in toggles:
+            view._mark_clean()
+            assert view._unsaved_lbl.isHidden() is True
+            _flip_toggle(t)
+            assert view._unsaved_lbl.isHidden() is False, f"{t} did not mark dirty"
+
+        for c in (view._stt_provider_combo, view._browser_engine_combo,
+                  view._voice_combo, view._model_combo, view._mic_device_combo):
+            if c.count() < 2:
+                continue
+            view._mark_clean()
+            _cycle_combo(c)
+            assert view._unsaved_lbl.isHidden() is False, f"{c} did not mark dirty"
+
+        view._mark_clean()
+        view._weather_city_input.setText("Testville,TT")
+        assert view._unsaved_lbl.isHidden() is False
+    finally:
+        view.deleteLater()
+
+
 def test_settle_readout_shows_off_at_zero(_app):
     assert SettingsView._fmt_settle(0) == "Off"
     assert SettingsView._fmt_settle(350) == "350"

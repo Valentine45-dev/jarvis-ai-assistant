@@ -144,6 +144,32 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterat
 
 
 @pytest.fixture(autouse=True)
+def _pin_user_settable_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin user-settable behaviour flags to their dataclass defaults for every test.
+
+    These flags are now editable in the Settings UI, so a developer's jarvis.json can
+    carry non-default values (e.g. browser_engine='firefox', code_exec_enabled=False)
+    that leak into tests reading the real `config` singleton — making the suite
+    machine-dependent (a browser fake with no 'firefox', a code_exec handler that
+    refuses instead of confirming, etc.). Pin them to the documented defaults so tests
+    are deterministic regardless of local config; a test that exercises a specific
+    value monkeypatches it itself, overriding this.
+    """
+    try:
+        import config.settings as _settings
+        for field, default in (
+            ("browser_engine", "chrome"),
+            ("code_exec_enabled", True),
+            ("allow_ai_command_autorun", False),
+            ("safe_search_confirm", False),
+            ("auto_confirm", False),
+        ):
+            monkeypatch.setattr(_settings.config, field, default, raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_qt_app_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prevent stale QApplication instances from leaking between tests.
 
