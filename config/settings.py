@@ -216,13 +216,23 @@ class AppConfig:
                 # Env vars always win — API keys must come from .env, not JSON.
                 env = cls.from_env()
                 for key in ("anthropic_api_key", "vapi_api_key", "elevenlabs_api_key", "deepgram_api_key",
-                            "gemini_api_key", "openweather_api_key", "claude_model", "wake_word", "debug_mode"):
+                            "gemini_api_key", "openweather_api_key", "claude_model", "debug_mode"):
                     env_val = getattr(env, key)
                     if env_val:
                         setattr(instance, key, env_val)
                 u = os.getenv("USER_NAME", "").strip()
                 if u:
                     instance.user_name = u
+                # P7: wake_word lives in jarvis.json (a user setting), so it must
+                # NOT be in the generic env-overlay above — from_env() defaults it
+                # to the truthy literal "jarvis", which the `if env_val` overlay
+                # would then use to CLOBBER a persisted custom wake word ("stark")
+                # back to the default on every restart (the set_wake_word read-back
+                # bug). Only an EXPLICITLY-set WAKE_WORD env var overrides the
+                # persisted value.
+                w = os.getenv("WAKE_WORD", "").strip()
+                if w:
+                    instance.wake_word = w.lower()
                 return instance
             except Exception as exc:
                 # R2-11: never silently swallow a corrupt jarvis.json. Rename

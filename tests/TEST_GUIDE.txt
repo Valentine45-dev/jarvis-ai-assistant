@@ -3262,6 +3262,47 @@ Code-level proof:
      the SERP into the cache; youtube + github CLEAR a stale cache and do not auto-read; a
      failing read doesn't break the search (cache left cleared).
 
+§48 — settings actually persist/apply: set_wake_word + change_theme (fake-success #3 & #4)
+-----------------------------------------------------------------------
+Background (sweep Priority 7): two settings actions claimed success but didn't take effect.
+  7b set_wake_word: 'set it as STARK' -> '(restart required)', but after restart the wake word
+    was STILL 'jarvis'. The WRITE was fine (config.save persists wake_word); the bug was in
+    config.load(): the env-overlay loop INCLUDED wake_word, and from_env() defaults it to the
+    truthy literal 'jarvis' -> `if env_val` always re-applied 'jarvis', CLOBBERING the persisted
+    value on every restart. A read-back failure, not a write failure.
+  7a change_theme: 'switch theme to matrix' -> 'going green / applied', but the theme NEVER
+    changed. The handler returned _ok WITHOUT persisting config.theme or applying anything --
+    a pure fake. (Startup DOES read config.theme; theme follows the wake-word convention:
+    persist + restart. Live in-session re-theming is a separate parked refactor.)
+    Also: Claude.md advertised gold|cyan|emerald|crimson but the REAL palettes are
+    cyan|teal|amber|indigo|matrix -- 3 of 4 documented names didn't exist (silent fallback).
+Fix:
+  7b (config/settings.py): drop wake_word from the generic env-overlay; override it only when
+    WAKE_WORD is EXPLICITLY set (mirrors user_name). Persisted wake word now survives restart.
+  7a (meta.py): change_theme validates against the real palettes (+ aliases gold->amber,
+    green/emerald->matrix, blue/purple->indigo, turquoise->teal), persists config.theme +
+    save() (rollback on failure), and returns an HONEST 'set to X -- restart to apply'. An
+    unknown theme is an honest error, not a silent fallback. response_composer speaks the
+    handler's line (like change_voice) so the honest message is what's said, not the brain's
+    optimistic 'going green'. Claude.md §12 theme names corrected + aliases documented.
+  Sibling audit: change_voice is REAL (switch_tts_voice persist=True + ok check) -- not fake.
+
+PHYSICAL TEST:
+  1. 'set wake word to stark' -> honest 'restart to pick it up'. RESTART -> Settings shows
+     'stark' AND the listener uses it (no revert to 'jarvis'). The core 7b repro.
+  2. 'change theme to matrix' -> 'set to matrix -- restart to see it applied'. RESTART -> the
+     HUD is actually matrix (green). Settings theme shows matrix.
+  3. 'change theme to gold' -> accepted as amber (alias); restart -> amber HUD.
+  4. 'change theme to chartreuse' (unknown) -> honest 'not a theme I have; options: ...',
+     NOT a fake success, theme unchanged.
+
+Code-level proof:
+  uv run pytest -q tests/test_settings_persistence.py
+  -> persisted wake_word survives load() with no WAKE_WORD env (not clobbered to 'jarvis');
+     an explicit WAKE_WORD env still wins; change_theme valid persists + says 'restart';
+     alias gold->amber; unknown 'crimson' -> honest error, theme unchanged, never saved;
+     a save() failure rolls config.theme back.
+
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
 -----------------------------------------------------------------------

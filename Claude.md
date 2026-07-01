@@ -940,7 +940,7 @@ Commands directed at JARVIS itself — status, settings, identity.
 **Actions:**
 
 - `status_report` — Report system status (CPU, memory; **battery %** when a sensor exists, e.g. laptops)
-- `change_theme` — Change HUD accent theme
+- `change_theme` — Change HUD accent theme. Real palettes: **`cyan` | `teal` | `amber` | `indigo` | `matrix`**. Common colour words are accepted as aliases (gold/yellow/orange→amber, green/emerald→matrix, blue/purple/violet→indigo, turquoise→teal). Anything else is an honest "unknown theme" error. The change is **persisted and applied on restart** (the wake-word convention) — the spoken reply says so; don't imply an instant live switch.
 - `list_voices` — List all available TTS voices
 - `change_voice` — Switch TTS voice
 - `set_wake_word` — Change the wake word
@@ -958,7 +958,7 @@ Commands directed at JARVIS itself — status, settings, identity.
 **Parameters:**
 
 ```json
-{ "theme": "string — gold|cyan|emerald|crimson" }
+{ "theme": "string — cyan|teal|amber|indigo|matrix (aliases: gold→amber, green/emerald→matrix, blue/purple→indigo, turquoise→teal)" }
 { "voice": "string — male-british|male-american|female-british" }
 { "wake_word": "string — new wake word" }
 { "query": "string — forget_memory: the topic/phrase to delete from conversation history" }
@@ -1681,7 +1681,7 @@ The `response` field is the **primary spoken output** — it is read aloud exact
 
 -----
 
-**Input:** `"Change theme to cyan"`
+**Input:** `"Change theme to cyan"` (persisted + applied on restart — the handler speaks the actual "restart to see it" line, so keep `response` from implying an instant switch)
 
 ```json
 {
@@ -1689,7 +1689,7 @@ The `response` field is the **primary spoken output** — it is read aloud exact
   "action": "change_theme",
   "parameters": { "theme": "cyan" },
   "confidence": 0.97,
-  "response": "Switching to cyan theme.",
+  "response": "Setting the theme to cyan.",
   "hud_status": "STANDBY",
   "requires_confirmation": false
 }

@@ -62,7 +62,11 @@ def compose_execution_response(
                 exec_out.get("output", ""),
                 exec_out.get("error", ""),
             )
-        elif action_name == "change_voice" and exec_out.get("output"):
+        elif action_name in ("change_voice", "change_theme") and exec_out.get("output"):
+            # Speak the handler's OWN line, not the brain's pre-execution resp.
+            # change_voice needs it (audible proof in the new voice); change_theme
+            # needs it so the honest "set to X — restart to apply" is spoken
+            # instead of the brain's optimistic "going green" (P7 fake-success #3).
             display_resp = exec_out["output"]
         elif action_name == "conversational" and exec_out.get("output"):
             display_resp = exec_out["output"]

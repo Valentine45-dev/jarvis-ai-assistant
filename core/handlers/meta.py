@@ -157,6 +157,22 @@ def _resolve_timezone(location: str):
         return None
 
 
+# HUD accent themes. The real palette keys live in ui/theme.py `_THEME_PALETTES`
+# (kept in sync here so the handler layer needs no Qt import). Aliases map common
+# spoken colour names onto a real palette; anything else is an honest "unknown
+# theme" (never a silent fallback that fakes success). Theme changes follow the
+# wake-word convention: persisted to jarvis.json + applied on restart (live
+# in-session re-theming is a separate parked refactor).
+_VALID_THEMES: frozenset[str] = frozenset({"cyan", "teal", "amber", "indigo", "matrix"})
+_THEME_ALIASES: dict[str, str] = {
+    "gold": "amber", "yellow": "amber", "orange": "amber",
+    "green": "matrix", "emerald": "matrix",
+    "blue": "indigo", "purple": "indigo", "violet": "indigo",
+    "turquoise": "teal", "aqua": "cyan", "default": "cyan",
+}
+_THEME_OPTIONS = "cyan, teal, amber, indigo, matrix"
+
+
 def _handle_jarvis_meta(action: str, params: dict) -> dict:
     if action == "tell_time":
         location = (params.get("location") or "").strip()
@@ -318,12 +334,30 @@ def _handle_jarvis_meta(action: str, params: dict) -> dict:
         return _ok(f"Now {name}'s speaking.")
 
     if action == "change_theme":
-        theme_name = (params.get("theme") or "").strip()
-        _tlog(f"❯ theme → {theme_name or '(no theme)'}")
-        # The actual theme switch is wired upstream via a signal — this handler
-        # just acknowledges so the response pipeline can fire its confirmation TTS.
-        _tlog("✓ applied")
-        return _ok(action)
+        raw = (params.get("theme") or "").strip().lower()
+        _tlog(f"❯ theme → {raw or '(no theme)'}")
+        # P7 (fake-success #3): this used to return _ok without persisting or
+        # applying ANYTHING — the theme never changed. Now it validates against
+        # the real palettes, persists config.theme, and reports honestly that a
+        # restart applies it (the documented wake-word convention). An unknown
+        # theme is an honest error, not a silent fallback dressed as success.
+        if not raw:
+            _tlog("✗ no theme provided")
+            return _err(f"Which theme? Options: {_THEME_OPTIONS}.")
+        theme_key = raw if raw in _VALID_THEMES else _THEME_ALIASES.get(raw)
+        if not theme_key:
+            _tlog(f"✗ unknown theme {raw!r}")
+            return _err(f"'{raw}' isn't a theme I have. Options: {_THEME_OPTIONS}.")
+        old = getattr(config, "theme", "cyan")
+        config.theme = theme_key
+        try:
+            config.save()
+        except Exception as exc:
+            config.theme = old
+            _tlog(f"✗ persist failed: {exc}")
+            return _err(f"Couldn't save the theme: {exc}")
+        _tlog(f"✓ theme → {theme_key} (restart required)")
+        return _ok(f"Theme set to {theme_key}. Restart JARVIS to see it applied.")
 
     if action in ("quit_application", "close_jarvis"):
         _tlog("❯ shutting down JARVIS")
