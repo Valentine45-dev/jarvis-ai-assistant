@@ -204,6 +204,21 @@ class _BackendSignalsMixin:
                     "time": now, "you": label, "jarvis": "", "jTime": "",
                     "intent": "", "conf": 0.0, "status": "pending",
                 })
+            # New command → advance the token (mirrors the typed path) so a stale
+            # update from a prior command can't clobber this row.
+            try:
+                self._transcript_update_token += 1
+            except Exception:
+                pass
+            # CREATE the visible SYS_LOG_BUFFER row. Appending to _history alone is
+            # NOT enough — the transcript widget needs its own row, which
+            # _finish_execute then fills via update_last_jarvis. Without this the
+            # hotkey result completed (toast fired) but had no row to render into,
+            # so SYS_LOG_BUFFER stayed empty.
+            try:
+                self._dashboard.left.transcript.add_exchange(label, now)
+            except Exception:
+                pass
         except Exception:
             pass
 

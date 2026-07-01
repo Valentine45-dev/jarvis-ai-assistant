@@ -3331,8 +3331,10 @@ PHYSICAL TEST (threading -> physical gate):
   1. Press ctrl+shift+r (from JARVIS OR another focused app) -> the UI STAYS RESPONSIVE
      ('Analyzing the screen...' toast), then the description RENDERS in SYS_LOG (as a
      '[hotkey] read my screen' entry) and is spoken (if TTS on). NO freeze, and a real response.
-     (Pass 2: the hotkey path now seeds a synthetic transcript slot via _seed_hotkey_entry --
-     without it the completed vision result had nowhere to render and looked silent.)
+     (Pass 2: the hotkey path bypassed the typed-command setup, so it never created the visible
+     SYS_LOG row -- _finish_execute only UPDATES the last row (add_exchange creates it). The
+     'Command executed' toast fired but SYS_LOG stayed EMPTY. _seed_hotkey_entry now appends the
+     _history slot, advances the token, AND calls transcript.add_exchange to create the row.)
   2. Typed 'what's on my screen' -> same: responsive, then the description. NO freeze.
   3. 'describe the browser page' (source=browser) -> still works (synchronous, Playwright).
   4. During a vision read, the HUD/other buttons remain clickable (proof it's off-thread).

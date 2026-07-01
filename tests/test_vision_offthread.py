@@ -99,6 +99,15 @@ def test_hotkey_read_screen_seeds_entry_and_dispatches():
 
     stub = types.SimpleNamespace()
     stub._history = []
+    stub._transcript_update_token = 0
+    exchanges = []
+    stub._dashboard = types.SimpleNamespace(
+        left=types.SimpleNamespace(
+            transcript=types.SimpleNamespace(
+                add_exchange=lambda you, y_time, *a, **k: exchanges.append((you, y_time)),
+            ),
+        ),
+    )
     brain_calls = []
     stub._on_brain_result = lambda r: brain_calls.append(r)
     stub._seed_hotkey_entry = lambda label: _BackendSignalsMixin._seed_hotkey_entry(stub, label)
@@ -109,6 +118,9 @@ def test_hotkey_read_screen_seeds_entry_and_dispatches():
     assert len(stub._history) == 1
     assert stub._history[0]["you"] == "[hotkey] read my screen"
     assert stub._history[0]["status"] == "pending"
+    # AND a visible SYS_LOG_BUFFER row was created (the actual empty-log fix)
+    assert exchanges == [("[hotkey] read my screen", exchanges[0][1])]
+    assert stub._transcript_update_token == 1   # advanced for the new command
     # and the vision describe was dispatched through the normal path
     assert len(brain_calls) == 1
     assert brain_calls[0]["intent"] == "vision_analysis"
