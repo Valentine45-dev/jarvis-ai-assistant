@@ -64,13 +64,14 @@ def _default_city() -> str:
     return city or "Monrovia,LR"
 
 
-def _fetch(endpoint: str, city: str, timeout: int) -> dict:
+def _fetch(endpoint: str, query: dict, timeout: int) -> dict:
     """GET an OpenWeather 2.5 endpoint ('weather' | 'forecast') as JSON.
 
-    Shared by current + forecast so the auth/units/error handling lives in one
-    place. Raises WeatherClientError with a human message on any failure.
+    `query` is the location selector — {"q": city} or {"lat":…, "lon":…}. Shared
+    by current + forecast so the auth/units/error handling lives in one place.
+    Raises WeatherClientError with a human message on any failure.
     """
-    params = {"q": city, "appid": _api_key(), "units": "metric"}
+    params = {**query, "appid": _api_key(), "units": "metric"}
     url = f"https://api.openweathermap.org/data/2.5/{endpoint}?" + urlencode(params)
     try:
         with urlopen(url, timeout=timeout) as resp:
@@ -88,17 +89,53 @@ def _fetch(endpoint: str, city: str, timeout: int) -> dict:
         raise WeatherClientError(f"Weather request failed: {exc}") from exc
 
 
+def _geocode(name: str, timeout: int) -> dict | None:
+    """Resolve a place name to coordinates via OpenWeather direct geocoding.
+
+    Returns {'lat','lon','name','country'} or None (caller falls back to a q=
+    city query). Geocoding is far more reliable than the weather `q=` param, which
+    fuzzy-matches a bare COUNTRY name to a random village (e.g. 'India' → a hamlet
+    in Italy). Any geocoding failure is non-fatal — we degrade to the q= path.
+    """
+    params = {"q": name, "limit": 1, "appid": _api_key()}
+    url = "https://api.openweathermap.org/geo/1.0/direct?" + urlencode(params)
+    try:
+        with urlopen(url, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    top = data[0] or {}
+    if top.get("lat") is None or top.get("lon") is None:
+        return None
+    return {
+        "lat": top["lat"], "lon": top["lon"],
+        "name": top.get("name") or name, "country": top.get("country", ""),
+    }
+
+
+def _resolve_query(name: str, timeout: int) -> tuple[dict, str | None, str | None]:
+    """(query_params, display_name, display_country) for a place name — geocoded
+    coords when available, else a q= city query."""
+    geo = _geocode(name, timeout)
+    if geo:
+        return {"lat": geo["lat"], "lon": geo["lon"]}, geo["name"], geo["country"]
+    return {"q": name}, None, None
+
+
 def get_current_weather(location: str | None = None, *, timeout: int = 8) -> dict:
-    city = (location or "").strip() or _default_city()
-    payload = _fetch("weather", city, timeout)
+    name = (location or "").strip() or _default_city()
+    query, geo_name, geo_country = _resolve_query(name, timeout)
+    payload = _fetch("weather", query, timeout)
 
     weather_list = payload.get("weather") or [{}]
     main = payload.get("main") or {}
     wind = payload.get("wind") or {}
 
     return {
-        "location": payload.get("name") or city,
-        "country": (payload.get("sys") or {}).get("country", ""),
+        "location": geo_name or payload.get("name") or name,
+        "country": geo_country or (payload.get("sys") or {}).get("country", ""),
         "condition": weather_list[0].get("main", "Unknown"),
         "description": weather_list[0].get("description", ""),
         "temp_c": main.get("temp"),
@@ -148,8 +185,9 @@ def get_forecast(location: str | None = None, when: str = "tomorrow", *, timeout
     from collections import Counter
     from datetime import datetime, timedelta, timezone
 
-    city = (location or "").strip() or _default_city()
-    payload = _fetch("forecast", city, timeout)
+    name = (location or "").strip() or _default_city()
+    query, geo_name, geo_country = _resolve_query(name, timeout)
+    payload = _fetch("forecast", query, timeout)
 
     city_info = payload.get("city") or {}
     tz_offset = int(city_info.get("timezone", 0) or 0)   # seconds east of UTC
@@ -188,8 +226,8 @@ def get_forecast(location: str | None = None, when: str = "tomorrow", *, timeout
     dominant = Counter([c for c in conditions if c]).most_common(1)
 
     return {
-        "location": city_info.get("name") or city,
-        "country": city_info.get("country", ""),
+        "location": geo_name or city_info.get("name") or name,
+        "country": geo_country or city_info.get("country", ""),
         "when": "today" if target == city_today else ("tomorrow" if target == city_today + timedelta(days=1) else target.isoformat()),
         "date": target.isoformat(),
         "temp_min_c": min(temps) if temps else None,

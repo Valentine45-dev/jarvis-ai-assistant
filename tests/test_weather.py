@@ -47,6 +47,47 @@ def test_get_current_weather_parses_payload(monkeypatch):
     assert snap["humidity"] == 84
 
 
+def test_geocoding_resolves_country_to_real_city(monkeypatch):
+    # 'India' (a country) fuzzy-matches to a random village via the weather q=
+    # param; geocoding resolves it to a real city and we query by coords instead.
+    monkeypatch.setattr(weather_mod.config, "openweather_api_key", "test-key")
+    monkeypatch.setattr(weather_mod.config, "weather_default_city", "Monrovia,LR")
+    geo = [{"name": "New Delhi", "lat": 28.61, "lon": 77.21, "country": "IN"}]
+    wx = {
+        "name": "New Delhi", "sys": {"country": "IN"},
+        "weather": [{"main": "Haze", "description": "haze"}],
+        "main": {"temp": 40, "feels_like": 42, "humidity": 20}, "wind": {"speed": 2.0},
+    }
+
+    def _fake(url, *a, **k):
+        return _FakeResp(geo if "geo/1.0" in url else wx)
+
+    monkeypatch.setattr(weather_mod, "urlopen", _fake)
+    snap = weather_mod.get_current_weather("India")
+    assert snap["location"] == "New Delhi"   # a real city, not a fuzzy q= village
+    assert snap["country"] == "IN"
+    assert snap["temp_c"] == 40
+
+
+def test_geocode_miss_falls_back_to_q(monkeypatch):
+    # geocoding returns [] (no match) -> the q= city path still works, no crash
+    monkeypatch.setattr(weather_mod.config, "openweather_api_key", "test-key")
+    monkeypatch.setattr(weather_mod.config, "weather_default_city", "Monrovia,LR")
+    wx = {
+        "name": "Monrovia", "sys": {"country": "LR"},
+        "weather": [{"main": "Rain", "description": "light rain"}],
+        "main": {"temp": 25}, "wind": {"speed": 5},
+    }
+
+    def _fake(url, *a, **k):
+        return _FakeResp([] if "geo/1.0" in url else wx)
+
+    monkeypatch.setattr(weather_mod, "urlopen", _fake)
+    snap = weather_mod.get_current_weather("Monrovia")
+    assert snap["location"] == "Monrovia"
+    assert snap["temp_c"] == 25
+
+
 def test_handle_weather_success(monkeypatch):
     monkeypatch.setattr(
         weather_handler,

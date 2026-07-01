@@ -3447,11 +3447,19 @@ PHYSICAL TEST (Part routing is model-driven -> verify live):
   3. 'forecast for London' -> get_forecast for London tomorrow.
   4. Regression: 'what's the weather?' / 'is it raining right now' -> still get_current_weather.
 
+GEOCODING FOLLOW-ON (surfaced during the physical test): a bare COUNTRY name ('india') hit
+OpenWeather's city-based q= param and fuzzy-matched a random village ('Innichen, Italy').
+Fix: _geocode(name) resolves place -> lat/lon via /geo/1.0/direct, then query BY COORDS
+(_resolve_query -> {lat,lon}, or {q} fallback on a geocode miss). Fixes current + forecast.
+  Extra physical check: 'weather tomorrow in india' (lowercase) -> a REAL Indian city
+  (New Delhi), NOT 'Innichen, Italy'. 'weather in India' -> same. No country -> default city.
+
 Code-level proof:
   uv run pytest -q tests/test_weather.py
   -> get_forecast aggregates tomorrow's steps (min/max, dominant condition, rain chance);
      format_forecast spells units out (no glyphs); the handler get_forecast action returns _ok;
-     current-weather path unchanged; a bare 'forecast' action is still unsupported.
+     current-weather path unchanged; a bare 'forecast' action is still unsupported; geocoding
+     resolves a country name to a real city (query by coords); a geocode miss falls back to q=.
 
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
