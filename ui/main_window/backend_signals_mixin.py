@@ -187,6 +187,26 @@ class _BackendSignalsMixin:
         except Exception:
             self._set_state("idle")
 
+    def _seed_hotkey_entry(self, label: str) -> None:
+        """Create a synthetic transcript entry for a hotkey-triggered command.
+
+        Hotkeys call `_on_brain_result` directly, bypassing the typed-command
+        setup that appends a `_history` slot (see `_execute_result`'s caller).
+        Without a slot, `_finish_execute` has nowhere to show the result — so a
+        hotkey read_screen completed silently (no SYS_LOG line, and nothing heard
+        when TTS is muted). Mirrors the scheduled-workflow synthetic entry so the
+        user sees what the hotkey fired and its result renders normally.
+        """
+        try:
+            now = datetime.now().strftime("%H:%M")
+            if isinstance(getattr(self, "_history", None), list):
+                self._history.append({
+                    "time": now, "you": label, "jarvis": "", "jTime": "",
+                    "intent": "", "conf": 0.0, "status": "pending",
+                })
+        except Exception:
+            pass
+
     def _on_hotkey(self, action: str) -> None:
         """Slot for `signals.hotkey_triggered` (F-4 global hotkeys).
 
@@ -226,6 +246,7 @@ class _BackendSignalsMixin:
                 # Drive through the standard brain-result path so the
                 # screenshot ends up where any other take-screenshot
                 # command would (Desktop, default save path, etc.).
+                self._seed_hotkey_entry("[hotkey] screenshot")
                 self._on_brain_result({
                     "intent": "system_control",
                     "action": "screenshot",
@@ -240,6 +261,7 @@ class _BackendSignalsMixin:
             if action == "read_screen":
                 # Vision describe of the current screen, same path as the
                 # voice/text command "what's on my screen".
+                self._seed_hotkey_entry("[hotkey] read my screen")
                 self._on_brain_result({
                     "intent": "vision_analysis",
                     "action": "describe",

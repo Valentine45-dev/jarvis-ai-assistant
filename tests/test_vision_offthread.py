@@ -90,3 +90,33 @@ def test_vision_browser_source_stays_synchronous(monkeypatch):
     )
     assert stub._spawn_calls == [], "browser-source vision must stay on the main thread (Playwright)"
     assert len(dispatched) == 1, "browser vision dispatches synchronously"
+
+
+# ── hotkey path seeds a transcript slot so the result renders (P5 pass 2) ────
+
+def test_hotkey_read_screen_seeds_entry_and_dispatches():
+    from ui.main_window.backend_signals_mixin import _BackendSignalsMixin
+
+    stub = types.SimpleNamespace()
+    stub._history = []
+    brain_calls = []
+    stub._on_brain_result = lambda r: brain_calls.append(r)
+    stub._seed_hotkey_entry = lambda label: _BackendSignalsMixin._seed_hotkey_entry(stub, label)
+
+    _BackendSignalsMixin._on_hotkey(stub, "read_screen")
+
+    # a synthetic history slot exists so _finish_execute has somewhere to render
+    assert len(stub._history) == 1
+    assert stub._history[0]["you"] == "[hotkey] read my screen"
+    assert stub._history[0]["status"] == "pending"
+    # and the vision describe was dispatched through the normal path
+    assert len(brain_calls) == 1
+    assert brain_calls[0]["intent"] == "vision_analysis"
+    assert brain_calls[0]["parameters"]["source"] == "screenshot"
+
+
+def test_seed_hotkey_entry_survives_missing_history():
+    from ui.main_window.backend_signals_mixin import _BackendSignalsMixin
+
+    stub = types.SimpleNamespace()  # no _history attr at all
+    _BackendSignalsMixin._seed_hotkey_entry(stub, "[hotkey] read my screen")  # must not raise

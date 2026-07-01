@@ -3329,7 +3329,10 @@ Scope: vision_analysis only (read_screen OCR is local/fast, not the reported fre
 
 PHYSICAL TEST (threading -> physical gate):
   1. Press ctrl+shift+r (from JARVIS OR another focused app) -> the UI STAYS RESPONSIVE
-     ('Analyzing the screen...' toast), then speaks the description. NO freeze.
+     ('Analyzing the screen...' toast), then the description RENDERS in SYS_LOG (as a
+     '[hotkey] read my screen' entry) and is spoken (if TTS on). NO freeze, and a real response.
+     (Pass 2: the hotkey path now seeds a synthetic transcript slot via _seed_hotkey_entry --
+     without it the completed vision result had nowhere to render and looked silent.)
   2. Typed 'what's on my screen' -> same: responsive, then the description. NO freeze.
   3. 'describe the browser page' (source=browser) -> still works (synchronous, Playwright).
   4. During a vision read, the HUD/other buttons remain clickable (proof it's off-thread).
@@ -3338,7 +3341,8 @@ Code-level proof:
   uv run pytest -q tests/test_vision_offthread.py
   -> vision (source=screenshot) routes to _spawn_code_worker, NOT inline dispatch; a missing
      source defaults to screenshot -> off-thread; source=browser stays SYNCHRONOUS (dispatched
-     inline on the main thread, no worker).
+     inline on the main thread, no worker); hotkey read_screen seeds a synthetic history slot
+     AND dispatches vision_analysis/describe; _seed_hotkey_entry survives a missing _history.
 
 -----------------------------------------------------------------------
 Regression sweep (run after all of the above)
